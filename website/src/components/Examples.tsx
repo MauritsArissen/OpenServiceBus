@@ -585,17 +585,16 @@ export default function Examples() {
           The inner <pre> with overflow-x-auto then takes the internal horizontal
           scroll. The card no longer breathes in/out as tabs switch. */}
       <div className="w-full rounded-xl border border-neutral-800 bg-neutral-900/60 overflow-hidden">
-        <div className="flex items-center justify-between gap-3 px-4 sm:px-5 pt-4 sm:pt-5 pb-3">
+        <div className="flex flex-col gap-2 px-4 sm:px-5 pt-4 sm:pt-5 pb-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
           <div className="flex items-center gap-2 min-w-0">
             <span className="h-2.5 w-2.5 rounded-full bg-red-500/70 shrink-0" />
             <span className="h-2.5 w-2.5 rounded-full bg-amber-500/70 shrink-0" />
             <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/70 shrink-0" />
             <span className="ml-2 text-xs text-neutral-500 font-mono truncate">{variant.language}</span>
           </div>
-          <div className="flex items-center gap-2 min-w-0">
-            {/* SDK toggle - only when this example exists in more than one stack. */}
+          <div className="flex items-center gap-2 min-w-0 justify-between sm:justify-end">
             {active.variants.length > 1 && (
-              <div className="flex gap-0.5 rounded-md border border-neutral-800 bg-neutral-900 p-0.5">
+              <div className="flex flex-wrap gap-0.5 rounded-md border border-neutral-800 bg-neutral-900 p-0.5">
                 {active.variants.map((v) => (
                   <button
                     key={v.sdk}
