@@ -47,6 +47,8 @@ type Store = {
   selected: Selected | null;
   select: (s: Selected | null) => void;
   descriptorFor: (s: Selected) => QueueInfo | undefined;
+  /** Active count of an entity address's /$DeadLetterQueue sibling (0 if none). */
+  dlqCount: (address: string) => number;
 
   locked: Record<string, Record<string, TrackedMessage>>;
   peeked: Record<string, MessageDto[]>;
@@ -141,6 +143,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [queues, topics, subsByTopic],
   );
 
+  // A queue/subscription's dead-letter count is the active count of its separate
+  // "…/$DeadLetterQueue" entity - which the raw queue list already contains.
+  const dlqCount = useCallback(
+    (address: string): number =>
+      queues.find((q) => q.name.toLowerCase() === (address + "/$DeadLetterQueue").toLowerCase())
+        ?.activeMessageCount ?? 0,
+    [queues],
+  );
+
   const lockedCount = useCallback(
     (target: string) => Object.keys(locked[target] ?? {}).length,
     [locked],
@@ -196,12 +207,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       conn, mgmt, setConn, setMgmt, status, pingResult, connect,
       queues: queues.filter((q) => isMainQueue(q.name)),
       topics, subsByTopic, loading, refresh,
-      selected, select, descriptorFor,
+      selected, select, descriptorFor, dlqCount,
       locked, peeked, lockedCount, setPeekedFor, trackLocked, untrack, updateLockedUntil, clearEntityLocal,
       dialog, setDialog,
     }),
     [conn, mgmt, setConn, setMgmt, status, pingResult, connect, queues, topics, subsByTopic, loading,
-     refresh, selected, select, descriptorFor, locked, peeked, lockedCount, setPeekedFor, trackLocked,
+     refresh, selected, select, descriptorFor, dlqCount, locked, peeked, lockedCount, setPeekedFor, trackLocked,
      untrack, updateLockedUntil, clearEntityLocal, dialog],
   );
 

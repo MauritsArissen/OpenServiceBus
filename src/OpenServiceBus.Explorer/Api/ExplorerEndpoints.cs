@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text;
 using Azure.Messaging.ServiceBus;
+using OpenServiceBus.Explorer.Metrics;
 using OpenServiceBus.Explorer.Sessions;
 
 namespace OpenServiceBus.Explorer.Api;
@@ -304,8 +305,11 @@ public static class ExplorerEndpoints
         });
 
         // --- Connectivity check ---
-        api.MapPost("/ping", async (PingRequest req, SessionManager sessions, IHttpClientFactory httpFactory, CancellationToken ct) =>
+        api.MapPost("/ping", async (PingRequest req, SessionManager sessions, MetricsCollector metrics, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
+            // Start historical sampling of this broker (idempotent).
+            metrics.RegisterManagementUrl(req.ManagementUrl);
+
             var http = httpFactory.CreateClient();
             string? mgmtStatus = null;
             string? sdkStatus = null;
@@ -333,6 +337,19 @@ public static class ExplorerEndpoints
             }
 
             return Results.Ok(new { management = mgmtStatus, serviceBus = sdkStatus });
+        });
+
+        // Historical metrics for an entity: its own active-message series plus its
+        // dead-letter queue series, sampled by MetricsCollector. windowSeconds selects
+        // the lookback (e.g. 1800 = 30 min, 86400 = 24 h).
+        api.MapGet("/metrics", (string entity, int windowSeconds, MetricsCollector metrics) =>
+        {
+            var since = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - Math.Max(60, windowSeconds);
+            return Results.Ok(new
+            {
+                active = metrics.Series(entity, since),
+                deadLettered = metrics.Series(entity + "/$DeadLetterQueue", since),
+            });
         });
 
         return endpoints;

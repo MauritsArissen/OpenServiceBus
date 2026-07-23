@@ -1,6 +1,6 @@
 import {
-  CableIcon, ChevronRightIcon, InboxIcon, ListTreeIcon, LockIcon,
-  PlusIcon, RefreshCwIcon, SearchIcon, Trash2Icon,
+  CableIcon, ChevronRightIcon, InboxIcon, PlusIcon, RadioIcon, RefreshCwIcon,
+  SearchIcon, Trash2Icon, WaypointsIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { explorerApi, type QueueInfo } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
@@ -73,14 +72,14 @@ export function Sidebar() {
       className="flex min-h-0 flex-col border-r bg-sidebar text-sidebar-foreground"
       style={{ gridArea: "sidebar" }}
     >
-      <div className="space-y-2 p-3">
+      <div className="space-y-2.5 p-3">
         <div className="relative">
-          <SearchIcon className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter entities…"
-            className="h-8 pl-8"
+            className="h-9 border-transparent bg-black/[0.03] pl-8 shadow-none focus-visible:bg-transparent dark:bg-white/[0.04]"
           />
         </div>
         <div className="flex gap-2">
@@ -98,7 +97,7 @@ export function Sidebar() {
                 <InboxIcon /> Queue
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => store.setDialog({ type: "createTopic" })}>
-                <ListTreeIcon /> Topic
+                <RadioIcon /> Topic
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
@@ -106,114 +105,122 @@ export function Sidebar() {
                   else store.setDialog({ type: "createSubscription" });
                 }}
               >
-                <ChevronRightIcon /> Subscription
+                <WaypointsIcon /> Subscription
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </div>
 
-      <Separator className="bg-sidebar-border" />
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-2 pb-3">
+        <div>
+          <SectionLabel label="Queues" count={queues.length} />
+          {queues.length === 0 && <EmptyRow text={f ? "No matches" : "No queues yet"} />}
+          {queues.map((q) => (
+            <EntityRow
+              key={q.name}
+              icon={InboxIcon}
+              name={q.name}
+              active={isSelected("queue", q.name)}
+              lockedCount={store.lockedCount(q.name) + store.lockedCount(q.name + "/$DeadLetterQueue")}
+              count={q.activeMessageCount}
+              onSelect={() => store.select({ kind: "queue", name: q.name })}
+              onDelete={() => deleteQueue(q.name)}
+            />
+          ))}
+        </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <SectionLabel label="Queues" count={queues.length} />
-        {queues.length === 0 && <EmptyRow text={f ? "No matches" : "No queues yet"} />}
-        {queues.map((q) => (
-          <EntityRow
-            key={q.name}
-            name={q.name}
-            active={isSelected("queue", q.name)}
-            lockedCount={store.lockedCount(q.name) + store.lockedCount(q.name + "/$DeadLetterQueue")}
-            count={q.activeMessageCount}
-            onSelect={() => store.select({ kind: "queue", name: q.name })}
-            onDelete={() => deleteQueue(q.name)}
-          />
-        ))}
-
-        <SectionLabel label="Topics" count={topics.length} className="mt-3" />
-        {topics.length === 0 && <EmptyRow text={f ? "No matches" : "No topics yet"} />}
-        {topics.map((t) => {
-          const subs: QueueInfo[] = store.subsByTopic[t.name] ?? [];
-          const open = expanded.has(t.name) || !!f;
-          return (
-            <div key={t.name}>
-              <div
-                className={cn(
-                  "group flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1.5 text-sm hover:bg-sidebar-accent",
-                  isSelected("topic", t.name) && "bg-sidebar-accent",
-                )}
-                onClick={() => store.select({ kind: "topic", name: t.name })}
-              >
-                <button
-                  className="cursor-pointer rounded p-0.5 hover:bg-sidebar-border"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setExpanded((s) => {
-                      const next = new Set(s);
-                      if (next.has(t.name)) next.delete(t.name);
-                      else next.add(t.name);
-                      return next;
-                    });
-                  }}
+        <div>
+          <SectionLabel label="Topics" count={topics.length} />
+          {topics.length === 0 && <EmptyRow text={f ? "No matches" : "No topics yet"} />}
+          {topics.map((t) => {
+            const subs: QueueInfo[] = store.subsByTopic[t.name] ?? [];
+            const open = expanded.has(t.name) || !!f;
+            return (
+              <div key={t.name}>
+                <div
+                  className={cn(
+                    "group relative flex h-9 cursor-pointer items-center gap-1.5 rounded-md pl-1.5 pr-1.5 text-sm hover:bg-sidebar-accent",
+                    isSelected("topic", t.name) && "bg-sidebar-accent font-medium",
+                  )}
+                  onClick={() => store.select({ kind: "topic", name: t.name })}
                 >
-                  <ChevronRightIcon className={cn("size-3.5 transition-transform", open && "rotate-90")} />
-                </button>
-                <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{t.name}</span>
-                <span className="hidden gap-0.5 group-hover:flex">
-                  <Button
-                    variant="ghost" size="icon-sm" title="Add subscription"
-                    onClick={(e) => { e.stopPropagation(); store.setDialog({ type: "createSubscription", topic: t.name }); }}
+                  {isSelected("topic", t.name) && (
+                    <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />
+                  )}
+                  <button
+                    className="grid size-5 shrink-0 place-items-center rounded hover:bg-sidebar-border"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpanded((s) => {
+                        const next = new Set(s);
+                        next.has(t.name) ? next.delete(t.name) : next.add(t.name);
+                        return next;
+                      });
+                    }}
                   >
-                    <PlusIcon />
-                  </Button>
-                  <Button
-                    variant="ghost" size="icon-sm" title="Delete topic"
-                    className="text-destructive"
-                    onClick={(e) => { e.stopPropagation(); deleteTopic(t.name); }}
-                  >
-                    <Trash2Icon />
-                  </Button>
-                </span>
-                <Badge variant="muted">{subs.length}</Badge>
+                    <ChevronRightIcon className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+                  </button>
+                  <RadioIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{t.name}</span>
+                  <div className="flex items-center gap-1">
+                    <span className="flex opacity-0 transition-opacity group-hover:opacity-100">
+                      <Button
+                        variant="ghost" size="icon-sm" title="Add subscription"
+                        onClick={(e) => { e.stopPropagation(); store.setDialog({ type: "createSubscription", topic: t.name }); }}
+                      >
+                        <PlusIcon />
+                      </Button>
+                      <Button
+                        variant="ghost" size="icon-sm" title="Delete topic"
+                        className="text-muted-foreground hover:text-destructive"
+                        onClick={(e) => { e.stopPropagation(); deleteTopic(t.name); }}
+                      >
+                        <Trash2Icon />
+                      </Button>
+                    </span>
+                    <Badge variant="muted" className="tabular-nums">{subs.length}</Badge>
+                  </div>
+                </div>
+                {open &&
+                  subs
+                    .filter((s) => !f || s.name.toLowerCase().includes(f) || t.name.toLowerCase().includes(f))
+                    .map((s) => (
+                      <EntityRow
+                        key={s.name}
+                        icon={WaypointsIcon}
+                        name={s.name}
+                        indent
+                        active={isSelected("subscription", t.name, s.name)}
+                        lockedCount={
+                          store.lockedCount(`${t.name}/Subscriptions/${s.name}`) +
+                          store.lockedCount(`${t.name}/Subscriptions/${s.name}/$DeadLetterQueue`)
+                        }
+                        count={s.activeMessageCount}
+                        onSelect={() => store.select({ kind: "subscription", name: t.name, sub: s.name })}
+                        onDelete={() => deleteSubscription(t.name, s.name)}
+                      />
+                    ))}
               </div>
-              {open &&
-                subs
-                  .filter((s) => !f || s.name.toLowerCase().includes(f) || t.name.toLowerCase().includes(f))
-                  .map((s) => (
-                    <EntityRow
-                      key={s.name}
-                      name={s.name}
-                      indent
-                      active={isSelected("subscription", t.name, s.name)}
-                      lockedCount={
-                        store.lockedCount(`${t.name}/Subscriptions/${s.name}`) +
-                        store.lockedCount(`${t.name}/Subscriptions/${s.name}/$DeadLetterQueue`)
-                      }
-                      count={s.activeMessageCount}
-                      onSelect={() => store.select({ kind: "subscription", name: t.name, sub: s.name })}
-                      onDelete={() => deleteSubscription(t.name, s.name)}
-                    />
-                  ))}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
-
-      <Separator className="bg-sidebar-border" />
 
       <Collapsible
         open={connOpen}
         onOpenChange={setConnOpen}
-        className="p-3"
+        className="border-t p-3"
         trigger={
           <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <CableIcon className="size-3.5" />
             Connection
-            <ChevronRightIcon className={cn("ml-auto size-3.5 transition-transform", connOpen && "rotate-90")} />
+            <span className={cn("ml-auto size-1.5 rounded-full", store.status === "ok" ? "bg-emerald-500" : store.status === "err" ? "bg-red-500" : "bg-muted-foreground/50")} />
+            <ChevronRightIcon className={cn("size-3.5 transition-transform", connOpen && "rotate-90")} />
           </span>
         }
       >
-        <div className="mt-3 space-y-2">
+        <div className="mt-3 space-y-2.5">
           <div className="space-y-1">
             <Label>Connection string</Label>
             <Input value={store.conn} onChange={(e) => store.setConn(e.target.value)} className="h-8 font-mono text-xs" />
@@ -226,7 +233,7 @@ export function Sidebar() {
             Connect
           </Button>
           {store.pingResult && (
-            <div className="space-y-0.5 font-mono text-[11px] text-muted-foreground">
+            <div className="space-y-0.5 rounded-md bg-muted/60 p-2 font-mono text-[11px] text-muted-foreground">
               <div>mgmt&nbsp;&nbsp;{store.pingResult.management}</div>
               <div>amqp&nbsp;&nbsp;{store.pingResult.serviceBus}</div>
             </div>
@@ -237,11 +244,11 @@ export function Sidebar() {
   );
 }
 
-function SectionLabel({ label, count, className }: { label: string; count: number; className?: string }) {
+function SectionLabel({ label, count }: { label: string; count: number }) {
   return (
-    <div className={cn("flex items-center justify-between px-1.5 pb-1 pt-2", className)}>
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
-      <Badge variant="muted">{count}</Badge>
+    <div className="flex items-center gap-2 px-1.5 pb-1">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
+      <span className="text-[10px] font-medium tabular-nums text-muted-foreground/70">{count}</span>
     </div>
   );
 }
@@ -251,8 +258,9 @@ function EmptyRow({ text }: { text: string }) {
 }
 
 function EntityRow({
-  name, active, count, lockedCount, indent, onSelect, onDelete,
+  icon: Icon, name, active, count, lockedCount, indent, onSelect, onDelete,
 }: {
+  icon: typeof InboxIcon;
   name: string;
   active: boolean;
   count?: number;
@@ -264,26 +272,26 @@ function EntityRow({
   return (
     <div
       className={cn(
-        "group flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm hover:bg-sidebar-accent",
+        "group relative flex h-9 cursor-pointer items-center gap-2 rounded-md px-1.5 text-sm hover:bg-sidebar-accent",
         indent && "ml-5",
-        active && "bg-sidebar-accent",
+        active && "bg-sidebar-accent font-medium",
       )}
       onClick={onSelect}
     >
+      {active && <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />}
+      <Icon className={cn("size-4 shrink-0", active ? "text-primary" : "text-muted-foreground")} />
       <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{name}</span>
-      <Button
-        variant="ghost" size="icon-sm" title="Delete"
-        className="hidden text-destructive group-hover:inline-flex"
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-      >
-        <Trash2Icon />
-      </Button>
-      {lockedCount > 0 && (
-        <Badge variant="warning">
-          {lockedCount} <LockIcon className="size-2.5" />
-        </Badge>
-      )}
-      <Badge variant="muted">{count ?? "?"}</Badge>
+      <span className="opacity-0 transition-opacity group-hover:opacity-100">
+        <Button
+          variant="ghost" size="icon-sm" title="Delete"
+          className="text-muted-foreground hover:text-destructive"
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        >
+          <Trash2Icon />
+        </Button>
+      </span>
+      {lockedCount > 0 && <Badge variant="warning" className="tabular-nums">{lockedCount}🔒</Badge>}
+      <Badge variant="muted" className="tabular-nums">{count ?? "?"}</Badge>
     </div>
   );
 }

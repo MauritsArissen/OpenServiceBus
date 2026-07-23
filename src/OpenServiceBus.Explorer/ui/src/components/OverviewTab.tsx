@@ -14,14 +14,14 @@ export function OverviewTab({ sel, onGoto }: { sel: Selected; onGoto: (tab: stri
       ? [
           ["Name", sel.name],
           ["Subscriptions", String(subs.length)],
-          ["Dead-lettered", String(subs.reduce((n, s) => n + (s.deadLetterMessageCount ?? 0), 0))],
+          ["Dead-lettered", String(subs.reduce((n, s) => n + store.dlqCount(`${sel.name}/Subscriptions/${s.name}`), 0))],
           ["Default TTL", d?.defaultMessageTimeToLive ? humanTime(d.defaultMessageTimeToLive) : "∞ (unlimited)"],
         ]
       : [
           ["Name", sel.kind === "subscription" ? `${sel.name}/${sel.sub}` : sel.name],
           ...(sel.kind === "subscription" ? [["Topic", sel.name] as [string, string]] : []),
           ["Active messages", String(d?.activeMessageCount ?? "?")],
-          ["Dead-lettered", String(d?.deadLetterMessageCount ?? "?")],
+          ["Dead-lettered", String(store.dlqCount(sel.kind === "subscription" ? `${sel.name}/Subscriptions/${sel.sub}` : sel.name))],
           ["Lock duration", humanTime(d?.lockDuration)],
           ["Max delivery count", String(d?.maxDeliveryCount ?? "?")],
           ["Default TTL", d?.defaultMessageTimeToLive ? humanTime(d.defaultMessageTimeToLive) : "∞ (unlimited)"],

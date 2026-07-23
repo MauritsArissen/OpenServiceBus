@@ -164,4 +164,11 @@ export const explorerApi = {
     api<{ deferred: boolean; sequenceNumber: number }>("/api/defer", post({ connectionString, queue, lockToken })),
   requeue: (connectionString: string, queue: string, lockToken: string) =>
     api<{ requeued: boolean; target: string; messageId: string }>("/api/requeue", post({ connectionString, queue, lockToken })),
+
+  metrics: (entity: string, windowSeconds: number) =>
+    api<{ active: MetricSample[]; deadLettered: MetricSample[] }>(
+      `/api/metrics?entity=${encodeURIComponent(entity)}&windowSeconds=${windowSeconds}`,
+    ),
 };
+
+export type MetricSample = { t: number; active: number };
