@@ -38,6 +38,11 @@ type Store = {
   pingResult: { management: string; serviceBus: string } | null;
   connect: () => Promise<void>;
 
+  /** Hosted live demo: connection is locked and a reset countdown is shown. */
+  demoMode: boolean;
+  /** Reset cadence (seconds) - the environment wipes & reseeds on these boundaries. */
+  resetIntervalSeconds: number;
+
   queues: QueueInfo[];
   topics: QueueInfo[];
   subsByTopic: Record<string, QueueInfo[]>;
@@ -79,6 +84,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [locked, setLocked] = useState<Record<string, Record<string, TrackedMessage>>>({});
   const [peeked, setPeeked] = useState<Record<string, MessageDto[]>>({});
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [demoMode, setDemoMode] = useState(false);
+  const [resetIntervalSeconds, setResetIntervalSeconds] = useState(1800);
 
   const setConn = useCallback((v: string) => {
     setConnState(v);
@@ -89,14 +96,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(LS_MGMT, v);
   }, []);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (mgmtOverride?: string) => {
+    const m = mgmtOverride ?? mgmt;
     setLoading(true);
     try {
-      const [qs, ts] = await Promise.all([explorerApi.listQueues(mgmt), explorerApi.listTopics(mgmt)]);
+      const [qs, ts] = await Promise.all([explorerApi.listQueues(m), explorerApi.listTopics(m)]);
       const subs: Record<string, QueueInfo[]> = {};
       await Promise.all(
         ts.map(async (t) => {
-          subs[t.name] = await explorerApi.listSubscriptions(mgmt, t.name);
+          subs[t.name] = await explorerApi.listSubscriptions(m, t.name);
         }),
       );
       setQueues(qs);
@@ -109,14 +117,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [mgmt]);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (connOverride?: string, mgmtOverride?: string) => {
+    const c = connOverride ?? conn;
+    const m = mgmtOverride ?? mgmt;
     setStatus("pending");
     setPingResult(null);
     try {
-      const r = await explorerApi.ping(conn, mgmt);
+      const r = await explorerApi.ping(c, m);
       setPingResult(r);
       setStatus("ok");
-      await refresh();
+      await refresh(m);
     } catch (e) {
       setStatus("err");
       setPingResult(null);
@@ -124,13 +134,29 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [conn, mgmt, refresh]);
 
-  // Auto-connect at boot, like the original.
+  // Boot: read /api/config first. In the hosted demo this pins the connection to the
+  // co-located broker and enables demo mode; otherwise it's a no-op and the normal
+  // localStorage connection is used. Then auto-connect.
   const booted = useRef(false);
   useEffect(() => {
-    if (!booted.current) {
-      booted.current = true;
-      void connect();
-    }
+    if (booted.current) return;
+    booted.current = true;
+    (async () => {
+      try {
+        const cfg = await fetch("/api/config").then((r) => r.json());
+        if (cfg?.demoMode) {
+          setDemoMode(true);
+          setResetIntervalSeconds(cfg.resetIntervalSeconds ?? 1800);
+          if (cfg.connectionString) setConnState(cfg.connectionString);
+          if (cfg.managementUrl) setMgmtState(cfg.managementUrl);
+          await connect(cfg.connectionString, cfg.managementUrl);
+          return;
+        }
+      } catch {
+        /* no config endpoint (older host) - carry on with localStorage values */
+      }
+      await connect();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -205,13 +231,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<Store>(
     () => ({
       conn, mgmt, setConn, setMgmt, status, pingResult, connect,
+      demoMode, resetIntervalSeconds,
       queues: queues.filter((q) => isMainQueue(q.name)),
       topics, subsByTopic, loading, refresh,
       selected, select, descriptorFor, dlqCount,
       locked, peeked, lockedCount, setPeekedFor, trackLocked, untrack, updateLockedUntil, clearEntityLocal,
       dialog, setDialog,
     }),
-    [conn, mgmt, setConn, setMgmt, status, pingResult, connect, queues, topics, subsByTopic, loading,
+    [conn, mgmt, setConn, setMgmt, status, pingResult, connect, demoMode, resetIntervalSeconds, queues, topics, subsByTopic, loading,
      refresh, selected, select, descriptorFor, dlqCount, locked, peeked, lockedCount, setPeekedFor, trackLocked,
      untrack, updateLockedUntil, clearEntityLocal, dialog],
   );

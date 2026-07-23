@@ -124,3 +124,6 @@
   }
   ::selection { background: color-mix(in oklch, var(--brand) 25%, transparent); }
 }
+
+@keyframes spin-slow { to { transform: rotate(-360deg); } }
+.animate-spin-slow { animation: spin-slow 3s linear infinite; }

@@ -1,0 +1,37 @@
+# Live demo stack for demo.openservicebus.net.
+#
+#   docker compose pull && docker compose up -d
+#
+# - openservicebus: the published image (broker + Explorer UI in one container), pinned to
+#   :latest and run in DEMO MODE (connection inputs locked, reset countdown shown).
+# - seeder: generates fluctuating load and wipes + reseeds the topology every 30 minutes.
+#
+# Only the Explorer (5400) is exposed, on loopback, for the host's nginx to reverse-proxy.
+# The broker's AMQP (5672) and management (5300) stay on the internal compose network.
+services:
+  openservicebus:
+    image: mauritsarissen/openservicebus:latest
+    container_name: osb-demo-broker
+    restart: unless-stopped
+    environment:
+      # In-memory storage: a clean slate, and the seeder wipes entities every 30 min anyway.
+      OPENSERVICEBUS__STORAGE__MODE: InMemory
+      # Demo mode for the Explorer (the co-located broker is reachable on localhost here).
+      OSB_EXPLORER_DEMO: "true"
+      OSB_EXPLORER_CONNECTION: "Endpoint=sb://127.0.0.1:5672;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true"
+      OSB_EXPLORER_MGMT_URL: "http://127.0.0.1:5300"
+      OSB_EXPLORER_RESET_INTERVAL_SECONDS: "1800"
+    ports:
+      - "127.0.0.1:5400:5400"   # Explorer UI (nginx proxies demo.openservicebus.net here)
+
+  seeder:
+    image: mauritsarissen/openservicebus-demo-seeder:latest
+    container_name: osb-demo-seeder
+    restart: unless-stopped
+    depends_on:
+      - openservicebus
+    environment:
+      SEEDER_CONNECTION: "Endpoint=sb://openservicebus:5672;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true"
+      SEEDER_MGMT_URL: "http://openservicebus:5300"
+      SEEDER_RESET_INTERVAL_SECONDS: "1800"   # must match OSB_EXPLORER_RESET_INTERVAL_SECONDS
+      SEEDER_MAX_ACTIVE: "450"
