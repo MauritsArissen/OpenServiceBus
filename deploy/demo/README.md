@@ -31,9 +31,10 @@ The VPS already has everything installed (Docker + compose plugin, nginx, and ce
 its auto-renew timer active — the same stack that serves openservicebus.net). Only these
 one-time steps remain; after them everything stays current automatically.
 
-1. **DNS** (Cloudflare): a proxied record `demo.openservicebus.net` → the VPS origin IP
-   (`194.164.48.64`). Set the zone's SSL/TLS mode to **Full (strict)** so Cloudflare talks
-   to the origin over the Let's Encrypt cert issued below.
+1. **DNS** (Cloudflare): a **proxied** (orange-cloud) record `demo.openservicebus.net` → the
+   VPS origin IP. Keeping it proxied is what hides the origin IP — public DNS returns
+   Cloudflare's addresses, never the server's. Set the zone's SSL/TLS mode to
+   **Full (strict)** so Cloudflare talks to the origin over the Let's Encrypt cert below.
 2. **First deploy**: merge the PR, cut a release (so `openservicebus:latest` includes demo
    mode), which triggers the **Deploy demo** workflow → it rsyncs this folder to
    `/opt/openservicebus-demo/` and runs `docker compose up -d`. The containers are now live
