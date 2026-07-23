@@ -56,7 +56,7 @@ jobs:
 
       - name: .NET SDK smoke
         run: |
-          dotnet build tests/sdk-smoke/SdkSmoke.slnx --configuration Release
+          dotnet build tests/sdk-smoke/dotnet/SdkSmoke.slnx --configuration Release
           dotnet run --no-build --project tests/sdk-smoke/dotnet/DotnetSmoke.csproj --configuration Release
 
       - name: Node.js SDK smoke
