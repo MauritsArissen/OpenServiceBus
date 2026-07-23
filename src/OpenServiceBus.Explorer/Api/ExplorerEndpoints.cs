@@ -12,6 +12,26 @@ public static class ExplorerEndpoints
     {
         var api = endpoints.MapGroup("/api");
 
+        // Front-end bootstrap config. In the hosted live demo (OSB_EXPLORER_DEMO=true) this
+        // pins the connection to the co-located broker and tells the UI to lock the
+        // connection inputs and show a reset countdown. Empty/false everywhere else, so a
+        // normal Explorer is completely unaffected.
+        api.MapGet("/config", () =>
+        {
+            static string? Env(string name) =>
+                Environment.GetEnvironmentVariable(name) is { Length: > 0 } v ? v : null;
+
+            var demo = string.Equals(Env("OSB_EXPLORER_DEMO"), "true", StringComparison.OrdinalIgnoreCase);
+            var reset = int.TryParse(Env("OSB_EXPLORER_RESET_INTERVAL_SECONDS"), out var r) ? r : 1800;
+            return Results.Ok(new
+            {
+                demoMode = demo,
+                connectionString = Env("OSB_EXPLORER_CONNECTION"),
+                managementUrl = Env("OSB_EXPLORER_MGMT_URL"),
+                resetIntervalSeconds = reset,
+            });
+        });
+
         // --- Queue CRUD (proxied to broker's management REST API) ---
         api.MapGet("/queues", async (string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {

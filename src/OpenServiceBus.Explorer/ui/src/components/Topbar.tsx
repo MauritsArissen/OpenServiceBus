@@ -1,6 +1,7 @@
-import { MoonIcon, SunIcon } from "lucide-react";
+import { MoonIcon, RotateCcwIcon, SunIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { displayName } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { LS_THEME, useStore } from "@/store";
@@ -15,7 +16,7 @@ const STATUS_META = {
 } as const;
 
 export function Topbar() {
-  const { status, selected } = useStore();
+  const { status, selected, demoMode, resetIntervalSeconds } = useStore();
   const [dark, setDark] = useState(() => (localStorage.getItem(LS_THEME) ?? "light") === "dark");
 
   useEffect(() => {
@@ -40,6 +41,7 @@ export function Topbar() {
         </div>
       )}
       <div className="ml-auto flex items-center gap-2">
+        {demoMode && <ResetCountdown intervalSeconds={resetIntervalSeconds} />}
         <span className="flex items-center gap-2 rounded-full border px-3 py-1 text-xs text-muted-foreground">
           <span className={cn("size-2 rounded-full", meta.dot)} />
           {meta.label}
@@ -50,4 +52,44 @@ export function Topbar() {
       </div>
     </header>
   );
+}
+
+/**
+ * Countdown to the next demo reset. Resets happen on fixed wall-clock boundaries
+ * (every intervalSeconds), so this and the seeder agree without any coordination.
+ */
+function ResetCountdown({ intervalSeconds }: { intervalSeconds: number }) {
+  const [remaining, setRemaining] = useState(() => timeToNextBoundary(intervalSeconds));
+
+  useEffect(() => {
+    const id = window.setInterval(() => setRemaining(timeToNextBoundary(intervalSeconds)), 1000);
+    return () => window.clearInterval(id);
+  }, [intervalSeconds]);
+
+  const mm = String(Math.floor(remaining / 60)).padStart(2, "0");
+  const ss = String(remaining % 60).padStart(2, "0");
+  const soon = remaining <= 60;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            "flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs tabular-nums",
+            soon ? "border-amber-500/40 text-amber-600 dark:text-amber-400" : "text-muted-foreground",
+          )}
+        >
+          <RotateCcwIcon className={cn("size-3.5", soon && "animate-spin-slow")} />
+          {mm}:{ss}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Demo resets every {Math.round(intervalSeconds / 60)} min · wipes & reseeds</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function timeToNextBoundary(intervalSeconds: number): number {
+  const now = Math.floor(Date.now() / 1000);
+  const next = Math.ceil((now + 1) / intervalSeconds) * intervalSeconds;
+  return Math.max(0, next - now);
 }

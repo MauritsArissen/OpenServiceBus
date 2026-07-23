@@ -3,11 +3,13 @@ import { DialogHost } from "@/components/DialogHost";
 import { EntityView } from "@/components/EntityView";
 import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { StoreProvider } from "@/store";
 
 export default function App() {
   return (
     <StoreProvider>
+      <TooltipProvider delayDuration={200}>
       <div
         className="grid h-full"
         style={{
@@ -22,6 +24,7 @@ export default function App() {
       </div>
       <DialogHost />
       <Toaster richColors position="bottom-right" closeButton />
+      </TooltipProvider>
     </StoreProvider>
   );
 }

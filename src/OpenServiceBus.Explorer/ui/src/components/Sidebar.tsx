@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { explorerApi, type QueueInfo } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
@@ -221,17 +222,31 @@ export function Sidebar() {
         }
       >
         <div className="mt-3 space-y-2.5">
-          <div className="space-y-1">
-            <Label>Connection string</Label>
-            <Input value={store.conn} onChange={(e) => store.setConn(e.target.value)} className="h-8 font-mono text-xs" />
-          </div>
-          <div className="space-y-1">
-            <Label>Management URL</Label>
-            <Input value={store.mgmt} onChange={(e) => store.setMgmt(e.target.value)} className="h-8 font-mono text-xs" />
-          </div>
-          <Button size="sm" className="w-full" onClick={() => void store.connect()}>
-            Connect
-          </Button>
+          <DemoLock locked={store.demoMode}>
+            <div className="space-y-1">
+              <Label>Connection string</Label>
+              <Input
+                value={store.conn}
+                onChange={(e) => store.setConn(e.target.value)}
+                disabled={store.demoMode}
+                className="h-8 font-mono text-xs disabled:opacity-60"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Management URL</Label>
+              <Input
+                value={store.mgmt}
+                onChange={(e) => store.setMgmt(e.target.value)}
+                disabled={store.demoMode}
+                className="h-8 font-mono text-xs disabled:opacity-60"
+              />
+            </div>
+          </DemoLock>
+          {!store.demoMode && (
+            <Button size="sm" className="w-full" onClick={() => void store.connect()}>
+              Connect
+            </Button>
+          )}
           {store.pingResult && (
             <div className="space-y-0.5 rounded-md bg-muted/60 p-2 font-mono text-[11px] text-muted-foreground">
               <div>mgmt&nbsp;&nbsp;{store.pingResult.management}</div>
@@ -241,6 +256,21 @@ export function Sidebar() {
         </div>
       </Collapsible>
     </aside>
+  );
+}
+
+/** In the hosted demo, wraps the (disabled) connection inputs so hovering the group
+ *  shows why they can't be edited. A disabled input swallows hover, so the tooltip lives
+ *  on this wrapper. */
+function DemoLock({ locked, children }: { locked: boolean; children: React.ReactNode }) {
+  if (!locked) return <div className="space-y-2.5">{children}</div>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="cursor-not-allowed space-y-2.5">{children}</div>
+      </TooltipTrigger>
+      <TooltipContent>Not changeable in the live demo</TooltipContent>
+    </Tooltip>
   );
 }
 
