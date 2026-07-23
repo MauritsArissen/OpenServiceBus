@@ -6,10 +6,24 @@
     <RootNamespace>OpenServiceBus.Explorer</RootNamespace>
     <Description>Browser-based explorer for testing OpenServiceBus features against the real Azure.Messaging.ServiceBus SDK.</Description>
     <IsPackable>false</IsPackable>
+    <!-- The React/shadcn SPA lives in ui/ and builds into wwwroot. wwwroot is git-ignored;
+         set BuildExplorerUi=false (or ensure wwwroot exists) to skip the npm build. -->
+    <BuildExplorerUi Condition="'$(BuildExplorerUi)' == ''">true</BuildExplorerUi>
+    <SpaRoot>$(MSBuildProjectDirectory)/ui</SpaRoot>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Azure.Messaging.ServiceBus" />
   </ItemGroup>
+
+  <!-- Build the SPA into wwwroot before Build/Publish. Runs npm ci + npm run build.
+       Guarded by BuildExplorerUi and skipped if node_modules is fresh relative to sources. -->
+  <Target Name="BuildExplorerSpa" BeforeTargets="AssignTargetPaths"
+          Condition="'$(BuildExplorerUi)' == 'true' And Exists('$(SpaRoot)/package.json')">
+    <Message Importance="high" Text="Building Explorer UI (npm) from $(SpaRoot)…" />
+    <Exec Command="npm ci" WorkingDirectory="$(SpaRoot)"
+          Condition="!Exists('$(SpaRoot)/node_modules')" />
+    <Exec Command="npm run build" WorkingDirectory="$(SpaRoot)" />
+  </Target>
 
 </Project>

@@ -17,6 +17,17 @@
 #                                        for bootstrapping queues/topics/subs at startup.
 
 # ─── Build stage ──────────────────────────────────────────────────────────────
+# ─── Explorer SPA stage ───────────────────────────────────────────────────────
+# Builds the React/shadcn UI into wwwroot. Kept separate so the .NET SDK image
+# needs no Node, and so this layer caches on ui/ changes alone.
+FROM node:22-alpine AS spa
+WORKDIR /ui
+COPY src/OpenServiceBus.Explorer/ui/package.json src/OpenServiceBus.Explorer/ui/package-lock.json ./
+RUN npm ci
+COPY src/OpenServiceBus.Explorer/ui/ ./
+RUN npm run build   # emits ../wwwroot -> /src/OpenServiceBus.Explorer/wwwroot inside the image
+
+# ─── .NET build stage ─────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
 WORKDIR /src
 
@@ -33,8 +44,10 @@ COPY src/OpenServiceBus.Explorer/OpenServiceBus.Explorer.csproj               sr
 RUN dotnet restore src/OpenServiceBus.Host/OpenServiceBus.Host.csproj \
     && dotnet restore src/OpenServiceBus.Explorer/OpenServiceBus.Explorer.csproj
 
-# Copy the rest of the source and publish both apps side-by-side.
+# Copy the rest of the source and the prebuilt Explorer SPA. With wwwroot already
+# present and BuildExplorerUi=false, the csproj skips its npm build (no Node here).
 COPY src/ src/
+COPY --from=spa /wwwroot src/OpenServiceBus.Explorer/wwwroot
 RUN dotnet publish src/OpenServiceBus.Host/OpenServiceBus.Host.csproj \
     --configuration Release \
     --no-restore \
@@ -42,6 +55,7 @@ RUN dotnet publish src/OpenServiceBus.Host/OpenServiceBus.Host.csproj \
     && dotnet publish src/OpenServiceBus.Explorer/OpenServiceBus.Explorer.csproj \
     --configuration Release \
     --no-restore \
+    -p:BuildExplorerUi=false \
     --output /app/explorer
 
 # ─── Runtime stage ────────────────────────────────────────────────────────────
