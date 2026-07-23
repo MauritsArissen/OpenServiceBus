@@ -81,6 +81,17 @@ public interface IMessageStore
     Task<long> CountAsync(string queueName, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Cumulative process-lifetime counters for a queue, for metrics/throughput. Default
+    /// implementation returns zeros so stores that don't track them stay compatible.
+    /// <list type="bullet">
+    ///   <item><c>Enqueued</c> - messages that have ever landed in the queue (new arrivals;
+    ///     the enqueue into a <c>…/$DeadLetterQueue</c> doubles as its parent's dead-letter count).</item>
+    ///   <item><c>Completed</c> - messages successfully completed (settled) off the queue.</item>
+    /// </list>
+    /// </summary>
+    (long Enqueued, long Completed) LifetimeCounters(string queueName) => (0, 0);
+
+    /// <summary>
     /// Wait for and lock the next available message under peek-lock for <paramref name="lockDuration"/>.
     /// Returns <c>null</c> only on cancellation.
     /// </summary>

@@ -40,6 +40,11 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
     private readonly ConcurrentDictionary<string, Channel<bool>> _notify =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // Cumulative per-queue metrics counters (process-lifetime, in-memory - metrics are
+    // ephemeral by design). Enqueued = new arrivals; Completed = successful settlements.
+    private readonly ConcurrentDictionary<string, long> _enqueuedTotal = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, long> _completedTotal = new(StringComparer.OrdinalIgnoreCase);
+
     public SqliteMessageStore(IOptions<SqliteStorageOptions> options, ILogger<SqliteMessageStore> logger)
         : this(options.Value, TimeProvider.System, logger) { }
 
@@ -196,6 +201,8 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                 DeliveryCount = deliveryCount,
             };
 
+            _enqueuedTotal.AddOrUpdate(queueName, 1, (_, v) => v + 1); // cumulative "new messages"
+
             // Signal the dequeue waiter, only when the message would actually be visible -
             // scheduled messages don't wake anyone (the activator does, later).
             if (effectiveSchedule is null)
@@ -280,6 +287,9 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         }
         finally { _gate.Release(); }
     }
+
+    public (long Enqueued, long Completed) LifetimeCounters(string queueName) =>
+        (_enqueuedTotal.GetValueOrDefault(queueName), _completedTotal.GetValueOrDefault(queueName));
 
     public IReadOnlyList<StoredMessage> Peek(string queueName, long fromSequenceNumber, int maxCount)
     {
@@ -525,6 +535,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                 if (entry is null) return false;
                 DeleteLock(tx, lockToken);
                 DeleteMessage(tx, entry.QueueName, entry.SequenceNumber);
+                _completedTotal.AddOrUpdate(entry.QueueName, 1, (_, v) => v + 1); // cumulative "completed"
                 return true;
             });
         }
