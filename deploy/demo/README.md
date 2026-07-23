@@ -21,9 +21,11 @@ boundaries (:00 / :30 UTC), so the countdown and the actual reset agree with no 
 
 ## Deploy
 
-CI does this automatically (`.github/workflows/demo-deploy.yml`) on every release, on
-changes here, or on manual dispatch: it builds/pushes the seeder image, rsyncs this folder
-to `/opt/openservicebus-demo/` on the VPS, and runs `docker compose pull && up -d`.
+CI does this automatically (`.github/workflows/demo-deploy.yml`): it builds/pushes the seeder
+image, rsyncs this folder to `/opt/openservicebus-demo/` on the VPS, and runs
+`docker compose pull && up -d`. On a **release** it's called by `release.yml` *after* the
+broker image is pushed (so the demo can never pull a stale `:latest`); it also runs on its
+own for changes under `deploy/demo/**` or the seeder, and on manual dispatch.
 
 ## One-time VPS setup (manual)
 
