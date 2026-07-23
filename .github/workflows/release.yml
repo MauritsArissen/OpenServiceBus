@@ -53,10 +53,14 @@ jobs:
       - run: dotnet build --no-restore --configuration Release
       - run: dotnet test  --no-build --configuration Release --verbosity normal
 
+  smoke:
+    name: SDK smoke
+    uses: ./.github/workflows/sdk-smoke.yml
+
   resolve-version:
     name: Resolve version
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, smoke]
     outputs:
       version: ${{ steps.compute.outputs.version }}
     steps:

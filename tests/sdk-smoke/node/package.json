@@ -1,0 +1,13 @@
+{
+  "name": "openservicebus-sdk-smoke-node",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cross-SDK smoke test: the Node.js Azure Service Bus SDK against OpenServiceBus.",
+  "type": "module",
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@azure/service-bus": "^7.9.5"
+  }
+}

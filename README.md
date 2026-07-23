@@ -291,13 +291,13 @@ Full reference: [Configuration](docs/Configuration.md).
 Each sample is self-contained: it ships a `docker-compose.yml`, a `config.json`, and a
 `README.md` that explains what it demonstrates and how to run it.
 
-- **[`samples/OpenServiceBus.Samples.QuickStart`](samples/OpenServiceBus.Samples.QuickStart)** - minimal console send/receive against an emulator container.
-- **[`samples/OpenServiceBus.Samples.TopicsAndFilters`](samples/OpenServiceBus.Samples.TopicsAndFilters)** - pub-sub with SQL + correlation filter rules.
-- **[`samples/OpenServiceBus.Samples.Sessions`](samples/OpenServiceBus.Samples.Sessions)** - session-locked workers with per-session FIFO ordering.
-- **[`samples/OpenServiceBus.Samples.WorkerService`](samples/OpenServiceBus.Samples.WorkerService)** - `Microsoft.Extensions.Hosting` background-worker pattern.
-- **[`samples/OpenServiceBus.Samples.Functions`](samples/OpenServiceBus.Samples.Functions)** - minimal Azure Functions `ServiceBusTrigger` app (the integration-test target).
-- **[`samples/OpenServiceBus.Samples.FunctionsTriggerDemo`](samples/OpenServiceBus.Samples.FunctionsTriggerDemo)** - interactive multi-trigger Functions app driven via the Explorer or HTTP.
-- **[`samples/NovaBank`](samples/NovaBank)** - a complete event-driven banking API built 100% against `Azure.Messaging.ServiceBus` (Swagger UI, dup-detected transfers, session payments, scheduled standing orders, SQL-filtered fraud/audit/notification fan-out, DLQ inspection) with a 79-test suite running the whole app on the embedded test host. Made entirely as an example of a real-world integration.
+- **[`samples/dotnet/OpenServiceBus.Samples.QuickStart`](samples/dotnet/OpenServiceBus.Samples.QuickStart)** - minimal console send/receive against an emulator container.
+- **[`samples/dotnet/OpenServiceBus.Samples.TopicsAndFilters`](samples/dotnet/OpenServiceBus.Samples.TopicsAndFilters)** - pub-sub with SQL + correlation filter rules.
+- **[`samples/dotnet/OpenServiceBus.Samples.Sessions`](samples/dotnet/OpenServiceBus.Samples.Sessions)** - session-locked workers with per-session FIFO ordering.
+- **[`samples/dotnet/OpenServiceBus.Samples.WorkerService`](samples/dotnet/OpenServiceBus.Samples.WorkerService)** - `Microsoft.Extensions.Hosting` background-worker pattern.
+- **[`samples/dotnet/OpenServiceBus.Samples.Functions`](samples/dotnet/OpenServiceBus.Samples.Functions)** - minimal Azure Functions `ServiceBusTrigger` app (the integration-test target).
+- **[`samples/dotnet/OpenServiceBus.Samples.FunctionsTriggerDemo`](samples/dotnet/OpenServiceBus.Samples.FunctionsTriggerDemo)** - interactive multi-trigger Functions app driven via the Explorer or HTTP.
+- **[`samples/dotnet/NovaBank`](samples/dotnet/NovaBank)** - a complete event-driven banking API built 100% against `Azure.Messaging.ServiceBus` (Swagger UI, dup-detected transfers, session payments, scheduled standing orders, SQL-filtered fraud/audit/notification fan-out, DLQ inspection) with a 79-test suite running the whole app on the embedded test host. Made entirely as an example of a real-world integration.
 
 See [`samples/README.md`](samples/README.md) for the full index and a quick chooser table.
 

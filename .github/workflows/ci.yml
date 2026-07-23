@@ -48,3 +48,7 @@ jobs:
         with:
           name: test-results
           path: "**/TestResults/*.trx"
+
+  sdk-smoke:
+    name: SDK smoke
+    uses: ./.github/workflows/sdk-smoke.yml

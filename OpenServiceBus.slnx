@@ -9,14 +9,6 @@
     <Project Path="src/OpenServiceBus.SqliteStorage/OpenServiceBus.SqliteStorage.csproj" />
     <Project Path="src/OpenServiceBus.Testing/OpenServiceBus.Testing.csproj" />
   </Folder>
-  <Folder Name="/samples/">
-    <Project Path="samples/OpenServiceBus.Samples.Functions/OpenServiceBus.Samples.Functions.csproj" />
-    <Project Path="samples/OpenServiceBus.Samples.FunctionsTriggerDemo/OpenServiceBus.Samples.FunctionsTriggerDemo.csproj" />
-    <Project Path="samples/OpenServiceBus.Samples.QuickStart/OpenServiceBus.Samples.QuickStart.csproj" />
-    <Project Path="samples/OpenServiceBus.Samples.TopicsAndFilters/OpenServiceBus.Samples.TopicsAndFilters.csproj" />
-    <Project Path="samples/OpenServiceBus.Samples.Sessions/OpenServiceBus.Samples.Sessions.csproj" />
-    <Project Path="samples/OpenServiceBus.Samples.WorkerService/OpenServiceBus.Samples.WorkerService.csproj" />
-  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/OpenServiceBus.Amqp.Tests/OpenServiceBus.Amqp.Tests.csproj" />
     <Project Path="tests/OpenServiceBus.Amqp.WireTests/OpenServiceBus.Amqp.WireTests.csproj" />

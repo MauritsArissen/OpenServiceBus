@@ -102,13 +102,13 @@ internal static class FuncRuntime
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            var candidate = Path.Combine(dir.FullName, "samples", "OpenServiceBus.Samples.Functions");
+            var candidate = Path.Combine(dir.FullName, "samples", "dotnet", "OpenServiceBus.Samples.Functions");
             if (Directory.Exists(candidate))
             {
                 return candidate;
             }
             dir = dir.Parent;
         }
-        throw new DirectoryNotFoundException("Could not locate samples/OpenServiceBus.Samples.Functions from the test assembly directory.");
+        throw new DirectoryNotFoundException("Could not locate samples/dotnet/OpenServiceBus.Samples.Functions from the test assembly directory.");
     }
 }

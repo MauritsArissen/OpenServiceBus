@@ -24,10 +24,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenServiceBus.Testing\OpenServiceBus.Testing.csproj" />
-    <!-- Reference the sample so it builds as a prerequisite for the test. -->
-    <ProjectReference Include="..\..\samples\OpenServiceBus.Samples.Functions\OpenServiceBus.Samples.Functions.csproj"
-                      ReferenceOutputAssembly="false"
-                      Private="false" />
+    <!-- No reference to the Functions sample: samples live entirely outside this solution.
+         FuncRuntime locates samples/dotnet/OpenServiceBus.Samples.Functions on disk and
+         `func start` builds it on the fly. -->
   </ItemGroup>
 
 </Project>

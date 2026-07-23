@@ -1,0 +1,32 @@
+name: PR title
+
+# The PR title IS the future commit title on main: with squash-and-merge as the only
+# merge method, GitHub uses the PR title and automatically appends the PR number
+# "(#N)" - so the number's persistence in history is guaranteed by the repo's merge
+# settings, not by this check. This check guards the part a human writes: the title
+# must follow the repo's conventional style (feat:/fix:/chore:/...), so main's
+# history stays uniform.
+#
+# Mark this check as required in branch protection alongside Build & Test and SDK smoke.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  conventional-title:
+    name: Conventional merge title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check title style
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if echo "$TITLE" | grep -qE '^(feat|fix|chore|docs|test|refactor|perf|ci|build)(\([a-z0-9-]+\))?(!)?: .+'; then
+            echo "OK: '$TITLE' - will merge as '$TITLE (#${{ github.event.pull_request.number }})'"
+          else
+            echo "::error::PR title must follow 'type: summary' (feat, fix, chore, docs, test, refactor, perf, ci, build) - it becomes the squash commit title on main. Got: '$TITLE'"
+            exit 1
+          fi

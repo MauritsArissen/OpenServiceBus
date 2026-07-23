@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.openservicebus</groupId>
+  <artifactId>sdk-smoke-java</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+  <name>OpenServiceBus Java SDK smoke test</name>
+  <description>Cross-SDK smoke test: the Java Azure Service Bus SDK (proton-j) against OpenServiceBus.</description>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.azure</groupId>
+      <artifactId>azure-messaging-servicebus</artifactId>
+      <version>7.17.11</version>
+    </dependency>
+    <!-- Quiet SLF4J's "no provider" warning; smoke output goes to stdout anyway. -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-nop</artifactId>
+      <version>2.0.16</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <configuration>
+          <mainClass>io.openservicebus.smoke.Smoke</mainClass>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

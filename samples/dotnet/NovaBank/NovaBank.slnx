@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NovaBank.Api/NovaBank.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NovaBank.Api.Tests/NovaBank.Api.Tests.csproj" />
+  </Folder>
+  <Project Path="../../../src/OpenServiceBus.Amqp/OpenServiceBus.Amqp.csproj" />
+  <Project Path="../../../src/OpenServiceBus.Core/OpenServiceBus.Core.csproj" />
+  <Project Path="../../../src/OpenServiceBus.InMemoryStorage/OpenServiceBus.InMemoryStorage.csproj" />
+  <Project Path="../../../src/OpenServiceBus.Testing/OpenServiceBus.Testing.csproj" />
+</Solution>

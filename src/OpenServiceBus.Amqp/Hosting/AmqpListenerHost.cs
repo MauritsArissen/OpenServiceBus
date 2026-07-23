@@ -1,4 +1,5 @@
 using Amqp;
+using Amqp.Framing;
 using Amqp.Listener;
 using Amqp.Transactions;
 using Microsoft.Extensions.Hosting;
@@ -29,6 +30,8 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
     private readonly ITransactionManager _transactions;
     private readonly TimeProvider _timeProvider;
     private ContainerHost? _host;
+    private readonly RequestNodeRegistry _requestNodes = new();
+    private readonly ResponsePairTable _responsePairs = new();
 
     public AmqpListenerHost(
         IOptions<AmqpListenerOptions> options,
@@ -74,17 +77,13 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
             listener.HandlerFactory = _ => handler;
         }
 
-        host.RegisterRequestProcessor("$cbs", new CbsRequestProcessor(_options, _loggerFactory.CreateLogger<CbsRequestProcessor>()));
+        _requestNodes.Register("$cbs", new CbsRequestProcessor(_options, _loggerFactory.CreateLogger<CbsRequestProcessor>()));
 
-        // AMQP transaction coordinator. Coordinator-targeted attaches have no Address,
-        // and the framework's default address lookup would throw on the (Target)attach.Target
-        // cast. The AddressResolver hook lets us redirect those attaches to a synthetic
-        // "$coordinator" address where our IMessageProcessor lives.
         host.AddressResolver = (_, attach) => attach.Target is Coordinator ? CoordinatorProcessor.Address : null;
         host.RegisterMessageProcessor(CoordinatorProcessor.Address,
             new CoordinatorProcessor(_transactions, _loggerFactory.CreateLogger<CoordinatorProcessor>()));
 
-        var linkProcessor = new EntityLinkProcessor(_queueRegistry, _messageStore, _router, _transactions, Options.Create(_options), _timeProvider, _loggerFactory, _topicRegistry);
+        var linkProcessor = new EntityLinkProcessor(_queueRegistry, _messageStore, _router, _transactions, Options.Create(_options), _timeProvider, _loggerFactory, _requestNodes, _responsePairs, _topicRegistry);
         host.RegisterLinkProcessor(linkProcessor);
 
         host.Open();
@@ -162,7 +161,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
 
         try
         {
-            _host.UnregisterRequestProcessor(descriptor.Name + "/$management");
+            _requestNodes.Unregister(descriptor.Name + "/$management");
         }
         catch (Exception ex)
         {
@@ -186,7 +185,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
             _timeProvider,
             _loggerFactory.CreateLogger<ManagementRequestProcessor>());
 
-        _host.RegisterRequestProcessor(descriptor.Name + "/$management", processor);
+        _requestNodes.Register(descriptor.Name + "/$management", processor);
         _logger.LogDebug("Registered $management endpoint for queue {Queue}", descriptor.Name);
     }
 
@@ -198,7 +197,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
         if (_host is null) return;
         try
         {
-            _host.UnregisterRequestProcessor(descriptor.BackingQueueName + "/$management");
+            _requestNodes.Unregister(descriptor.BackingQueueName + "/$management");
         }
         catch (Exception ex)
         {
@@ -230,7 +229,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
             descriptor.TopicName,
             descriptor.Name);
 
-        _host.RegisterRequestProcessor(descriptor.BackingQueueName + "/$management", processor);
+        _requestNodes.Register(descriptor.BackingQueueName + "/$management", processor);
         _logger.LogDebug("Registered $management endpoint for subscription {Sub}", descriptor.BackingQueueName);
     }
 

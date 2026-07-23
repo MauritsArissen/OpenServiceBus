@@ -22,7 +22,7 @@
     <!-- The app under test - boots in-process via WebApplicationFactory. -->
     <ProjectReference Include="../../src/NovaBank.Api/NovaBank.Api.csproj" />
     <!-- The broker under the app - OpenServiceBus straight from this repo's source. -->
-    <ProjectReference Include="../../../../src/OpenServiceBus.Testing/OpenServiceBus.Testing.csproj" />
+    <ProjectReference Include="../../../../../src/OpenServiceBus.Testing/OpenServiceBus.Testing.csproj" />
   </ItemGroup>
 
 </Project>

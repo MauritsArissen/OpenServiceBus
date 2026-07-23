@@ -27,7 +27,7 @@ namespace OpenServiceBus.Amqp.Management;
 /// response <c>application-properties</c> keys are <b>camelCase</b> (<c>statusCode</c>, <c>statusDescription</c>) -
 /// this differs from <c>$cbs</c> which is kebab-case.
 /// </summary>
-public sealed class ManagementRequestProcessor : IRequestProcessor
+public sealed class ManagementRequestProcessor : IRequestNodeHandler
 {
     private const string OperationKey = "operation";
     private const string AssociatedLinkNameKey = "associated-link-name";
@@ -143,15 +143,13 @@ public sealed class ManagementRequestProcessor : IRequestProcessor
 
     public int Credit => 100;
 
-    public void Process(RequestContext requestContext)
+    public Message HandleRequest(Message request)
     {
-        var request = requestContext.Message;
         var operation = GetOperation(request);
 
-        Message response;
         try
         {
-            response = operation switch
+            return operation switch
             {
                 RenewLockOperation => HandleRenewLock(request),
                 ScheduleMessageOperation => HandleScheduleMessage(request),
@@ -174,10 +172,8 @@ public sealed class ManagementRequestProcessor : IRequestProcessor
         catch (Exception ex)
         {
             _logger.LogError(ex, "$management {Op} failed on {Entity}", operation, _entityName);
-            response = BuildResponse(request, statusCode: 500, statusDescription: "InternalError: " + ex.Message);
+            return BuildResponse(request, statusCode: 500, statusDescription: "InternalError: " + ex.Message);
         }
-
-        requestContext.Complete(response);
     }
 
     private Message HandleRenewLock(Message request)
