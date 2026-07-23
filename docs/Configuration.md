@@ -87,7 +87,7 @@ and logs an informational message. Parse errors are logged but do **not** stop t
 
 Topics + subscriptions in `config.json` are accepted in the same shape as the Microsoft
 emulator (`"Topics": [ { "Name": ..., "Subscriptions": [ ... ] } ]`); the
-[`OpenServiceBus.Samples.TopicsAndFilters`](https://github.com/mauritsarissen/OpenServiceBus/tree/main/samples/OpenServiceBus.Samples.TopicsAndFilters)
+[`OpenServiceBus.Samples.TopicsAndFilters`](https://github.com/mauritsarissen/OpenServiceBus/tree/main/samples/dotnet/OpenServiceBus.Samples.TopicsAndFilters)
 sample ships a `config.json` covering topics, subscriptions, and rule shapes (SQL + correlation).
 
 ## SAS authentication

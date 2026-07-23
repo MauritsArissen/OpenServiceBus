@@ -40,7 +40,7 @@ export default function ExamplesPage() {
               <h3 className="text-base font-semibold text-neutral-100">Need more?</h3>
               <p className="text-sm text-neutral-400 mt-1">
                 Six runnable sample projects live under <span className="font-mono text-neutral-300">samples/</span> -
-                including <span className="font-mono text-neutral-300">samples/NovaBank</span>, a complete
+                including <span className="font-mono text-neutral-300">samples/dotnet/NovaBank</span>, a complete
                 event-driven banking API with its own test suite, made entirely as an example.
               </p>
             </div>

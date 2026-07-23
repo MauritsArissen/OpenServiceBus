@@ -8,11 +8,11 @@
 # Management API: http://localhost:5300/health
 services:
   openservicebus:
-    # Built from the repo checkout (two directories up), so the container includes fixes
+    # Built from the repo checkout (three directories up), so the container includes fixes
     # that are not yet in the published image (scheduled messages on session queues, DLQ
     # peek headers, session-accept parking, DLQ delivery-count retention, session guards).
     # Once those ship in a release you can swap back to mauritsarissen/openservicebus:latest.
-    build: ../..
+    build: ../../..
     image: openservicebus:novabank-dev
     container_name: novabank-servicebus
     ports:

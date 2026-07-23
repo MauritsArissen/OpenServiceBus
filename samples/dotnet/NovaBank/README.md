@@ -48,7 +48,7 @@ Seeded data: customers `CUS-ALICE`, `CUS-BOB`, `CUS-ACME` with accounts `ACC-ALI
 ## Run it locally against OpenServiceBus (Docker)
 
 ```bash
-cd samples/NovaBank
+cd samples/dotnet/NovaBank
 docker compose up -d --build      # broker + Explorer UI, entities bootstrapped from servicebus-config.json
 dotnet run --project src/NovaBank.Api --launch-profile Local
 ```
@@ -95,7 +95,7 @@ environment variable works too (e.g. in CI or Kubernetes).
 ## Tests - the whole bank on an embedded broker
 
 ```bash
-cd samples/NovaBank
+cd samples/dotnet/NovaBank
 dotnet test
 ```
 

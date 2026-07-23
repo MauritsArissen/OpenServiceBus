@@ -240,7 +240,7 @@ var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2));
     blurb:
       "A complete event-driven banking API - made entirely as an example. Duplicate-detected transfers, session payments, scheduled standing orders, SQL-filtered fraud/audit/notification fan-out, DLQ inspection, Swagger UI, and 79 tests that run the real app on the embedded broker in seconds.",
     language: "bash",
-    code: `# samples/NovaBank - a full event-driven bank, built 100% against
+    code: `# samples/dotnet/NovaBank - a full event-driven bank, built 100% against
 # Azure.Messaging.ServiceBus. Only the connection string decides whether
 # it talks to Azure or to OpenServiceBus.
 #
@@ -251,7 +251,7 @@ var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2));
 #   - 79 tests: the real API + embedded broker, ~3 seconds, no Docker
 
 git clone https://github.com/mauritsarissen/OpenServiceBus
-cd OpenServiceBus/samples/NovaBank
+cd OpenServiceBus/samples/dotnet/NovaBank
 
 docker compose up -d --build                                  # broker + Explorer UI
 dotnet run --project src/NovaBank.Api --launch-profile Local  # Swagger at :5080
