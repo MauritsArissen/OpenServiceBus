@@ -2,6 +2,7 @@ using System.Reflection;
 using Amqp;
 using Amqp.Framing;
 using Amqp.Handler;
+using Amqp.Types;
 using Amqp.Listener;
 
 namespace OpenServiceBus.Amqp.Hosting;
@@ -45,7 +46,8 @@ internal sealed class ListenerEventHandler : IHandler
     }
 
     public bool CanHandle(EventId id) =>
-        id == EventId.ConnectionLocalOpen || id == EventId.SendDelivery;
+        id == EventId.ConnectionLocalOpen || id == EventId.SessionLocalOpen ||
+        id == EventId.LinkLocalOpen || id == EventId.SendDelivery;
 
     public void Handle(Event protocolEvent)
     {
@@ -54,6 +56,33 @@ internal sealed class ListenerEventHandler : IHandler
             open.ContainerId = _containerId;
             open.IdleTimeOut = _idleTimeoutMs;
             open.MaxFrameSize = _maxFrameSize;
+            // Always populate the open frame's trailing `properties` field (list index 9).
+            // pyamqp (the Python SDK's AMQP stack) indexes open frames as frame[9] and
+            // crashes with IndexError on a short field list - AMQP permits omitting
+            // trailing fields, but real Azure always sends all ten, so pyamqp never
+            // noticed. Sending product metadata matches Azure's behavior anyway.
+            open.Properties = new Fields
+            {
+                [new Symbol("product")] = "OpenServiceBus",
+                [new Symbol("version")] =
+                    typeof(ListenerEventHandler).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+            };
+            return;
+        }
+
+        // Same pyamqp strictness for begin (frame[7] = properties) and attach
+        // (frame[13] = properties): stamp an empty properties map so the encoded field
+        // list always reaches the index pyamqp reads. `??=` keeps any real properties
+        // (e.g. the session-accept attach's locked-until) intact.
+        if (protocolEvent.Id == EventId.SessionLocalOpen && protocolEvent.Context is Begin begin)
+        {
+            begin.Properties ??= new Fields();
+            return;
+        }
+
+        if (protocolEvent.Id == EventId.LinkLocalOpen && protocolEvent.Context is Attach attachFrame)
+        {
+            attachFrame.Properties ??= new Fields();
             return;
         }
 

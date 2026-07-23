@@ -1,13 +1,9 @@
-// Node.js SDK smoke test against OpenServiceBus.
+// Node.js SDK smoke test against OpenServiceBus (rhea-based AMQP stack).
 //
-// The Node SDK rides on rhea, whose AMQP frame shapes differ from the .NET SDK's
-// (empty reply-link target addresses, reply-to == link name, ...). This exercises the
-// full surface a real app touches: CBS auth, send, peek/schedule/cancel (all
-// $management ops), receive/complete, and session receive. Regression guard for
-// GitHub issue #1.
-//
-// Expects a running broker with the entities from ../config.json. Override the
-// connection string via SMOKE_CONNECTION.
+// Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
+//   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
+// against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
+// Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
 import { ServiceBusClient } from "@azure/service-bus";
 
@@ -15,7 +11,10 @@ const conn =
   process.env.SMOKE_CONNECTION ??
   "Endpoint=sb://localhost:5672;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true";
 
-const client = new ServiceBusClient(conn);
+// Fail fast: default operation timeouts turn any broker regression into minutes of hang.
+const client = new ServiceBusClient(conn, {
+  retryOptions: { timeoutInMs: 15_000, maxRetries: 1 },
+});
 const results = [];
 const check = (name, ok, extra = "") => {
   results.push(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " " + extra : ""}`);
@@ -23,36 +22,37 @@ const check = (name, ok, extra = "") => {
 
 const run = async () => {
   const stamp = Date.now().toString(36);
+  const messageId = `node-${stamp}`;
 
-  // 1. Send - exercises $cbs put-token, the path that used to dead-end for rhea.
+  // 1. send - exercises $cbs put-token.
   const sender = client.createSender("smoke-queue");
-  await sender.sendMessages({ body: "hello from node", messageId: `node-${stamp}` });
+  await sender.sendMessages({ body: "hello from node", messageId });
   check("send", true);
 
-  // 2. Peek - $management via rhea.
+  // 2. peek - $management request/response.
   const receiver = client.createReceiver("smoke-queue");
   const peeked = await receiver.peekMessages(10);
-  check("peek", peeked.some((m) => m.messageId === `node-${stamp}`), `(${peeked.length} peeked)`);
+  check("peek", peeked.some((m) => m.messageId === messageId));
 
-  // 3. Receive + complete.
+  // 3. receive + 4. complete.
   const msgs = await receiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
   check("receive", msgs.length === 1 && msgs[0].body === "hello from node");
   await receiver.completeMessage(msgs[0]);
   check("complete", true);
   await receiver.close();
 
-  // 4. Schedule + cancel - two more $management operations.
+  // 5. schedule + 6. cancelSchedule - two more $management operations.
   const seq = await sender.scheduleMessages({ body: "future" }, new Date(Date.now() + 300_000));
   check("schedule", seq.length === 1);
   await sender.cancelScheduledMessages(seq);
   check("cancelSchedule", true);
   await sender.close();
 
-  // 5. Sessions: send with a session id, accept the session, receive in it.
+  // 7. session receive - send into a session, accept it, receive in it.
   const sessionId = `node-session-${stamp}`;
-  const psender = client.createSender("smoke-sessions");
-  await psender.sendMessages({ body: "session msg", sessionId });
-  await psender.close();
+  const sessionSender = client.createSender("smoke-sessions");
+  await sessionSender.sendMessages({ body: "session msg", sessionId });
+  await sessionSender.close();
 
   const session = await client.acceptSession("smoke-sessions", sessionId);
   const smsgs = await session.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
@@ -62,7 +62,7 @@ const run = async () => {
 };
 
 const timeout = new Promise((_, rej) =>
-  setTimeout(() => rej(new Error("smoke test timed out after 90s")), 90_000));
+  setTimeout(() => rej(new Error("smoke test timed out after 60s")), 60_000));
 
 try {
   await Promise.race([run(), timeout]);

@@ -1,4 +1,5 @@
-using System.Reflection;
+using Amqp;
+using Amqp.Framing;
 using Amqp.Listener;
 using Amqp.Sasl;
 using Amqp.Types;
@@ -7,37 +8,55 @@ namespace OpenServiceBus.Amqp.Hosting;
 
 /// <summary>
 /// Enables the SASL mechanisms an Azure Service Bus client expects:
-///   <c>ANONYMOUS</c>  - generic AMQP clients use this.
+///   <c>ANONYMOUS</c>  - generic AMQP clients and rhea-based SDKs (Node.js, Python) use this.
 ///   <c>MSSBCBS</c>    - Azure SDK / Service Bus protocol stack always uses this in emulator mode;
 ///                       at the SASL layer it is a no-op handshake (real auth happens via $cbs put-token).
 /// </summary>
 internal static class ServiceBusSasl
 {
-    private const string MssbcbsMechanism = "MSSBCBS";
-
     public static void ConfigureListenerMechanisms(ConnectionListener listener)
     {
-        listener.SASL.EnableAnonymousMechanism = true;
-        var mssbcbsProfile = CreateMssbcbsProfile();
-        listener.SASL.EnableMechanism(new Symbol(MssbcbsMechanism), mssbcbsProfile);
+        // Both mechanisms use OUR no-op profile (not AMQPNetLite's built-in anonymous one)
+        // so the de-pipelining pause in UpgradeTransport applies to every client.
+        listener.SASL.EnableMechanism(new Symbol("ANONYMOUS"), new NoOpSaslProfile("ANONYMOUS"));
+        listener.SASL.EnableMechanism(new Symbol("MSSBCBS"), new NoOpSaslProfile("MSSBCBS"));
     }
 
     /// <summary>
-    /// AMQPNetLite ships <c>SaslNoActionProfile</c> as the impl behind <c>SaslProfile.Anonymous</c>
-    /// but keeps it <c>internal</c>. Construct it via reflection with our own mechanism name so the
-    /// listener advertises MSSBCBS as a supported, no-op mechanism - same wire behavior, different name.
+    /// Accept-anything SASL profile with one deliberate quirk: a short pause before the
+    /// transport upgrades to AMQP.
+    ///
+    /// Why: rhea (the AMQP stack under the Node.js and Python Azure SDKs) has a handoff bug -
+    /// any bytes that arrive in the SAME TCP segment as the sasl-outcome are peeked but never
+    /// processed after the SASL layer hands the socket to the AMQP transport. When the broker
+    /// pipelines its AMQP header + open behind the outcome (AMQPNetLite's default), the client
+    /// randomly stalls for its full 60s init timeout depending on how the OS coalesced the
+    /// writes. The pause runs AFTER the outcome is written and BEFORE the header, giving the
+    /// outcome its own segment - same observable behavior as real Azure, which does not
+    /// pipeline its open.
     /// </summary>
-    private static SaslProfile CreateMssbcbsProfile()
+    private sealed class NoOpSaslProfile : SaslProfile
     {
-        var profileType = typeof(SaslProfile).Assembly.GetType("Amqp.Sasl.SaslNoActionProfile", throwOnError: true)!;
-        var ctor = profileType.GetConstructor(
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-            binder: null,
-            types: [typeof(string), typeof(string)],
-            modifiers: null)
-            ?? throw new InvalidOperationException(
-                "AMQPNetLite SaslNoActionProfile(string, string) constructor not found - upstream API may have changed.");
+        public NoOpSaslProfile(string mechanism) : base(new Symbol(mechanism))
+        {
+        }
 
-        return (SaslProfile)ctor.Invoke([MssbcbsMechanism, null]);
+        protected override ITransport UpgradeTransport(ITransport transport)
+        {
+            Thread.Sleep(50);
+            return transport;
+        }
+
+        protected override DescribedList GetStartCommand(string hostname) =>
+            throw new NotSupportedException("Server-side profile only.");
+
+        protected override DescribedList OnCommand(DescribedList command)
+        {
+            if (command.Descriptor.Code == 0x41) // sasl-init
+            {
+                return new SaslOutcome { Code = SaslCode.Ok };
+            }
+            throw new AmqpException(ErrorCode.NotAllowed, $"Unexpected SASL command {command.Descriptor.Name}.");
+        }
     }
 }

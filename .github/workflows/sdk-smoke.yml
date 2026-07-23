@@ -1,0 +1,82 @@
+name: SDK smoke
+
+on:
+  workflow_call:
+
+jobs:
+  smoke:
+    name: SDK smoke (.NET + Node.js + Java + Python)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tests/sdk-smoke/node/package-lock.json
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tests/sdk-smoke/python/requirements.txt
+
+      - name: Build Host
+        run: dotnet build src/OpenServiceBus.Host/OpenServiceBus.Host.csproj --configuration Release
+
+      - name: Start Host
+        run: |
+          OPENSERVICEBUS_CONFIG=$GITHUB_WORKSPACE/tests/sdk-smoke/config.json \
+            dotnet run --project src/OpenServiceBus.Host --no-launch-profile --configuration Release --no-build \
+            > host.log 2>&1 &
+          echo $! > host.pid
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:5300/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -sf http://localhost:5300/health || { echo "Host failed to start"; cat host.log; exit 1; }
+          grep "Bootstrapped queue" host.log
+
+      - name: .NET SDK smoke
+        run: dotnet run --project tests/sdk-smoke/dotnet/DotnetSmoke.csproj --configuration Release
+
+      - name: Node.js SDK smoke
+        working-directory: tests/sdk-smoke/node
+        run: |
+          npm ci
+          npm run smoke
+
+      - name: Java SDK smoke
+        working-directory: tests/sdk-smoke/java
+        run: mvn -q --batch-mode compile exec:java
+
+      - name: Python SDK smoke
+        working-directory: tests/sdk-smoke/python
+        run: |
+          pip install -q -r requirements.txt
+          python smoke.py
+
+      - name: Host log on failure
+        if: failure()
+        run: cat host.log || true
+
+      - name: Stop Host
+        if: always()
+        run: kill $(cat host.pid) 2>/dev/null || true

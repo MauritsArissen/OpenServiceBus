@@ -32,8 +32,6 @@ coverage/
 ## Tooling
 .tools/
 
-## NodeJS
-**/node_modules
 ## SDK smoke tests
 tests/sdk-smoke/node/node_modules/
 tests/sdk-smoke/java/target/

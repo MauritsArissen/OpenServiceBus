@@ -30,6 +30,8 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
     private readonly ITransactionManager _transactions;
     private readonly TimeProvider _timeProvider;
     private ContainerHost? _host;
+    private readonly RequestNodeRegistry _requestNodes = new();
+    private readonly ResponsePairTable _responsePairs = new();
 
     public AmqpListenerHost(
         IOptions<AmqpListenerOptions> options,
@@ -75,43 +77,13 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
             listener.HandlerFactory = _ => handler;
         }
 
-        host.RegisterRequestProcessor("$cbs", new CbsRequestProcessor(_options, _loggerFactory.CreateLogger<CbsRequestProcessor>()));
+        _requestNodes.Register("$cbs", new CbsRequestProcessor(_options, _loggerFactory.CreateLogger<CbsRequestProcessor>()));
 
-        // AMQP transaction coordinator. Coordinator-targeted attaches have no Address,
-        // and the framework's default address lookup would throw on the (Target)attach.Target
-        // cast. The AddressResolver hook lets us redirect those attaches to a synthetic
-        // "$coordinator" address where our IMessageProcessor lives.
-        host.AddressResolver = (_, attach) =>
-        {
-            if (attach.Target is Coordinator)
-            {
-                return CoordinatorProcessor.Address;
-            }
-
-            // rhea-based SDKs (Node.js @azure/service-bus, Python) attach the reply link of a
-            // request/response pair ($cbs, <entity>/$management) with an EMPTY target address.
-            // AMQPNetLite's ContainerHost.RequestProcessor.AddLink keys reply links by that
-            // address and throws ArgumentNullException on null - the link detaches with
-            // amqp:internal-error and CBS auth (and with it every operation) times out.
-            // Real Azure accepts the empty address and routes replies by link. Those SDKs set
-            // the request's reply-to equal to the reply link's NAME, so injecting the link name
-            // as the missing address makes AMQPNetLite's address-keyed reply routing line up.
-            // (GitHub issue #1.)
-            if (attach.Role
-                && attach.Source is Source requestNode
-                && IsRequestResponseNode(requestNode.Address)
-                && attach.Target is Target replyTarget
-                && string.IsNullOrEmpty(replyTarget.Address))
-            {
-                replyTarget.Address = attach.LinkName;
-            }
-
-            return null; // fall through to the default source/target address resolution
-        };
+        host.AddressResolver = (_, attach) => attach.Target is Coordinator ? CoordinatorProcessor.Address : null;
         host.RegisterMessageProcessor(CoordinatorProcessor.Address,
             new CoordinatorProcessor(_transactions, _loggerFactory.CreateLogger<CoordinatorProcessor>()));
 
-        var linkProcessor = new EntityLinkProcessor(_queueRegistry, _messageStore, _router, _transactions, Options.Create(_options), _timeProvider, _loggerFactory, _topicRegistry);
+        var linkProcessor = new EntityLinkProcessor(_queueRegistry, _messageStore, _router, _transactions, Options.Create(_options), _timeProvider, _loggerFactory, _requestNodes, _responsePairs, _topicRegistry);
         host.RegisterLinkProcessor(linkProcessor);
 
         host.Open();
@@ -189,7 +161,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
 
         try
         {
-            _host.UnregisterRequestProcessor(descriptor.Name + "/$management");
+            _requestNodes.Unregister(descriptor.Name + "/$management");
         }
         catch (Exception ex)
         {
@@ -213,7 +185,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
             _timeProvider,
             _loggerFactory.CreateLogger<ManagementRequestProcessor>());
 
-        _host.RegisterRequestProcessor(descriptor.Name + "/$management", processor);
+        _requestNodes.Register(descriptor.Name + "/$management", processor);
         _logger.LogDebug("Registered $management endpoint for queue {Queue}", descriptor.Name);
     }
 
@@ -225,7 +197,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
         if (_host is null) return;
         try
         {
-            _host.UnregisterRequestProcessor(descriptor.BackingQueueName + "/$management");
+            _requestNodes.Unregister(descriptor.BackingQueueName + "/$management");
         }
         catch (Exception ex)
         {
@@ -257,20 +229,10 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
             descriptor.TopicName,
             descriptor.Name);
 
-        _host.RegisterRequestProcessor(descriptor.BackingQueueName + "/$management", processor);
+        _requestNodes.Register(descriptor.BackingQueueName + "/$management", processor);
         _logger.LogDebug("Registered $management endpoint for subscription {Sub}", descriptor.BackingQueueName);
     }
 
     private static bool IsSubscriptionBackingQueue(string queueName) =>
         queueName.Contains("/Subscriptions/", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>True when the address names one of the request/response nodes served by an
-    /// AMQPNetLite request processor: <c>$cbs</c> or any <c>…/$management</c> endpoint.</summary>
-    private static bool IsRequestResponseNode(string? address)
-    {
-        if (string.IsNullOrEmpty(address)) return false;
-        var normalized = address[0] == '/' ? address[1..] : address;
-        return normalized.Equals("$cbs", StringComparison.OrdinalIgnoreCase)
-            || normalized.EndsWith("/$management", StringComparison.OrdinalIgnoreCase);
-    }
 }

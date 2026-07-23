@@ -137,6 +137,65 @@ public class CbsTests
     }
 
     [Fact]
+    public async Task PutToken_TwoConnectionsWithTheSameFixedReplyAddress_BothGetResponses()
+    {
+        // Arrange - two concurrent connections, both using the proton-j fixed reply address.
+        await using var harness = await TestListenerHarness.StartAsync();
+        var factory = CreateClientFactory();
+        var conn1 = await factory.CreateAsync(new Address(harness.AmqpUri));
+        var conn2 = await factory.CreateAsync(new Address(harness.AmqpUri));
+        try
+        {
+            async Task<object?> PutTokenAsync(Connection conn, string requestId)
+            {
+                // Link names unique per connection (an AMQPNetLite client requirement);
+                // the point of the regression is the FIXED reply ADDRESS both share.
+                var session = new Session(conn);
+                var receiver = new ReceiverLink(session, $"cbs-receiver-{requestId}", new Attach
+                {
+                    Source = new Source { Address = "$cbs" },
+                    Target = new Target { Address = "cbs-client-reply-to" },
+                }, null);
+                receiver.SetCredit(10, true);
+                var sender = new SenderLink(session, $"cbs-sender-{requestId}", new Attach
+                {
+                    Source = new Source(),
+                    Target = new Target { Address = "$cbs" },
+                }, null);
+
+                var request = new Message("sas-token-payload")
+                {
+                    Properties = new Properties { MessageId = requestId, ReplyTo = "cbs-client-reply-to" },
+                    ApplicationProperties = new ApplicationProperties(),
+                };
+                request.ApplicationProperties["operation"] = "put-token";
+                request.ApplicationProperties["type"] = "servicebus.windows.net:sastoken";
+                request.ApplicationProperties["name"] = "amqp://localhost/myqueue";
+
+                await sender.SendAsync(request);
+                var response = await receiver.ReceiveAsync(TimeSpan.FromSeconds(5));
+                if (response is null) return null;
+                receiver.Accept(response);
+                return response.Properties.GetCorrelationId();
+            }
+
+            // Act - both connections authenticate concurrently.
+            var results = await Task.WhenAll(
+                PutTokenAsync(conn1, "conn1-request"),
+                PutTokenAsync(conn2, "conn2-request"));
+
+            // Assert - each connection got ITS OWN response, correlated to its own request.
+            results[0].ShouldBe("conn1-request");
+            results[1].ShouldBe("conn2-request");
+        }
+        finally
+        {
+            await conn1.CloseAsync();
+            await conn2.CloseAsync();
+        }
+    }
+
+    [Fact]
     public async Task Management_ReplyLinkWithoutTargetAddress_RheaShape_StillGetsResponse()
     {
         // Same rhea shape as above, but against an entity's $management node - the Node SDK

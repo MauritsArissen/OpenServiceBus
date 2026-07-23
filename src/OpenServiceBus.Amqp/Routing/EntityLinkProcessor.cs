@@ -1,4 +1,5 @@
 using OpenServiceBus.Amqp.Hosting;
+using OpenServiceBus.Amqp.Management;
 using OpenServiceBus.Amqp.Queues;
 using OpenServiceBus.Amqp.Topics;
 
@@ -42,6 +43,8 @@ public sealed class EntityLinkProcessor : ILinkProcessor
     private readonly ILogger<EntityLinkProcessor> _logger;
 
     private readonly ConcurrentDictionary<string, QueueReceiverSource> _receiverSources = new(StringComparer.OrdinalIgnoreCase);
+    private readonly RequestNodeRegistry _requestNodes;
+    private readonly ResponsePairTable _responsePairs;
 
     public EntityLinkProcessor(
         IQueueRegistry registry,
@@ -51,6 +54,8 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         IOptions<AmqpListenerOptions> options,
         TimeProvider timeProvider,
         ILoggerFactory loggerFactory,
+        RequestNodeRegistry requestNodes,
+        ResponsePairTable responsePairs,
         ITopicRegistry? topics = null)
     {
         _registry = registry;
@@ -61,6 +66,8 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         _options = options.Value;
         _timeProvider = timeProvider;
         _loggerFactory = loggerFactory;
+        _requestNodes = requestNodes;
+        _responsePairs = responsePairs;
         _logger = loggerFactory.CreateLogger<EntityLinkProcessor>();
     }
 
@@ -71,20 +78,25 @@ public sealed class EntityLinkProcessor : ILinkProcessor
             var attach = attachContext.Attach;
             var isReceiverFromClient = !attach.Role; // role=false: client is sender ⇒ broker receives
 
-            var rawAddress = isReceiverFromClient
+            var rawAddress = NormalizeAddress(isReceiverFromClient
                 ? (attach.Target as Target)?.Address
-                : (attach.Source as Source)?.Address;
+                : (attach.Source as Source)?.Address);
+
+            // Request/response nodes ($cbs, <entity>/$management) are wired here rather than
+            // through ContainerHost's request processors - Azure routes their replies by link,
+            // while AMQPNetLite keys them on a single global reply-to address, which breaks
+            // rhea (no reply address at all) and proton-j (the same fixed address on every
+            // connection). See RequestNodeRegistry. Replies pair with requests via the AMQP
+            // session both live on, which all four official SDK stacks guarantee.
+            if (RequestNodeRegistry.IsRequestResponseAddress(rawAddress))
+            {
+                WireRequestResponseNode(attachContext, RequestNodeRegistry.Normalize(rawAddress!), isReceiverFromClient);
+                return;
+            }
 
             if (!EntityAddress.TryParse(rawAddress, out var entityAddress))
             {
                 Reject(attachContext, ErrorCode.InvalidField, "Link attach has no resolvable address.");
-                return;
-            }
-
-            if (entityAddress.SubResource == EntitySubResource.Management)
-            {
-                Reject(attachContext, ErrorCode.NotFound,
-                    $"No $management endpoint for entity '{entityAddress.Entity}'.");
                 return;
             }
 
@@ -121,6 +133,49 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         {
             _logger.LogError(ex, "Failed to process link attach");
             Reject(attachContext, ErrorCode.InternalError, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// pyamqp (the Python SDK) addresses entities by full URI - e.g.
+    /// <c>amqps://localhost:5672/smoke-queue</c> or <c>…/queue/$management</c> - where the
+    /// other SDK stacks send the bare entity path. Azure accepts both; reduce to the path.
+    /// </summary>
+    private static string? NormalizeAddress(string? address)
+    {
+        if (string.IsNullOrEmpty(address)) return address;
+        var schemeIndex = address.IndexOf("://", StringComparison.Ordinal);
+        if (schemeIndex <= 0) return address;
+        var pathStart = address.IndexOf('/', schemeIndex + 3);
+        return pathStart < 0 ? string.Empty : address[(pathStart + 1)..];
+    }
+
+    private void WireRequestResponseNode(AttachContext attachContext, string address, bool isReceiverFromClient)
+    {
+        if (!_requestNodes.TryGet(address, out var handler))
+        {
+            Reject(attachContext, ErrorCode.NotFound, $"No request/response node registered at '{address}'.");
+            return;
+        }
+
+        var session = attachContext.Link.Session;
+        if (isReceiverFromClient)
+        {
+            // Client sender: requests arrive here and responses go out via the session's
+            // paired reply link.
+            var ingress = new RequestNodeIngressProcessor(handler, _responsePairs, session, address, _logger);
+            attachContext.Complete(new TargetLinkEndpoint(ingress, attachContext.Link), ingress.Credit);
+            _logger.LogDebug("Wired request link for node {Address}", address);
+        }
+        else
+        {
+            // Client receiver: the reply link. The client's target address is irrelevant
+            // (rhea sends none, proton-j reuses a fixed one) - pairing is by session.
+            var source = new ResponseChannelSource();
+            _responsePairs.Register(session, address, source);
+            attachContext.Link.Closed += (_, _) => _responsePairs.Unregister(session, address, source);
+            attachContext.Complete(new SourceLinkEndpoint(source, attachContext.Link), 0);
+            _logger.LogDebug("Wired reply link for node {Address}", address);
         }
     }
 
