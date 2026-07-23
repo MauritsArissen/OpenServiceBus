@@ -25,8 +25,9 @@ export default function ExamplesPage() {
           </h1>
           <p className="mt-4 max-w-2xl text-neutral-300">
             The same Azure SDK code talks to OpenServiceBus and the real Azure Service Bus
-            without modification. Only the connection string changes. Click through to see
-            each integration pattern.
+            without modification - in .NET, Node.js, Java, and Python. Only the connection
+            string changes. Click through each integration pattern and toggle the language
+            on examples that support multiple SDKs.
           </p>
         </div>
       </header>
