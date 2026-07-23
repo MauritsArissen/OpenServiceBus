@@ -42,9 +42,30 @@ public class DiagnosticsTests
         // here we only care that send + receive + settle each surface once with the right tags.
         // ActivitySource is process-global; other parallel tests may be emitting too. Filter to
         // our queue so the assertions don't flake under parallel test execution.
+        //
+        // Timing: the broker settles the wire disposition BEFORE its spans are disposed on the
+        // IO thread, so CompleteMessageAsync can return microseconds before ActivityStopped
+        // fires (observed as a release-pipeline flake). Poll briefly instead of asserting the
+        // instant the client returns.
         bool ForOurQueue(Activity a) => "diag-q".Equals(a.GetTagItem(OpenServiceBusDiagnostics.TagDestination));
-        var ours = captured.Where(ForOurQueue).ToList();
-        var byName = ours.GroupBy(a => a.OperationName).ToDictionary(g => g.Key, g => g.ToList());
+        List<Activity> ours = [];
+        Dictionary<string, List<Activity>> byName = [];
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            lock (captured)
+            {
+                ours = captured.Where(ForOurQueue).ToList();
+            }
+            byName = ours.GroupBy(a => a.OperationName).ToDictionary(g => g.Key, g => g.ToList());
+            if (byName.ContainsKey(OpenServiceBusDiagnostics.SpanSend)
+                && byName.ContainsKey(OpenServiceBusDiagnostics.SpanReceive)
+                && byName.ContainsKey(OpenServiceBusDiagnostics.SpanSettle))
+            {
+                break;
+            }
+            await Task.Delay(50);
+        }
 
         byName.ShouldContainKey(OpenServiceBusDiagnostics.SpanSend);
         byName.ShouldContainKey(OpenServiceBusDiagnostics.SpanReceive);
