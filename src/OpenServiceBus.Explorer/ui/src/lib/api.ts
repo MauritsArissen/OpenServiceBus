@@ -166,9 +166,9 @@ export const explorerApi = {
     api<{ requeued: boolean; target: string; messageId: string }>("/api/requeue", post({ connectionString, queue, lockToken })),
 
   metrics: (entity: string, windowSeconds: number) =>
-    api<{ active: MetricSample[]; deadLettered: MetricSample[] }>(
+    api<{ entity: MetricSample[]; dlq: MetricSample[] }>(
       `/api/metrics?entity=${encodeURIComponent(entity)}&windowSeconds=${windowSeconds}`,
     ),
 };
 
-export type MetricSample = { t: number; active: number };
+export type MetricSample = { t: number; active: number; enqueued: number; completed: number };

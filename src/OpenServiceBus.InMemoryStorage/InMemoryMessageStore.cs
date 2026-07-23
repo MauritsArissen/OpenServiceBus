@@ -90,6 +90,7 @@ public sealed class InMemoryMessageStore : IMessageStore
         };
 
         state.Messages[seq] = message;
+        Interlocked.Increment(ref state.EnqueuedTotal); // cumulative "new messages" counter
         if (duplicateDetectionWindow is not null && !string.IsNullOrEmpty(messageId))
         {
             state.SeenMessageIds[messageId] = now + duplicateDetectionWindow.Value;
@@ -195,6 +196,12 @@ public sealed class InMemoryMessageStore : IMessageStore
         return Task.FromResult((long)state.Messages.Count);
     }
 
+    public (long Enqueued, long Completed) LifetimeCounters(string queueName)
+    {
+        if (!_queues.TryGetValue(queueName, out var state)) return (0, 0);
+        return (Interlocked.Read(ref state.EnqueuedTotal), Interlocked.Read(ref state.CompletedTotal));
+    }
+
     public async Task<LockedMessage?> TryDequeueAsync(
         string queueName,
         TimeSpan lockDuration,
@@ -251,6 +258,7 @@ public sealed class InMemoryMessageStore : IMessageStore
             return Task.FromResult(false);
         }
         state.Messages.TryRemove(entry.SequenceNumber, out _);
+        Interlocked.Increment(ref state.CompletedTotal); // cumulative "completed" counter
         return Task.FromResult(true);
     }
 
@@ -632,6 +640,8 @@ public sealed class InMemoryMessageStore : IMessageStore
     private sealed class QueueState
     {
         public long NextSequenceNumber;
+        public long EnqueuedTotal;   // cumulative new arrivals (for metrics)
+        public long CompletedTotal;  // cumulative completions (for metrics)
         public readonly ConcurrentDictionary<long, StoredMessage> Messages = new();
         public readonly ConcurrentDictionary<Guid, LockEntry> Locks = new();
         public readonly Channel<long> Available = Channel.CreateUnbounded<long>(new UnboundedChannelOptions

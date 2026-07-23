@@ -25,7 +25,8 @@ public static class QueueEndpoints
             foreach (var q in queues)
             {
                 var count = await store.CountAsync(q.Name, ct);
-                withCounts.Add(QueueResponse.From(q, count));
+                var (enqueued, completed) = store.LifetimeCounters(q.Name);
+                withCounts.Add(QueueResponse.From(q, count, enqueued, completed));
             }
             return Results.Ok(withCounts);
         });
@@ -35,7 +36,8 @@ public static class QueueEndpoints
             var queue = await registry.GetAsync(name, ct);
             if (queue is null) return Results.NotFound();
             var count = await store.CountAsync(name, ct);
-            return Results.Ok(QueueResponse.From(queue, count));
+            var (enqueued, completed) = store.LifetimeCounters(name);
+            return Results.Ok(QueueResponse.From(queue, count, enqueued, completed));
         });
 
         group.MapPut("/{name}", async (string name, CreateQueueRequest? body, IQueueRegistry registry, CancellationToken ct) =>
@@ -100,9 +102,11 @@ public sealed record QueueResponse(
     TimeSpan? DuplicateDetectionHistoryTimeWindow,
     string? ForwardTo,
     string? ForwardDeadLetteredMessagesTo,
-    long? ActiveMessageCount)
+    long? ActiveMessageCount,
+    long? EnqueuedCount = null,
+    long? CompletedCount = null)
 {
-    public static QueueResponse From(QueueDescriptor d, long? count = null) => new(
+    public static QueueResponse From(QueueDescriptor d, long? count = null, long? enqueued = null, long? completed = null) => new(
         d.Name,
         d.MaxDeliveryCount,
         d.LockDuration,
@@ -113,5 +117,7 @@ public sealed record QueueResponse(
         d.DuplicateDetectionHistoryTimeWindow,
         d.ForwardTo,
         d.ForwardDeadLetteredMessagesTo,
-        count);
+        count,
+        enqueued,
+        completed);
 }

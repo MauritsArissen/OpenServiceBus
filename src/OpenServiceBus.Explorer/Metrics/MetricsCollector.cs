@@ -31,7 +31,8 @@ public sealed class MetricsCollector : BackgroundService
         _logger = logger;
     }
 
-    public readonly record struct Sample(long T, long Active);
+    /// <summary>One snapshot: current depth (<c>Active</c>) plus cumulative lifetime counters.</summary>
+    public readonly record struct Sample(long T, long Active, long Enqueued, long Completed);
 
     /// <summary>Learn a management URL to poll. Idempotent.</summary>
     public void RegisterManagementUrl(string? url)
@@ -70,7 +71,10 @@ public sealed class MetricsCollector : BackgroundService
                 var rows = await http.GetFromJsonAsync<List<QueueRow>>(baseUrl + "/queues/", ct).ConfigureAwait(false);
                 foreach (var row in rows ?? [])
                 {
-                    if (!string.IsNullOrEmpty(row.Name)) Record(row.Name, now, row.ActiveMessageCount ?? 0);
+                    if (!string.IsNullOrEmpty(row.Name))
+                    {
+                        Record(row.Name, now, row.ActiveMessageCount ?? 0, row.EnqueuedCount ?? 0, row.CompletedCount ?? 0);
+                    }
                 }
             }
             catch (Exception ex)
@@ -80,16 +84,16 @@ public sealed class MetricsCollector : BackgroundService
         }
     }
 
-    private void Record(string entity, long t, long active)
+    private void Record(string entity, long t, long active, long enqueued, long completed)
     {
         var list = _series.GetOrAdd(entity, _ => new List<Sample>());
         lock (list)
         {
-            list.Add(new Sample(t, active));
+            list.Add(new Sample(t, active, enqueued, completed));
             var cutoff = t - (long)Retention.TotalSeconds;
             if (list.Count > 0 && list[0].T < cutoff) list.RemoveAll(s => s.T < cutoff);
         }
     }
 
-    private sealed record QueueRow(string Name, long? ActiveMessageCount);
+    private sealed record QueueRow(string Name, long? ActiveMessageCount, long? EnqueuedCount, long? CompletedCount);
 }

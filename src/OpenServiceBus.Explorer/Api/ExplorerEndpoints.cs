@@ -339,16 +339,19 @@ public static class ExplorerEndpoints
             return Results.Ok(new { management = mgmtStatus, serviceBus = sdkStatus });
         });
 
-        // Historical metrics for an entity: its own active-message series plus its
-        // dead-letter queue series, sampled by MetricsCollector. windowSeconds selects
-        // the lookback (e.g. 1800 = 30 min, 86400 = 24 h).
+        // Historical metrics for an entity: its own sampled series plus its dead-letter
+        // queue's series, from MetricsCollector. Each sample carries the current depth
+        // (active) and cumulative lifetime counters (enqueued, completed); the client
+        // derives per-interval throughput by differencing consecutive samples, and reads
+        // the dead-letter level/rate from the DLQ series. windowSeconds selects the
+        // lookback (1800 = 30 min … 86400 = 24 h).
         api.MapGet("/metrics", (string entity, int windowSeconds, MetricsCollector metrics) =>
         {
             var since = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - Math.Max(60, windowSeconds);
             return Results.Ok(new
             {
-                active = metrics.Series(entity, since),
-                deadLettered = metrics.Series(entity + "/$DeadLetterQueue", since),
+                entity = metrics.Series(entity, since),
+                dlq = metrics.Series(entity + "/$DeadLetterQueue", since),
             });
         });
 
