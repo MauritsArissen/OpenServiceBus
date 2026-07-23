@@ -21,11 +21,12 @@ boundaries (:00 / :30 UTC), so the countdown and the actual reset agree with no 
 
 ## Deploy
 
-CI does this automatically (`.github/workflows/demo-deploy.yml`): it builds/pushes the seeder
-image, rsyncs this folder to `/opt/openservicebus-demo/` on the VPS, and runs
-`docker compose pull && up -d`. On a **release** it's called by `release.yml` *after* the
-broker image is pushed (so the demo can never pull a stale `:latest`); it also runs on its
-own for changes under `deploy/demo/**` or the seeder, and on manual dispatch.
+This is the **final job of `release.yml`** (`deploy-demo`), so it runs only after an actual
+version/tag release — never on an ordinary push to `main`. Once the broker image is
+published, it builds/pushes the seeder image, rsyncs this folder to
+`/opt/openservicebus-demo/` on the VPS, and runs `docker compose pull && up -d`, picking up
+the just-published `:latest`. To redeploy the demo between releases, re-run the latest
+**Release** workflow run from the Actions tab.
 
 ## One-time VPS setup (manual)
 
@@ -37,8 +38,8 @@ one-time steps remain; after them everything stays current automatically.
    VPS origin IP. Keeping it proxied is what hides the origin IP — public DNS returns
    Cloudflare's addresses, never the server's. Set the zone's SSL/TLS mode to
    **Full (strict)** so Cloudflare talks to the origin over the Let's Encrypt cert below.
-2. **First deploy**: merge the PR, cut a release (so `openservicebus:latest` includes demo
-   mode), which triggers the **Deploy demo** workflow → it rsyncs this folder to
+2. **First deploy**: cut a release (so `openservicebus:latest` includes demo mode). The
+   `deploy-demo` job at the end of `release.yml` rsyncs this folder to
    `/opt/openservicebus-demo/` and runs `docker compose up -d`. The containers are now live
    on `127.0.0.1:5400`.
 3. **Reverse proxy + TLS** ([`nginx-demo.conf`](nginx-demo.conf)) on the VPS:
@@ -53,8 +54,8 @@ one-time steps remain; after them everything stays current automatically.
    Cloudflare, run certbot, then switch it back to **Proxied** (orange). certbot's systemd
    timer (already active) renews the cert from then on.
 
-After this, nothing else is manual: every release redeploys the containers (`demo-deploy`),
-certbot renews TLS, and the nginx vhost + DNS are permanent.
+After this, nothing else is manual: every release redeploys the containers (the `deploy-demo`
+job in `release.yml`), certbot renews TLS, and the nginx vhost + DNS are permanent.
 
 Required repo secrets (already present for the website/release workflows): `DOCKERHUB_USERNAME`,
 `DOCKERHUB_TOKEN`, `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`.
