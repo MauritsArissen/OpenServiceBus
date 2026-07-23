@@ -55,7 +55,9 @@ jobs:
           grep "Bootstrapped queue" host.log
 
       - name: .NET SDK smoke
-        run: dotnet run --project tests/sdk-smoke/dotnet/DotnetSmoke.csproj --configuration Release
+        run: |
+          dotnet build tests/sdk-smoke/SdkSmoke.slnx --configuration Release
+          dotnet run --no-build --project tests/sdk-smoke/dotnet/DotnetSmoke.csproj --configuration Release
 
       - name: Node.js SDK smoke
         working-directory: tests/sdk-smoke/node

@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/dotnet/">
+    <Project Path="dotnet/DotnetSmoke.csproj" />
+  </Folder>
+</Solution>
