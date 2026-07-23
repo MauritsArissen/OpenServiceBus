@@ -76,6 +76,15 @@ export default function Nav() {
           >
             GitHub
           </a>
+          <a
+            href="https://demo.openservicebus.net"
+            target="_blank"
+            rel="noreferrer"
+            className="px-2 sm:px-3 py-1.5 rounded-md bg-violet-600 text-white font-medium hover:bg-violet-500 transition shrink-0"
+          >
+            <span className="sm:hidden">Demo</span>
+            <span className="hidden sm:inline">Live Demo</span>
+          </a>
         </div>
       </div>
     </nav>
