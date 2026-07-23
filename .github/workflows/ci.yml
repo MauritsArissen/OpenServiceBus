@@ -39,8 +39,20 @@ jobs:
       - name: Build
         run: dotnet build --no-restore --configuration Release
 
-      - name: Test
-        run: dotnet test --no-build --configuration Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
+      - name: Test (everything except the Functions integration test)
+        run: >
+          dotnet test --no-build --configuration Release --verbosity normal
+          --logger "trx;LogFileName=test-results.trx"
+          --filter "FullyQualifiedName!~AzureFunctions"
+
+      # The func host compiles the sample and boots a worker inside the test - on a
+      # 2-core runner it loses the CPU race when other test projects run in parallel.
+      # Running it alone keeps it deterministic.
+      - name: Test (Azure Functions integration, isolated)
+        run: >
+          dotnet test tests/OpenServiceBus.AzureFunctions.IntegrationTests
+          --no-build --configuration Release --verbosity normal
+          --logger "trx;LogFileName=functions-test-results.trx"
 
       - name: Upload test results
         if: always()

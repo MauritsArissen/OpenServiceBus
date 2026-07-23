@@ -84,7 +84,7 @@ public class ServiceBusTriggerTests
             func.BeginErrorReadLine();
 
             // Act - wait for func host to be ready, then dispatch 100 messages.
-            await WaitForFuncReadyAsync(func, stdoutBuffer, stderrBuffer, TimeSpan.FromSeconds(90));
+            await WaitForFuncReadyAsync(func, stdoutBuffer, stderrBuffer, TimeSpan.FromSeconds(180));
 
             await using var client = new ServiceBusClient(broker.ConnectionString);
             var sender = client.CreateSender(QueueName);
@@ -97,7 +97,7 @@ public class ServiceBusTriggerTests
             }
 
             // Wait for sentinel file to contain 100 lines, or func process to die.
-            var processed = await WaitForLinesAsync(sentinelPath, expectedLines: 100, func, TimeSpan.FromSeconds(90));
+            var processed = await WaitForLinesAsync(sentinelPath, expectedLines: 100, func, TimeSpan.FromSeconds(180));
 
             // Assert
             processed.Length.ShouldBe(100, $"trigger should have fired 100 times.\nfunc stdout:\n{stdoutBuffer}\nfunc stderr:\n{stderrBuffer}");
