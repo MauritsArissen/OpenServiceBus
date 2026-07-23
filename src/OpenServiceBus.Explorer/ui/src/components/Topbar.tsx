@@ -1,6 +1,7 @@
-import { MoonIcon, RotateCcwIcon, SunIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { MenuIcon, MoonIcon, RefreshCwIcon, RotateCcwIcon, SunIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { displayName } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -15,7 +16,7 @@ const STATUS_META = {
   err: { label: "error", dot: "bg-red-500" },
 } as const;
 
-export function Topbar() {
+export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   const { status, selected, demoMode, resetIntervalSeconds } = useStore();
   const [dark, setDark] = useState(() => (localStorage.getItem(LS_THEME) ?? "light") === "dark");
 
@@ -28,29 +29,108 @@ export function Topbar() {
   const KindIcon = selected ? KIND_ICON[selected.kind] : null;
 
   return (
-    <header className="flex items-center gap-3 border-b bg-background px-4" style={{ gridArea: "topbar" }}>
+    <header className="flex h-[3.25rem] shrink-0 items-center gap-2 border-b bg-background px-3 sm:gap-3 sm:px-4">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="-ml-1 shrink-0 md:hidden"
+        onClick={onMenuClick}
+        title="Toggle sidebar"
+        aria-label="Toggle sidebar"
+      >
+        <MenuIcon />
+      </Button>
       <div className="flex items-center gap-2.5 font-semibold">
-        <BrandMark className="size-7" />
-        <span className="tracking-tight">OpenServiceBus</span>
+        <BrandMark className="size-7 shrink-0" />
+        <span className="hidden tracking-tight sm:inline">OpenServiceBus</span>
       </div>
       {selected && KindIcon && (
-        <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+        <div className="hidden min-w-0 items-center gap-2 text-sm text-muted-foreground md:flex">
           <span className="text-border">/</span>
           <KindIcon className="size-3.5" />
           <span className="truncate font-mono text-foreground">{displayName(selected)}</span>
         </div>
       )}
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
         {demoMode && <ResetCountdown intervalSeconds={resetIntervalSeconds} />}
-        <span className="flex items-center gap-2 rounded-full border px-3 py-1 text-xs text-muted-foreground">
+        <RefreshInterval />
+        <span className="flex items-center gap-2 rounded-full border px-2 py-1 text-xs text-muted-foreground sm:px-3">
           <span className={cn("size-2 rounded-full", meta.dot)} />
-          {meta.label}
+          <span className="hidden sm:inline">{meta.label}</span>
         </span>
         <Button variant="ghost" size="icon" onClick={() => setDark((d) => !d)} title="Toggle theme">
           {dark ? <SunIcon /> : <MoonIcon />}
         </Button>
       </div>
     </header>
+  );
+}
+
+const REFRESH_OPTIONS = [
+  { value: 0, label: "Off" },
+  { value: 1, label: "1 sec" },
+  { value: 3, label: "3 sec" },
+  { value: 5, label: "5 sec" },
+  { value: 15, label: "15 sec" },
+  { value: 30, label: "30 sec" },
+  { value: 60, label: "60 sec" },
+] as const;
+
+const LS_REFRESH = "osb-explorer-refresh-interval";
+
+/**
+ * Auto-refresh interval for the live counts. When on, it re-polls the entity lists every
+ * N seconds via store.refresh(), which updates both the sidebar badges and the open
+ * entity's header stats (they read from the same data). "Off" disables polling.
+ */
+function RefreshInterval() {
+  const { refresh, status } = useStore();
+  // Keep a ref to the latest refresh + status so the interval never needs to resubscribe
+  // (and never captures a stale management connection or status).
+  const stateRef = useRef({ refresh, status });
+  stateRef.current = { refresh, status };
+
+  const [seconds, setSeconds] = useState(() => {
+    const v = Number(localStorage.getItem(LS_REFRESH));
+    return REFRESH_OPTIONS.some((o) => o.value === v) ? v : 0;
+  });
+
+  useEffect(() => {
+    localStorage.setItem(LS_REFRESH, String(seconds));
+    if (!seconds) return;
+    let inFlight = false;
+    const id = window.setInterval(async () => {
+      // Skip if a previous refresh is still running, or we're not connected (avoids
+      // spamming error toasts every tick while disconnected).
+      if (inFlight || stateRef.current.status !== "ok") return;
+      inFlight = true;
+      try {
+        await stateRef.current.refresh();
+      } finally {
+        inFlight = false;
+      }
+    }, seconds * 1000);
+    return () => window.clearInterval(id);
+  }, [seconds]);
+
+  return (
+    <Select value={String(seconds)} onValueChange={(v) => setSeconds(Number(v))}>
+      <SelectTrigger
+        className="h-8 w-auto gap-1.5 px-2.5 text-xs"
+        aria-label="Auto-refresh interval"
+        title="Auto-refresh the open entity & sidebar counts"
+      >
+        <RefreshCwIcon className={cn("size-3.5", seconds > 0 ? "text-primary" : "text-muted-foreground")} />
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {REFRESH_OPTIONS.map((o) => (
+          <SelectItem key={o.value} value={String(o.value)}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 

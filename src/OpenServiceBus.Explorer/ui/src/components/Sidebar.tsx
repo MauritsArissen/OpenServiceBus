@@ -1,6 +1,6 @@
 import {
   CableIcon, ChevronRightIcon, InboxIcon, PlusIcon, RadioIcon, RefreshCwIcon,
-  SearchIcon, Trash2Icon, WaypointsIcon,
+  SearchIcon, Trash2Icon, WaypointsIcon, XIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -17,11 +17,18 @@ import { explorerApi, type QueueInfo } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
 
-export function Sidebar() {
+export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const store = useStore();
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [connOpen, setConnOpen] = useState(false);
+
+  // Selecting an entity also dismisses the mobile drawer so the detail view is visible.
+  // On desktop the drawer is always open, so onClose is a harmless no-op there.
+  const selectAndClose = (sel: Parameters<typeof store.select>[0]) => {
+    store.select(sel);
+    onClose();
+  };
 
   const f = filter.trim().toLowerCase();
   const queues = store.queues
@@ -70,9 +77,22 @@ export function Sidebar() {
 
   return (
     <aside
-      className="flex min-h-0 flex-col border-r bg-sidebar text-sidebar-foreground"
-      style={{ gridArea: "sidebar" }}
+      className={cn(
+        "flex min-h-0 w-[300px] max-w-[85vw] flex-col border-r bg-sidebar text-sidebar-foreground",
+        // Mobile: off-canvas drawer that sits below the topbar and slides in/out.
+        "fixed bottom-0 left-0 top-[3.25rem] z-40 transition-transform duration-200",
+        open ? "translate-x-0" : "-translate-x-full",
+        // Desktop (md+): static in-flow column, always visible.
+        "md:static md:top-auto md:bottom-auto md:z-auto md:max-w-none md:translate-x-0 md:transition-none",
+      )}
     >
+      {/* Mobile-only drawer header with a close affordance (desktop hides this). */}
+      <div className="flex items-center justify-between border-b px-3 py-2 md:hidden">
+        <span className="text-sm font-semibold">Entities</span>
+        <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close sidebar">
+          <XIcon />
+        </Button>
+      </div>
       <div className="space-y-2.5 p-3">
         <div className="relative">
           <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -125,7 +145,7 @@ export function Sidebar() {
               active={isSelected("queue", q.name)}
               lockedCount={store.lockedCount(q.name) + store.lockedCount(q.name + "/$DeadLetterQueue")}
               count={q.activeMessageCount}
-              onSelect={() => store.select({ kind: "queue", name: q.name })}
+              onSelect={() => selectAndClose({ kind: "queue", name: q.name })}
               onDelete={() => deleteQueue(q.name)}
             />
           ))}
@@ -144,7 +164,7 @@ export function Sidebar() {
                     "group relative flex h-9 cursor-pointer items-center gap-1.5 rounded-md pl-1.5 pr-1.5 text-sm hover:bg-sidebar-accent",
                     isSelected("topic", t.name) && "bg-sidebar-accent font-medium",
                   )}
-                  onClick={() => store.select({ kind: "topic", name: t.name })}
+                  onClick={() => selectAndClose({ kind: "topic", name: t.name })}
                 >
                   {isSelected("topic", t.name) && (
                     <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />
@@ -198,7 +218,7 @@ export function Sidebar() {
                           store.lockedCount(`${t.name}/Subscriptions/${s.name}/$DeadLetterQueue`)
                         }
                         count={s.activeMessageCount}
-                        onSelect={() => store.select({ kind: "subscription", name: t.name, sub: s.name })}
+                        onSelect={() => selectAndClose({ kind: "subscription", name: t.name, sub: s.name })}
                         onDelete={() => deleteSubscription(t.name, s.name)}
                       />
                     ))}

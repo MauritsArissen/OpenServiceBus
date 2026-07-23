@@ -22,7 +22,7 @@ export function EntityView() {
 
   if (!sel) {
     return (
-      <main className="flex items-center justify-center overflow-y-auto bg-muted/30 p-6" style={{ gridArea: "main" }}>
+      <main className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto bg-muted/30 p-6">
         <div className="max-w-sm text-center">
           <div className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl bg-primary/10 text-primary">
             <LayersIcon className="size-7" />
@@ -48,7 +48,7 @@ export function EntityView() {
   const KindIcon = KIND_ICON[sel.kind];
 
   return (
-    <main className="min-h-0 overflow-y-auto bg-muted/30" style={{ gridArea: "main" }} key={address}>
+    <main className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-muted/30" key={address}>
       <div className="mx-auto max-w-5xl space-y-5 p-5">
         <div className="rounded-xl border bg-card p-5 shadow-sm">
           {!d && sel.kind !== "topic" ? (
