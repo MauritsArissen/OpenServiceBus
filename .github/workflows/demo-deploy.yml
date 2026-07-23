@@ -1,16 +1,21 @@
 name: Deploy demo
 
 # Publishes the demo seeder image and (re)deploys the live demo at demo.openservicebus.net.
-# Runs on new releases (so the demo picks up the latest broker image), on changes to the
-# demo deploy files or seeder, and on demand.
+# On a release this is CALLED by release.yml (workflow_call) after the broker image is
+# pushed, so the demo never redeploys before the new :latest exists. It also runs standalone
+# on changes to the demo deploy files or seeder, and on demand.
+#
+# NOTE: this is NOT triggered by `release: published`. A Release created by release.yml uses
+# the built-in GITHUB_TOKEN, and GitHub deliberately does not let GITHUB_TOKEN-created events
+# start other workflows (anti-recursion) - so that trigger never fired. release.yml calls us
+# directly instead.
 #
 # Reuses the existing repo secrets: DOCKERHUB_USERNAME / DOCKERHUB_TOKEN (image push) and
 # VPS_HOST / VPS_USER / VPS_SSH_KEY (deploy), the same ones release.yml and website-deploy
 # already use.
 
 on:
-  release:
-    types: [published]
+  workflow_call: # release.yml calls this after the broker image is pushed
   push:
     branches: [main]
     paths:

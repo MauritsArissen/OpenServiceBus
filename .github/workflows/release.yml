@@ -249,3 +249,10 @@ jobs:
 
             See the [Wiki](https://github.com/${{ github.repository }}/wiki) for full
             documentation.
+
+  deploy-demo:
+    name: Redeploy live demo
+    needs: [docker]
+    if: github.event_name == 'push' # real tag-push releases only, mirroring the release job
+    uses: ./.github/workflows/demo-deploy.yml
+    secrets: inherit
