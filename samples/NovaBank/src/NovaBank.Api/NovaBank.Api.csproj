@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>NovaBank.Api</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The app talks to Azure Service Bus and nothing else. Whether the other end is the
+         real thing or OpenServiceBus is purely a connection-string concern. -->
+    <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.18.2" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="7.2.0" />
+  </ItemGroup>
+
+</Project>

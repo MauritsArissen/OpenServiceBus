@@ -74,10 +74,34 @@ public sealed class QueueReceiverSource : IMessageSource
     {
         while (true)
         {
-            // Pass the receiver link name so the lock is scoped to this link - only this
-            // link's $management session can renew it (matches Service Bus's lock-link affinity).
-            var locked = await _store.TryDequeueAsync(_entityName, _descriptor.LockDuration, link.Name).ConfigureAwait(false);
-            if (locked is null) return null!;
+            // The SDK drains the link before closing any receiver/processor. For drain to
+            // complete, GetMessageAsync MUST return null so SourceLinkEndpoint can call
+            // link.CompleteDrain() - a dequeue that blocks indefinitely makes every graceful
+            // receiver close hang for the client's full 60s timeout instead. Poll on a short
+            // timeout so link.IsDraining is observed periodically (same pattern as
+            // SessionReceiverSource.GetMessageAsync).
+            LockedMessage? locked = null;
+            while (locked is null)
+            {
+                if (link.IsDraining) return null!;
+                using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+                try
+                {
+                    // Pass the receiver link name so the lock is scoped to this link - only this
+                    // link's $management session can renew it (matches Service Bus's lock-link affinity).
+                    locked = await _store.TryDequeueAsync(_entityName, _descriptor.LockDuration, link.Name, cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Poll timeout - loop and re-check drain state.
+                }
+
+                if (locked is null && !cts.IsCancellationRequested)
+                {
+                    // Store-side cancellation (e.g. queue deleted) - bail out like before.
+                    return null!;
+                }
+            }
 
             // Messages that crossed their TTL deadline while waiting in the queue get
             // dropped (or moved to DLQ when DeadLetteringOnMessageExpiration is set on the queue).
@@ -201,7 +225,7 @@ public sealed class QueueReceiverSource : IMessageSource
 
                 case Rejected rejected:
                     var (reason, description) = ExtractDeadLetterInfo(rejected);
-                    DeadLetterAsync(lockToken, reason, description).GetAwaiter().GetResult();
+                    DeadLetterAsync(lockToken, reason, description, inFlightDelivery: true).GetAwaiter().GetResult();
                     disposition = "deadletter";
                     if (reason is not null) activity?.SetTag(OpenServiceBusDiagnostics.TagDeadLetterReason, reason);
                     break;
@@ -253,7 +277,7 @@ public sealed class QueueReceiverSource : IMessageSource
                 break;
             case Rejected rejected:
                 var (reason, description) = ExtractDeadLetterInfo(rejected);
-                await DeadLetterAsync(lockToken, reason, description).ConfigureAwait(false);
+                await DeadLetterAsync(lockToken, reason, description, inFlightDelivery: true).ConfigureAwait(false);
                 break;
             default:
                 // Treat unknown as abandon so the lock is at least released on commit.
@@ -270,7 +294,7 @@ public sealed class QueueReceiverSource : IMessageSource
     {
         if (!_isDlq && _descriptor.DeadLetteringOnMessageExpiration)
         {
-            await DeadLetterAsync(lockToken, TtlExpiredReason, TtlExpiredDescription, cancellationToken).ConfigureAwait(false);
+            await DeadLetterAsync(lockToken, TtlExpiredReason, TtlExpiredDescription, cancellationToken: cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -279,7 +303,7 @@ public sealed class QueueReceiverSource : IMessageSource
         _logger.LogDebug("TTL-dropped expired message from {Entity}", _entityName);
     }
 
-    private async Task DeadLetterAsync(Guid lockToken, string? reason, string? description, CancellationToken cancellationToken = default)
+    private async Task DeadLetterAsync(Guid lockToken, string? reason, string? description, bool inFlightDelivery = false, CancellationToken cancellationToken = default)
     {
         if (_isDlq)
         {
@@ -297,7 +321,14 @@ public sealed class QueueReceiverSource : IMessageSource
         var dlqTarget = string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo)
             ? _entityName + EntityNames.DeadLetterSuffix
             : _descriptor.ForwardDeadLetteredMessagesTo!;
-        await _router.RouteAsync(dlqTarget, dlqBytes, expiresAt: null, cancellationToken: cancellationToken).ConfigureAwait(false);
+        // The moved message keeps its delivery history - Azure SB shows e.g. DeliveryCount=10
+        // on a max-delivery dead-lettered message, not 0. The stored count only tracks *prior*
+        // failed deliveries, so a client dead-lettering the delivery it currently holds counts
+        // that delivery too (inFlightDelivery); broker-initiated moves (max-delivery skip, TTL)
+        // pass the stored count as-is.
+        await _router.RouteAsync(dlqTarget, dlqBytes, expiresAt: null,
+            deliveryCount: removed.DeliveryCount + (inFlightDelivery ? 1 : 0),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // Dead-letter counter tagged with the source queue and reason - lets a dashboard
         // group "DLQ rate per queue" and spot reason-specific spikes (MaxDeliveryCountExceeded vs TTL).

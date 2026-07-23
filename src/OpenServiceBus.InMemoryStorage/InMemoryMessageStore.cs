@@ -52,6 +52,7 @@ public sealed class InMemoryMessageStore : IMessageStore
         string? sessionId = null,
         string? messageId = null,
         TimeSpan? duplicateDetectionWindow = null,
+        int deliveryCount = 0,
         CancellationToken cancellationToken = default)
     {
         var state = GetQueue(queueName);
@@ -85,6 +86,7 @@ public sealed class InMemoryMessageStore : IMessageStore
             ExpiresAt = expiresAt,
             ScheduledEnqueueTime = effectiveSchedule,
             SessionId = sessionId,
+            DeliveryCount = deliveryCount,
         };
 
         state.Messages[seq] = message;
@@ -125,7 +127,17 @@ public sealed class InMemoryMessageStore : IMessageStore
             var activated_ = msg with { ScheduledEnqueueTime = null };
             if (state.Messages.TryUpdate(seq, activated_, msg))
             {
-                state.Available.Writer.TryWrite(seq);
+                // Mirror the enqueue path: session messages activate into their per-session
+                // channel, otherwise a session receiver would never see them.
+                if (msg.SessionId is not null)
+                {
+                    var session = state.GetOrAddSession(msg.SessionId);
+                    session.Available.Writer.TryWrite(seq);
+                }
+                else
+                {
+                    state.Available.Writer.TryWrite(seq);
+                }
                 activated++;
             }
         }

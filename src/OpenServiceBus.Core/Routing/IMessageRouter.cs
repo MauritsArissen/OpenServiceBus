@@ -31,6 +31,11 @@ public interface IMessageRouter
     /// Required when the chain may traverse a topic so subscription rules can be evaluated.
     /// Pass <c>null</c> only for hops that are guaranteed to be queues.
     /// </param>
+    /// <param name="deliveryCount">
+    /// Initial delivery count of the enqueued copy. 0 for fresh sends; DLQ writers pass the
+    /// count the message had when it was dead-lettered, matching Azure Service Bus where a
+    /// moved message keeps its delivery history.
+    /// </param>
     Task<IReadOnlyList<string>> RouteAsync(
         string targetEntityName,
         byte[] encodedMessage,
@@ -40,5 +45,6 @@ public interface IMessageRouter
         string? messageId = null,
         TimeSpan? duplicateDetectionWindow = null,
         MessageFilterContext? filterContext = null,
+        int deliveryCount = 0,
         CancellationToken cancellationToken = default);
 }

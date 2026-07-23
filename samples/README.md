@@ -14,6 +14,7 @@ the compose file mounts in), and a `README.md` explaining what it shows and how 
 | **[WorkerService](OpenServiceBus.Samples.WorkerService)**               | `BackgroundService` + `ServiceBusProcessor` with concurrency + auto-DLQ                         | Production-shaped consumer code                               |
 | **[Functions](OpenServiceBus.Samples.Functions)**                       | Minimal Azure Functions `ServiceBusTrigger`                                                     | Functions worker prerequisite check (and the integration test target) |
 | **[FunctionsTriggerDemo](OpenServiceBus.Samples.FunctionsTriggerDemo)** | 5-trigger Functions app: peek-lock, batch, manual disposition, DLQ trigger, HTTP output binding | Exploring the full Functions binding surface                  |
+| **[NovaBank](NovaBank)**                                                | Full event-driven banking API (Swagger) - dup-detected transfers, session payments, broker-side scheduling, SQL-filtered fraud/audit/notification fan-out, DLQ ops - plus a 79-test suite on the embedded broker | The complete real-app blueprint: architecture, config swapping (emulator ↔ Azure), and how to test all of it |
 
 ## Common pattern
 
@@ -30,6 +31,10 @@ The compose files all use `mauritsarissen/openservicebus:latest` and bind-mount
 the sample's `config.json` to `/etc/openservicebus/config.json` inside the container. The
 container reads it at startup and declares the queues + topics + rules described in the
 sample's README.
+
+**NovaBank** is the exception to the one-file pattern: it's a full solution
+(`NovaBank.slnx` with an API project and a test project) built entirely as an example of a
+real-world app. Its README carries its own run/test instructions.
 
 ## What's identical across samples
 

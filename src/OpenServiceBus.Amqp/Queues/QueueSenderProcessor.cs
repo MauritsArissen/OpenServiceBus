@@ -85,6 +85,17 @@ public sealed class QueueSenderProcessor : IMessageProcessor
             // when the queue is session-enabled; on a plain queue the GroupId is preserved as
             // metadata via the encoded bytes and the message stays on the regular delivery path.
             var sessionId = _descriptor.RequiresSession ? msg.Properties?.GroupId : null;
+            // Azure rejects session-less sends to session-enabled entities with amqp:not-allowed
+            // (the SDK surfaces InvalidOperationException). Accepting one here would route it to
+            // the sessionless channel where no session receiver can ever read it - a black hole.
+            if (_descriptor.RequiresSession && string.IsNullOrEmpty(sessionId))
+            {
+                messageContext.Complete(new Error(new Symbol(ErrorCode.NotAllowed))
+                {
+                    Description = $"A SessionId is required for messages sent to session-enabled entity '{_queueName}'.",
+                });
+                return;
+            }
             // When dedup is required, pass messageId + window to the store so repeats are dropped.
             var messageId = _descriptor.RequiresDuplicateDetection ? msg.Properties?.MessageId?.ToString() : null;
             var dedupWindow = _descriptor.RequiresDuplicateDetection
@@ -144,6 +155,17 @@ public sealed class QueueSenderProcessor : IMessageProcessor
                 var expiresAt = ComputeExpiresAt(inner);
                 var scheduledFor = ReadScheduledEnqueueTime(inner);
                 var sessionId = _descriptor.RequiresSession ? inner.Properties?.GroupId : null;
+                if (_descriptor.RequiresSession && string.IsNullOrEmpty(sessionId))
+                {
+                    // Same session guard as the single-message path. Messages before this one
+                    // in the batch are already enqueued; Azure validates client-side so mixed
+                    // batches don't normally reach a broker at all.
+                    context.Complete(new Error(new Symbol(ErrorCode.NotAllowed))
+                    {
+                        Description = $"A SessionId is required for messages sent to session-enabled entity '{_queueName}'.",
+                    });
+                    return;
+                }
                 var messageId = _descriptor.RequiresDuplicateDetection ? inner.Properties?.MessageId?.ToString() : null;
                 var dedupWindow = _descriptor.RequiresDuplicateDetection
                     ? _descriptor.DuplicateDetectionHistoryTimeWindow ?? TimeSpan.FromMinutes(10)

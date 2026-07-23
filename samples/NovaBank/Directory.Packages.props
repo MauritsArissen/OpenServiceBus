@@ -1,0 +1,6 @@
+<Project>
+  <!-- Shadows the repo-root Directory.Packages.props: NovaBank pins its own package versions inline. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

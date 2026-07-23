@@ -1,0 +1,12 @@
+<Project>
+  <!--
+    NovaBank is a stand-alone sample app. This file intentionally shadows the
+    OpenServiceBus repo-root Directory.Build.props so none of the library build
+    settings (TreatWarningsAsErrors, packaging metadata, ...) leak into it.
+  -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+</Project>

@@ -297,6 +297,7 @@ Each sample is self-contained: it ships a `docker-compose.yml`, a `config.json`,
 - **[`samples/OpenServiceBus.Samples.WorkerService`](samples/OpenServiceBus.Samples.WorkerService)** - `Microsoft.Extensions.Hosting` background-worker pattern.
 - **[`samples/OpenServiceBus.Samples.Functions`](samples/OpenServiceBus.Samples.Functions)** - minimal Azure Functions `ServiceBusTrigger` app (the integration-test target).
 - **[`samples/OpenServiceBus.Samples.FunctionsTriggerDemo`](samples/OpenServiceBus.Samples.FunctionsTriggerDemo)** - interactive multi-trigger Functions app driven via the Explorer or HTTP.
+- **[`samples/NovaBank`](samples/NovaBank)** - a complete event-driven banking API built 100% against `Azure.Messaging.ServiceBus` (Swagger UI, dup-detected transfers, session payments, scheduled standing orders, SQL-filtered fraud/audit/notification fan-out, DLQ inspection) with a 79-test suite running the whole app on the embedded test host. Made entirely as an example of a real-world integration.
 
 See [`samples/README.md`](samples/README.md) for the full index and a quick chooser table.
 

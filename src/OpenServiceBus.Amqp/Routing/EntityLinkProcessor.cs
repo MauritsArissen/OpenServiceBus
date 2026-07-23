@@ -229,10 +229,9 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         // attach. The SDK reads the resolved session id from the attach response's filter set
         // (via Source.FilterSet on the reply) - so we must know which session was picked.
         var linkName = attachContext.Link.Name;
-        SessionLock? sessionLock;
         if (filter.SessionId is not null)
         {
-            sessionLock = _store.TryAcceptSessionAsync(descriptor.Name, filter.SessionId, descriptor.LockDuration, linkName)
+            var sessionLock = _store.TryAcceptSessionAsync(descriptor.Name, filter.SessionId, descriptor.LockDuration, linkName)
                 .GetAwaiter().GetResult();
             if (sessionLock is null)
             {
@@ -240,19 +239,115 @@ public sealed class EntityLinkProcessor : ILinkProcessor
                     $"Session '{filter.SessionId}' is already locked by another receiver.");
                 return;
             }
-        }
-        else
-        {
-            sessionLock = _store.TryAcceptNextSessionAsync(descriptor.Name, descriptor.LockDuration, linkName)
-                .GetAwaiter().GetResult();
-            if (sessionLock is null)
-            {
-                Reject(attachContext, "com.microsoft:no-sessions-available",
-                    $"No unlocked session is available on '{descriptor.Name}'.");
-                return;
-            }
+            CompleteSessionAttach(attachContext, descriptor, sessionLock, linkName);
+            return;
         }
 
+        var immediate = _store.TryAcceptNextSessionAsync(descriptor.Name, descriptor.LockDuration, linkName)
+            .GetAwaiter().GetResult();
+        if (immediate is not null)
+        {
+            CompleteSessionAttach(attachContext, descriptor, immediate, linkName);
+            return;
+        }
+
+        // No session right now. Real Service Bus PARKS the accept-next-session request
+        // server-side until a session becomes available or the client's conveyed timeout
+        // (link property com.microsoft:timeout) elapses, then answers com.microsoft:timeout.
+        // The SDK maps that to ServiceTimeout, which ServiceBusSessionProcessor treats as a
+        // quiet "poll again". AMQPNetLite allows completing the AttachContext asynchronously,
+        // so we hold the attach open and poll for a session in the background.
+        ParkAcceptNextSession(attachContext, descriptor, linkName);
+    }
+
+    private void ParkAcceptNextSession(AttachContext attachContext, QueueDescriptor descriptor, string linkName)
+    {
+        var conveyed = ReadClientTimeout(attachContext.Attach) ?? TimeSpan.FromSeconds(60);
+        // Answer slightly before the client's own deadline so it sees a clean broker
+        // timeout instead of racing its local timer.
+        var wait = conveyed > TimeSpan.FromSeconds(1) ? conveyed - TimeSpan.FromMilliseconds(500) : conveyed;
+        var deadline = _timeProvider.GetUtcNow() + wait;
+
+        // NOTE: never disposed on purpose - the link's Closed handler below can outlive the
+        // parked waiter (e.g. the zombie watchdog closing the link minutes later), and
+        // Cancel() on a disposed CTS would blow up inside the link's close sequence.
+        var linkClosed = new CancellationTokenSource();
+        attachContext.Link.Closed += (_, _) => linkClosed.Cancel();
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!linkClosed.IsCancellationRequested)
+                {
+                    var sessionLock = await _store
+                        .TryAcceptNextSessionAsync(descriptor.Name, descriptor.LockDuration, linkName)
+                        .ConfigureAwait(false);
+                    if (sessionLock is not null)
+                    {
+                        try
+                        {
+                            // Parked completions get a zombie watchdog: the Azure SDK ABORTS
+                            // superseded pending accepts locally without any wire frame, so the
+                            // broker cannot tell this link is dead until it fails to start
+                            // pumping after the attach response.
+                            CompleteSessionAttach(attachContext, descriptor, sessionLock, linkName, watchdogForZombieClient: true);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Link died between the accept and the attach response - give the
+                            // session back so another receiver can take it.
+                            _logger.LogDebug(ex, "Parked session attach on {Entity} failed to complete - releasing {Session}.",
+                                descriptor.Name, sessionLock.SessionId);
+                            await _store.ReleaseSessionAsync(descriptor.Name, sessionLock.SessionId).ConfigureAwait(false);
+                        }
+                        return;
+                    }
+
+                    if (_timeProvider.GetUtcNow() >= deadline)
+                    {
+                        Reject(attachContext, "com.microsoft:timeout",
+                            $"No unlocked session is available on '{descriptor.Name}'.");
+                        return;
+                    }
+
+                    await Task.Delay(100, linkClosed.Token).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Client detached / connection dropped while parked - nothing to answer.
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Parked accept-next-session on {Entity} failed.", descriptor.Name);
+                try { Reject(attachContext, ErrorCode.InternalError, ex.Message); }
+                catch { /* link already gone */ }
+            }
+        });
+    }
+
+    /// <summary>Client operation timeout conveyed on the attach (link property
+    /// <c>com.microsoft:timeout</c>, milliseconds) - the Azure SDK sends it on every link open.</summary>
+    private static TimeSpan? ReadClientTimeout(Attach attach)
+    {
+        if (attach.Properties is { } properties &&
+            properties.TryGetValue(new Symbol("com.microsoft:timeout"), out var value) &&
+            value is not null)
+        {
+            try { return TimeSpan.FromMilliseconds(Convert.ToDouble(value)); }
+            catch { /* unexpected shape - fall back to the default below */ }
+        }
+        return null;
+    }
+
+    private void CompleteSessionAttach(
+        AttachContext attachContext,
+        QueueDescriptor descriptor,
+        SessionLock sessionLock,
+        string linkName,
+        bool watchdogForZombieClient = false)
+    {
         // Echo the resolved session id + lock deadline back to the client. The SDK reads both
         // from the attach response to populate ServiceBusSessionReceiver.SessionLockedUntil.
         SessionFilter.WriteAcceptedSessionFilter(attachContext.Attach, sessionLock.SessionId, sessionLock.LockedUntil);
@@ -285,6 +380,37 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         var endpoint = new SourceLinkEndpoint(source, attachContext.Link);
         attachContext.Complete(endpoint, 0);
         _logger.LogDebug("Wired session receiver attach to {Entity}/{Session}", descriptor.Name, sessionLock.SessionId);
+
+        if (watchdogForZombieClient)
+        {
+            // A live client that just accepted a session issues credit within milliseconds,
+            // which starts the receive pump. A client that ABORTED its pending accept (the
+            // Azure SDK does this locally, with no detach on the wire, whenever it recycles
+            // processor slots) never will - and it would hold the session lock hostage for
+            // the full lock duration. No pump activity within the grace period ⇒ close the
+            // link; the Closed handler above releases the session for a healthy waiter.
+            var link = attachContext.Link;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                if (source.PumpStarted || link.IsClosed) return;
+                _logger.LogInformation(
+                    "Parked session attach on {Entity}/{Session} never started pumping - closing the presumed-aborted link.",
+                    descriptor.Name, sessionLock.SessionId);
+                try
+                {
+                    link.Close(TimeSpan.Zero, new Error(new Symbol("com.microsoft:timeout"))
+                    {
+                        Description = "Session accept was not consumed by the client.",
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Closing presumed-aborted session link failed for {Entity}/{Session}.",
+                        descriptor.Name, sessionLock.SessionId);
+                }
+            });
+        }
     }
 
     private static void Reject(AttachContext attachContext, string code, string description)

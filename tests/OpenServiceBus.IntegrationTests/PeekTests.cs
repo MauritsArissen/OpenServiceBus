@@ -74,4 +74,41 @@ public class PeekTests
         // Assert
         msg.ShouldBeNull();
     }
+
+    [Fact]
+    public async Task PeekMessagesAsync_OnDeadLetterQueue_ExposesDeliveryCountAndDeadLetterReason()
+    {
+        // Regression: peeked messages carried no AMQP header, so reading
+        // ServiceBusReceivedMessage.DeliveryCount on a peeked message threw
+        // "Nullable object must have a value".
+
+        // Arrange
+        await using var harness = await IntegrationHarness.StartAsync();
+        await harness.Queues.CreateAsync(new QueueDescriptor { Name = "peek-dlq" });
+        await using var client = new ServiceBusClient(harness.ConnectionString);
+        await client.CreateSender("peek-dlq").SendMessageAsync(new ServiceBusMessage("poison") { MessageId = "p-1" });
+
+        var receiver = client.CreateReceiver("peek-dlq");
+        var fresh = await receiver.PeekMessageAsync();
+        fresh.ShouldNotBeNull();
+        fresh!.DeliveryCount.ShouldBe(0, "an undelivered message peeks with delivery count 0");
+
+        var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(5));
+        msg.ShouldNotBeNull();
+        await receiver.DeadLetterMessageAsync(msg!, "TestReason", "test description");
+
+        // Act
+        var dlqReceiver = client.CreateReceiver("peek-dlq", new ServiceBusReceiverOptions
+        {
+            SubQueue = SubQueue.DeadLetter,
+        });
+        var peeked = await dlqReceiver.PeekMessagesAsync(maxMessages: 10);
+
+        // Assert
+        peeked.Count.ShouldBe(1);
+        peeked[0].MessageId.ShouldBe("p-1");
+        peeked[0].DeliveryCount.ShouldBeGreaterThanOrEqualTo(1);
+        peeked[0].DeadLetterReason.ShouldBe("TestReason");
+        peeked[0].DeadLetterErrorDescription.ShouldBe("test description");
+    }
 }

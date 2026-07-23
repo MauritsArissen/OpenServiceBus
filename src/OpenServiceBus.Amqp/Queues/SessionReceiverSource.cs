@@ -44,6 +44,13 @@ public sealed class SessionReceiverSource : IMessageSource
     public string SessionId { get; }
     public string? LinkName { get; }
 
+    private volatile bool _pumpStarted;
+
+    /// <summary>True once the client has issued credit and the receive pump has run at
+    /// least once - the liveness signal EntityLinkProcessor's zombie watchdog checks for
+    /// parked accept-next-session completions.</summary>
+    public bool PumpStarted => _pumpStarted;
+
     public SessionReceiverSource(
         string entityName,
         QueueDescriptor descriptor,
@@ -69,6 +76,7 @@ public sealed class SessionReceiverSource : IMessageSource
 
     public async Task<ReceiveContext> GetMessageAsync(ListenerLink link)
     {
+        _pumpStarted = true;
         while (true)
         {
             // The SDK's session receiver calls DrainAsync after every receive (see decompiled
@@ -161,7 +169,7 @@ public sealed class SessionReceiverSource : IMessageSource
                     break;
                 case Rejected rejected:
                     var (reason, description) = ExtractDeadLetterInfo(rejected);
-                    DeadLetterAsync(lockToken, reason, description).GetAwaiter().GetResult();
+                    DeadLetterAsync(lockToken, reason, description, inFlightDelivery: true).GetAwaiter().GetResult();
                     break;
                 default:
                     _logger.LogWarning(
@@ -196,7 +204,7 @@ public sealed class SessionReceiverSource : IMessageSource
                 break;
             case Rejected rejected:
                 var (reason, description) = ExtractDeadLetterInfo(rejected);
-                await DeadLetterAsync(lockToken, reason, description).ConfigureAwait(false);
+                await DeadLetterAsync(lockToken, reason, description, inFlightDelivery: true).ConfigureAwait(false);
                 break;
             default:
                 await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
@@ -208,13 +216,13 @@ public sealed class SessionReceiverSource : IMessageSource
     {
         if (!_isDlq && _descriptor.DeadLetteringOnMessageExpiration)
         {
-            await DeadLetterAsync(lockToken, TtlExpiredReason, TtlExpiredDescription, cancellationToken).ConfigureAwait(false);
+            await DeadLetterAsync(lockToken, TtlExpiredReason, TtlExpiredDescription, cancellationToken: cancellationToken).ConfigureAwait(false);
             return;
         }
         await _store.TryRemoveLockedAsync(_entityName, lockToken, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task DeadLetterAsync(Guid lockToken, string? reason, string? description, CancellationToken cancellationToken = default)
+    private async Task DeadLetterAsync(Guid lockToken, string? reason, string? description, bool inFlightDelivery = false, CancellationToken cancellationToken = default)
     {
         if (_isDlq)
         {
@@ -228,7 +236,10 @@ public sealed class SessionReceiverSource : IMessageSource
         var dlqTarget = string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo)
             ? _entityName + EntityNames.DeadLetterSuffix
             : _descriptor.ForwardDeadLetteredMessagesTo!;
-        await _router.RouteAsync(dlqTarget, dlqBytes, expiresAt: null, cancellationToken: cancellationToken).ConfigureAwait(false);
+        // See QueueReceiverSource.DeadLetterAsync for the delivery-count semantics.
+        await _router.RouteAsync(dlqTarget, dlqBytes, expiresAt: null,
+            deliveryCount: removed.DeliveryCount + (inFlightDelivery ? 1 : 0),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     private static (string? Reason, string? Description) ExtractDeadLetterInfo(Rejected rejected)

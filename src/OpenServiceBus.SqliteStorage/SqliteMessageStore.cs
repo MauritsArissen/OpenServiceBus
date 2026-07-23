@@ -123,6 +123,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         string? sessionId = null,
         string? messageId = null,
         TimeSpan? duplicateDetectionWindow = null,
+        int deliveryCount = 0,
         CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -154,9 +155,10 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                         (queue_name, sequence_number, enqueued_at, encoded_message,
                          delivery_count, expires_at, scheduled_enqueue_time, is_deferred, session_id)
                     VALUES
-                        ($q, $seq, $enq, $body, 0, $exp, $sched, 0, $sid)
+                        ($q, $seq, $enq, $body, $dc, $exp, $sched, 0, $sid)
                     """;
                 cmd.Parameters.AddWithValue("$q", queueName);
+                cmd.Parameters.AddWithValue("$dc", deliveryCount);
                 cmd.Parameters.AddWithValue("$seq", seq);
                 cmd.Parameters.AddWithValue("$enq", ToUnixMs(now));
                 cmd.Parameters.AddWithValue("$body", encodedMessage);
@@ -191,6 +193,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                 ExpiresAt = expiresAt,
                 ScheduledEnqueueTime = effectiveSchedule,
                 SessionId = sessionId,
+                DeliveryCount = deliveryCount,
             };
 
             // Signal the dequeue waiter, only when the message would actually be visible -

@@ -39,12 +39,13 @@ public sealed class MessageRouter : IMessageRouter
         string? messageId = null,
         TimeSpan? duplicateDetectionWindow = null,
         MessageFilterContext? filterContext = null,
+        int deliveryCount = 0,
         CancellationToken cancellationToken = default)
     {
         var landed = new List<string>();
         await RouteInternalAsync(
             targetEntityName, encodedMessage, expiresAt, scheduledEnqueueTime,
-            sessionId, messageId, duplicateDetectionWindow, filterContext,
+            sessionId, messageId, duplicateDetectionWindow, filterContext, deliveryCount,
             depth: 0, landed, cancellationToken).ConfigureAwait(false);
         return landed;
     }
@@ -58,6 +59,7 @@ public sealed class MessageRouter : IMessageRouter
         string? messageId,
         TimeSpan? dedupWindow,
         MessageFilterContext? filterContext,
+        int deliveryCount,
         int depth,
         List<string> landed,
         CancellationToken cancellationToken)
@@ -96,14 +98,14 @@ public sealed class MessageRouter : IMessageRouter
                     {
                         // Subscription auto-forward: skip its backing queue, route to the forward target.
                         await RouteInternalAsync(sub.ForwardTo, encoded, expiresAt, scheduledFor,
-                            sessionId, messageId, dedupWindow, filterContext,
+                            sessionId, messageId, dedupWindow, filterContext, deliveryCount,
                             depth + 1, landed, cancellationToken).ConfigureAwait(false);
                     }
                     else
                     {
                         await _store.EnqueueAsync(
                             sub.BackingQueueName, encoded, expiresAt, scheduledFor,
-                            sessionId, messageId, dedupWindow, cancellationToken).ConfigureAwait(false);
+                            sessionId, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
                         landed.Add(sub.BackingQueueName);
                     }
                 }
@@ -122,14 +124,14 @@ public sealed class MessageRouter : IMessageRouter
         if (!string.IsNullOrEmpty(queue.ForwardTo))
         {
             await RouteInternalAsync(queue.ForwardTo, encoded, expiresAt, scheduledFor,
-                sessionId, messageId, dedupWindow, filterContext,
+                sessionId, messageId, dedupWindow, filterContext, deliveryCount,
                 depth + 1, landed, cancellationToken).ConfigureAwait(false);
             return;
         }
 
         await _store.EnqueueAsync(
             queue.Name, encoded, expiresAt, scheduledFor,
-            sessionId, messageId, dedupWindow, cancellationToken).ConfigureAwait(false);
+            sessionId, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
         landed.Add(queue.Name);
     }
 }

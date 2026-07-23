@@ -140,6 +140,124 @@ public class OrderTrigger
 //   }
 // }`,
   },
+  {
+    id: "sessions",
+    label: "Sessions & scheduling",
+    blurb:
+      "Session-enabled queues give you strict FIFO per key with concurrency across keys, and the broker holds scheduled messages until their due time. Accept-next-session parks server-side until a session appears - exactly like Azure.",
+    language: "csharp",
+    code: `using Azure.Messaging.ServiceBus;
+
+// SessionId is your partition key: strict FIFO per key, parallel across keys.
+var processor = client.CreateSessionProcessor("payments", new ServiceBusSessionProcessorOptions
+{
+    MaxConcurrentSessions = 4,
+    MaxConcurrentCallsPerSession = 1,
+});
+processor.ProcessMessageAsync += args =>
+{
+    // Messages for one account always arrive in order.
+    Console.WriteLine($"[session {args.SessionId}] {args.Message.Body}");
+    return Task.CompletedTask;
+};
+await processor.StartProcessingAsync();
+
+var sender = client.CreateSender("payments");
+
+// Ordered work for one account...
+await sender.SendMessageAsync(new ServiceBusMessage("rent")   { SessionId = "account-1" });
+await sender.SendMessageAsync(new ServiceBusMessage("energy") { SessionId = "account-1" });
+
+// ...and a standing order the BROKER holds until the due time -
+// it survives app restarts, unlike an in-process timer.
+await sender.ScheduleMessageAsync(
+    new ServiceBusMessage("monthly savings") { SessionId = "account-1" },
+    DateTimeOffset.UtcNow.AddDays(30));`,
+  },
+  {
+    id: "topics",
+    label: "Topics & SQL filters",
+    blurb:
+      "Publish once, let the broker fan out. Subscription rules run server-side, so each worker only ever receives what its SQL filter matches - shown here creating entities through the OpenServiceBus.Testing host.",
+    language: "csharp",
+    code: `using OpenServiceBus.Core.Entities;
+using OpenServiceBus.Core.Filters;
+
+await host.Topics.CreateTopicAsync(new TopicDescriptor { Name = "bank-events" });
+await host.Topics.CreateSubscriptionAsync(new SubscriptionDescriptor
+    { TopicName = "bank-events", Name = "fraud" });
+
+// Replace the auto-created match-all rule with a SQL filter (same trick as Azure:
+// a fresh subscription always starts with a $Default TrueFilter).
+await host.Topics.CreateOrReplaceRuleAsync(new RuleDescriptor
+{
+    TopicName = "bank-events",
+    SubscriptionName = "fraud",
+    Name = "$Default",
+    Filter = new SqlFilter("amount >= 10000"),
+});
+
+// Publish with application properties the filter can see.
+var evt = new ServiceBusMessage("transfer.completed");
+evt.ApplicationProperties["amount"] = 25_000d;
+await client.CreateSender("bank-events").SendMessageAsync(evt);
+
+// Only matching events ever reach this receiver - the broker filtered for you.
+var fraud = client.CreateReceiver("bank-events", "fraud");
+var alert = await fraud.ReceiveMessageAsync(TimeSpan.FromSeconds(2));`,
+  },
+  {
+    id: "timetravel",
+    label: "Time travel",
+    blurb:
+      "The entire broker runs on an injected TimeProvider. Hand it a FakeTimeProvider and scheduled messages, TTL, lock expiry, and dedup windows become instant, deterministic tests - no Task.Delay anywhere.",
+    language: "csharp",
+    code: `using Azure.Messaging.ServiceBus;
+using Microsoft.Extensions.Time.Testing;
+using OpenServiceBus.Testing;
+
+var clock = new FakeTimeProvider();
+await using var host = await OpenServiceBusTestHost.StartAsync(o => o.TimeProvider = clock);
+await host.CreateQueueAsync("standing-orders");
+
+await using var client = new ServiceBusClient(host.ConnectionString);
+
+// Schedule a payment a month out.
+await client.CreateSender("standing-orders").ScheduleMessageAsync(
+    new ServiceBusMessage("monthly rent"),
+    clock.GetUtcNow().AddDays(30));
+
+// A month passes in a microsecond.
+clock.Advance(TimeSpan.FromDays(31));
+
+var receiver = client.CreateReceiver("standing-orders");
+var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2));
+// msg.Body == "monthly rent" - the whole test runs in milliseconds.`,
+  },
+  {
+    id: "novabank",
+    label: "Full app: NovaBank",
+    blurb:
+      "A complete event-driven banking API - made entirely as an example. Duplicate-detected transfers, session payments, scheduled standing orders, SQL-filtered fraud/audit/notification fan-out, DLQ inspection, Swagger UI, and 79 tests that run the real app on the embedded broker in seconds.",
+    language: "bash",
+    code: `# samples/NovaBank - a full event-driven bank, built 100% against
+# Azure.Messaging.ServiceBus. Only the connection string decides whether
+# it talks to Azure or to OpenServiceBus.
+#
+#   - async transfers on a duplicate-detected queue (Idempotency-Key = MessageId)
+#   - session payments: per-account FIFO + broker-held standing orders
+#   - topic fan-out with SQL filters: audit / fraud (amount >= 10000) / notifications
+#   - automatic account freeze, dead-letter inspection API, Swagger UI
+#   - 79 tests: the real API + embedded broker, ~3 seconds, no Docker
+
+git clone https://github.com/mauritsarissen/OpenServiceBus
+cd OpenServiceBus/samples/NovaBank
+
+docker compose up -d --build                                  # broker + Explorer UI
+dotnet run --project src/NovaBank.Api --launch-profile Local  # Swagger at :5080
+
+dotnet test                                                   # the whole bank, embedded`,
+  },
 ];
 
 export default function Examples() {

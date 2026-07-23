@@ -66,4 +66,39 @@ public class ScheduledMessagesTests
         (await harness.Store.CountAsync("cancel-sched")).ShouldBe(0L);
         nothing.ShouldBeNull("cancelled scheduled message must never be delivered");
     }
+
+    [Fact]
+    public async Task ScheduleMessageAsync_OnSessionQueue_ActivatesIntoTheSessionChannel()
+    {
+        // Regression: ActivateScheduled used to push session-bound messages onto the
+        // sessionless Available channel, so a session receiver never saw them.
+
+        // Arrange
+        await using var harness = await IntegrationHarness.StartAsync();
+        await harness.Queues.CreateAsync(new QueueDescriptor { Name = "sched-sessions", RequiresSession = true });
+        await using var client = new ServiceBusClient(harness.ConnectionString);
+        var sender = client.CreateSender("sched-sessions");
+
+        // Act
+        await sender.ScheduleMessageAsync(
+            new ServiceBusMessage("standing-order") { MessageId = "sched-s1", SessionId = "acc-1" },
+            DateTimeOffset.UtcNow.AddSeconds(2));
+
+        var session = await client.AcceptSessionAsync("sched-sessions", "acc-1");
+        var early = await session.ReceiveMessageAsync(TimeSpan.FromMilliseconds(300));
+
+        ServiceBusReceivedMessage? activated = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline && activated is null)
+        {
+            activated = await session.ReceiveMessageAsync(TimeSpan.FromMilliseconds(500));
+        }
+
+        // Assert
+        early.ShouldBeNull("scheduled message should not be visible before its time");
+        activated.ShouldNotBeNull("scheduled session message must reach the session receiver after activation");
+        activated!.MessageId.ShouldBe("sched-s1");
+        activated.SessionId.ShouldBe("acc-1");
+        await session.CompleteMessageAsync(activated);
+    }
 }

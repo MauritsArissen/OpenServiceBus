@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "Local": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "launchUrl": "swagger",
+      "applicationUrl": "http://localhost:5080",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Local",
+        "DOTNET_ENVIRONMENT": "Local"
+      }
+    },
+    "Azure": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "launchUrl": "swagger",
+      "applicationUrl": "http://localhost:5080",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Azure",
+        "DOTNET_ENVIRONMENT": "Azure"
+      }
+    }
+  }
+}

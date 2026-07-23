@@ -1,0 +1,67 @@
+{
+  "UserConfig": {
+    "Namespaces": [
+      {
+        "Name": "novabank",
+        "Queues": [
+          {
+            "Name": "nova-transfers",
+            "Properties": {
+              "LockDuration": "PT30S",
+              "MaxDeliveryCount": 3,
+              "RequiresDuplicateDetection": true,
+              "DuplicateDetectionHistoryTimeWindow": "PT10M"
+            }
+          },
+          {
+            "Name": "nova-payments",
+            "Properties": {
+              "LockDuration": "PT30S",
+              "MaxDeliveryCount": 5,
+              "RequiresSession": true
+            }
+          }
+        ],
+        "Topics": [
+          {
+            "Name": "nova-events",
+            "Subscriptions": [
+              {
+                "Name": "audit",
+                "Properties": { "MaxDeliveryCount": 10 }
+              },
+              {
+                "Name": "fraud",
+                "Properties": { "MaxDeliveryCount": 10 },
+                "Rules": [
+                  {
+                    "Name": "$Default",
+                    "Properties": {
+                      "FilterType": "Sql",
+                      "SqlFilter": { "SqlExpression": "amount >= 10000" }
+                    }
+                  }
+                ]
+              },
+              {
+                "Name": "notifications",
+                "Properties": { "MaxDeliveryCount": 10 },
+                "Rules": [
+                  {
+                    "Name": "$Default",
+                    "Properties": {
+                      "FilterType": "Sql",
+                      "SqlFilter": {
+                        "SqlExpression": "eventType IN ('transfer.completed', 'transfer.failed', 'account.frozen', 'payment.executed', 'payment.failed')"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

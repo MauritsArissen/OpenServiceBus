@@ -11,7 +11,12 @@
     <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.18.2" />
 
     <!-- Persistence (M18) -->
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="9.0.18" />
+    <!-- Transitive pin: every Microsoft.Data.Sqlite 9.0.x still ships SQLitePCLRaw 2.1.10,
+         whose lib.e_sqlite3 has a known high-severity CVE (GHSA-2m69-gcr7-jv3q) that fails
+         clean restores via NU1903 + warnings-as-errors. 2.1.12 is the patched 2.1.x line. -->
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
 
     <!-- Microsoft.Extensions.* -->
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="9.0.0" />

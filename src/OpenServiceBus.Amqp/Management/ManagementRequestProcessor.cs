@@ -258,7 +258,16 @@ public sealed class ManagementRequestProcessor : IRequestProcessor
             var amqp = DecodeMessage(encoded);
             var scheduledTime = ReadScheduledEnqueueTime(amqp) ?? _timeProvider.GetUtcNow();
             var expiresAt = ComputeExpiresAt(amqp);
-            var sessionId = amqp.Properties?.GroupId;
+            // Mirror the send path: only honor the session id on session-enabled entities
+            // (a GroupId on a plain queue would strand the activated message in a session
+            // channel no receiver reads), and reject session-less schedules on session
+            // queues the same way Azure does.
+            var sessionId = _descriptor.RequiresSession ? amqp.Properties?.GroupId : null;
+            if (_descriptor.RequiresSession && string.IsNullOrEmpty(sessionId))
+            {
+                return BuildResponse(request, 400,
+                    $"BadRequest: A SessionId is required for messages scheduled on session-enabled entity '{_entityName}'.");
+            }
 
             var stored = _store.EnqueueAsync(_entityName, encoded, expiresAt, scheduledTime, sessionId).GetAwaiter().GetResult();
             sequenceNumbers[i] = stored.SequenceNumber;
@@ -299,6 +308,10 @@ public sealed class ManagementRequestProcessor : IRequestProcessor
         {
             var amqp = DecodeMessage(stored.EncodedMessage);
             // Stamp the same broker-authoritative fields a normal delivery would carry.
+            // The header matters too: ServiceBusReceivedMessage.DeliveryCount does
+            // Header.DeliveryCount.Value and throws on a peeked message without it.
+            amqp.Header ??= new Header();
+            amqp.Header.DeliveryCount = (uint)stored.DeliveryCount;
             amqp.MessageAnnotations ??= new MessageAnnotations();
             amqp.MessageAnnotations.Map[SequenceNumberSymbol] = stored.SequenceNumber;
             amqp.MessageAnnotations.Map[EnqueuedTimeUtcSymbol] = stored.EnqueuedAt.UtcDateTime;
@@ -451,7 +464,9 @@ public sealed class ManagementRequestProcessor : IRequestProcessor
         var dlqTarget = string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo)
             ? _entityName + EntityNames.DeadLetterSuffix
             : _descriptor.ForwardDeadLetteredMessagesTo!;
-        await _router.RouteAsync(dlqTarget, dlqBytes).ConfigureAwait(false);
+        // Management-plane dead-letter always settles a delivery the client is holding
+        // (receive-by-sequence / deferred), so that delivery counts toward the history.
+        await _router.RouteAsync(dlqTarget, dlqBytes, deliveryCount: removed.DeliveryCount + 1).ConfigureAwait(false);
     }
 
     private Message HandleAddRule(Message request)

@@ -50,6 +50,7 @@ public interface IMessageStore
         string? sessionId = null,
         string? messageId = null,
         TimeSpan? duplicateDetectionWindow = null,
+        int deliveryCount = 0,
         CancellationToken cancellationToken = default);
 
     /// <summary>

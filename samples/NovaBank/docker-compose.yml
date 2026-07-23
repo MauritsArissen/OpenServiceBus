@@ -1,0 +1,32 @@
+# Local NovaBank infrastructure: one OpenServiceBus container, bootstrapped with the
+# exact queues / topic / subscriptions / filter rules the app expects.
+#
+#   docker compose up -d
+#   dotnet run --project src/NovaBank.Api --launch-profile Local
+#
+# Explorer UI:    http://localhost:5400   (watch the queues while you click around Swagger)
+# Management API: http://localhost:5300/health
+services:
+  openservicebus:
+    # Built from the repo checkout (two directories up), so the container includes fixes
+    # that are not yet in the published image (scheduled messages on session queues, DLQ
+    # peek headers, session-accept parking, DLQ delivery-count retention, session guards).
+    # Once those ship in a release you can swap back to mauritsarissen/openservicebus:latest.
+    build: ../..
+    image: openservicebus:novabank-dev
+    container_name: novabank-servicebus
+    ports:
+      - "5672:5672"   # AMQP - the Azure SDK connects here
+      - "5300:5300"   # REST management + /health
+      - "5400:5400"   # Explorer browser UI
+    environment:
+      OPENSERVICEBUS__STORAGE__MODE: Sqlite
+      OPENSERVICEBUS__STORAGE__DATASOURCE: /data/broker.db
+      OPENSERVICEBUS_CONFIG: /etc/openservicebus/config.json
+    volumes:
+      - novabank-bus-data:/data
+      - ./servicebus-config.json:/etc/openservicebus/config.json:ro
+    restart: unless-stopped
+
+volumes:
+  novabank-bus-data:
