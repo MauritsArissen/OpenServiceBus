@@ -27,16 +27,31 @@ to `/opt/openservicebus-demo/` on the VPS, and runs `docker compose pull && up -
 
 ## One-time VPS setup (manual)
 
-1. **DNS**: add an A record `demo.openservicebus.net` → the VPS IP.
-2. **Docker**: ensure Docker + the compose plugin are installed on the VPS.
-3. **Reverse proxy** ([`nginx-demo.conf`](nginx-demo.conf)):
+The VPS already has everything installed (Docker + compose plugin, nginx, and certbot with
+its auto-renew timer active — the same stack that serves openservicebus.net). Only these
+one-time steps remain; after them everything stays current automatically.
+
+1. **DNS** (Cloudflare): a proxied record `demo.openservicebus.net` → the VPS origin IP
+   (`194.164.48.64`). Set the zone's SSL/TLS mode to **Full (strict)** so Cloudflare talks
+   to the origin over the Let's Encrypt cert issued below.
+2. **First deploy**: merge the PR, cut a release (so `openservicebus:latest` includes demo
+   mode), which triggers the **Deploy demo** workflow → it rsyncs this folder to
+   `/opt/openservicebus-demo/` and runs `docker compose up -d`. The containers are now live
+   on `127.0.0.1:5400`.
+3. **Reverse proxy + TLS** ([`nginx-demo.conf`](nginx-demo.conf)) on the VPS:
    ```bash
    sudo cp /opt/openservicebus-demo/nginx-demo.conf /etc/nginx/sites-available/demo.openservicebus.net
    sudo ln -s /etc/nginx/sites-available/demo.openservicebus.net /etc/nginx/sites-enabled/
-   sudo certbot --nginx -d demo.openservicebus.net   # TLS
    sudo nginx -t && sudo systemctl reload nginx
+   sudo certbot --nginx -d demo.openservicebus.net   # adds the 443 block; auto-renews after
    ```
-4. First deploy: trigger the **Deploy demo** workflow (or push a change here).
+   **Cloudflare + certbot note:** the HTTP-01 challenge must reach the origin. If certbot
+   fails while the record is proxied, temporarily set it to **DNS only** (grey cloud) in
+   Cloudflare, run certbot, then switch it back to **Proxied** (orange). certbot's systemd
+   timer (already active) renews the cert from then on.
+
+After this, nothing else is manual: every release redeploys the containers (`demo-deploy`),
+certbot renews TLS, and the nginx vhost + DNS are permanent.
 
 Required repo secrets (already present for the website/release workflows): `DOCKERHUB_USERNAME`,
 `DOCKERHUB_TOKEN`, `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`.
