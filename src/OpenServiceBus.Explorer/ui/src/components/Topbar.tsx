@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { displayName } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { LS_THEME, useStore } from "@/store";
+import { BrandMark } from "./BrandMark";
 import { KIND_ICON } from "./kind";
 
 const STATUS_META = {
@@ -28,9 +29,7 @@ export function Topbar() {
   return (
     <header className="flex items-center gap-3 border-b bg-background px-4" style={{ gridArea: "topbar" }}>
       <div className="flex items-center gap-2.5 font-semibold">
-        <span className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-[13px] text-white shadow-sm">
-          ◆
-        </span>
+        <BrandMark className="size-7" />
         <span className="tracking-tight">OpenServiceBus</span>
       </div>
       {selected && KindIcon && (
