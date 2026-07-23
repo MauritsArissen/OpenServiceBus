@@ -177,7 +177,36 @@ public sealed class ManagementRequestProcessor : IRequestProcessor
             response = BuildResponse(request, statusCode: 500, statusDescription: "InternalError: " + ex.Message);
         }
 
-        requestContext.Complete(response);
+        try
+        {
+            requestContext.Complete(response);
+        }
+        catch (InvalidCastException)
+        {
+            // AMQPNetLite's Complete re-derives the correlation id via the string-typed
+            // Properties.MessageId getter, which throws for spec-legal non-string
+            // message-ids (proton-j / the Java SDK sends ulong). BuildResponse already
+            // stamped the correct correlation id - send the response directly instead.
+            try
+            {
+                requestContext.ResponseLink.SendMessage(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Could not deliver $management response directly for {Op} on {Entity} (reply-to '{ReplyTo}').",
+                    operation, _entityName, request.Properties?.ReplyTo ?? "(null)");
+            }
+        }
+        catch (Exception ex)
+        {
+            // Complete also throws when the client's reply link is gone or was never
+            // registered. Degrade to a logged drop instead of an unhandled exception
+            // in the AMQP pump.
+            _logger.LogWarning(ex,
+                "Could not deliver $management response for {Op} on {Entity} (reply-to '{ReplyTo}').",
+                operation, _entityName, request.Properties?.ReplyTo ?? "(null)");
+        }
     }
 
     private Message HandleRenewLock(Message request)

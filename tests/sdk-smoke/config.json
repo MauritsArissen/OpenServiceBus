@@ -1,0 +1,26 @@
+{
+  "UserConfig": {
+    "Namespaces": [
+      {
+        "Name": "sdk-smoke",
+        "Queues": [
+          {
+            "Name": "smoke-queue",
+            "Properties": {
+              "LockDuration": "PT30S",
+              "MaxDeliveryCount": 5
+            }
+          },
+          {
+            "Name": "smoke-sessions",
+            "Properties": {
+              "LockDuration": "PT30S",
+              "MaxDeliveryCount": 5,
+              "RequiresSession": true
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

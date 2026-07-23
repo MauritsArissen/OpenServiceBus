@@ -42,6 +42,7 @@ public sealed class CbsRequestProcessor : IRequestProcessor
     public void Process(RequestContext requestContext)
     {
         var request = requestContext.Message;
+        Message response;
 
         if (_options.RequireSasAuth)
         {
@@ -50,13 +51,56 @@ public sealed class CbsRequestProcessor : IRequestProcessor
             if (!result.IsValid)
             {
                 _logger?.LogWarning("Rejected $cbs put-token: {Reason}", result.FailureReason);
-                requestContext.Complete(BuildResponse(request, 401, "Unauthorized: " + result.FailureReason));
+                response = BuildResponse(request, 401, "Unauthorized: " + result.FailureReason);
+                CompleteSafely(requestContext, response);
                 return;
             }
             _logger?.LogDebug("Accepted $cbs put-token for audience {Audience} (keyName={Key})", result.Audience, result.KeyName);
         }
 
-        requestContext.Complete(BuildResponse(request, 202, "Accepted"));
+        response = BuildResponse(request, 202, "Accepted");
+        CompleteSafely(requestContext, response);
+    }
+
+    /// <summary>
+    /// RequestContext.Complete has two known failure modes with real SDKs:
+    /// (1) it re-derives the correlation id via the string-typed <c>Properties.MessageId</c>
+    /// getter, which throws InvalidCastException for spec-legal non-string message-ids -
+    /// proton-j (the Java SDK) sends CBS message-ids as AMQP ulong; and
+    /// (2) it NREs when the client's reply link is gone or was never registered.
+    /// The response already carries the correct correlation id (stamped via the object-typed
+    /// accessors in BuildResponse), so on (1) we send it directly on the reply link; on (2)
+    /// we degrade to a logged drop instead of an unhandled exception in the AMQP pump.
+    /// </summary>
+    private void CompleteSafely(RequestContext requestContext, Message response)
+    {
+        try
+        {
+            requestContext.Complete(response);
+            return;
+        }
+        catch (InvalidCastException)
+        {
+            // Non-string message-id (proton-j) - fall through to the direct send below.
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex,
+                "Could not deliver $cbs response (reply-to '{ReplyTo}') - no matching reply link.",
+                requestContext.Message.Properties?.ReplyTo ?? "(null)");
+            return;
+        }
+
+        try
+        {
+            requestContext.ResponseLink.SendMessage(response);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex,
+                "Could not deliver $cbs response directly (reply-to '{ReplyTo}').",
+                requestContext.Message.Properties?.ReplyTo ?? "(null)");
+        }
     }
 
     private static Message BuildResponse(Message request, int statusCode, string statusDescription)

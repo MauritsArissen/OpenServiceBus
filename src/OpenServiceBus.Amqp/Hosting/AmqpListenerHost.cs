@@ -1,4 +1,5 @@
 using Amqp;
+using Amqp.Framing;
 using Amqp.Listener;
 using Amqp.Transactions;
 using Microsoft.Extensions.Hosting;
@@ -80,7 +81,33 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
         // and the framework's default address lookup would throw on the (Target)attach.Target
         // cast. The AddressResolver hook lets us redirect those attaches to a synthetic
         // "$coordinator" address where our IMessageProcessor lives.
-        host.AddressResolver = (_, attach) => attach.Target is Coordinator ? CoordinatorProcessor.Address : null;
+        host.AddressResolver = (_, attach) =>
+        {
+            if (attach.Target is Coordinator)
+            {
+                return CoordinatorProcessor.Address;
+            }
+
+            // rhea-based SDKs (Node.js @azure/service-bus, Python) attach the reply link of a
+            // request/response pair ($cbs, <entity>/$management) with an EMPTY target address.
+            // AMQPNetLite's ContainerHost.RequestProcessor.AddLink keys reply links by that
+            // address and throws ArgumentNullException on null - the link detaches with
+            // amqp:internal-error and CBS auth (and with it every operation) times out.
+            // Real Azure accepts the empty address and routes replies by link. Those SDKs set
+            // the request's reply-to equal to the reply link's NAME, so injecting the link name
+            // as the missing address makes AMQPNetLite's address-keyed reply routing line up.
+            // (GitHub issue #1.)
+            if (attach.Role
+                && attach.Source is Source requestNode
+                && IsRequestResponseNode(requestNode.Address)
+                && attach.Target is Target replyTarget
+                && string.IsNullOrEmpty(replyTarget.Address))
+            {
+                replyTarget.Address = attach.LinkName;
+            }
+
+            return null; // fall through to the default source/target address resolution
+        };
         host.RegisterMessageProcessor(CoordinatorProcessor.Address,
             new CoordinatorProcessor(_transactions, _loggerFactory.CreateLogger<CoordinatorProcessor>()));
 
@@ -236,4 +263,14 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
 
     private static bool IsSubscriptionBackingQueue(string queueName) =>
         queueName.Contains("/Subscriptions/", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when the address names one of the request/response nodes served by an
+    /// AMQPNetLite request processor: <c>$cbs</c> or any <c>…/$management</c> endpoint.</summary>
+    private static bool IsRequestResponseNode(string? address)
+    {
+        if (string.IsNullOrEmpty(address)) return false;
+        var normalized = address[0] == '/' ? address[1..] : address;
+        return normalized.Equals("$cbs", StringComparison.OrdinalIgnoreCase)
+            || normalized.EndsWith("/$management", StringComparison.OrdinalIgnoreCase);
+    }
 }
