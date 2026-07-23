@@ -51,7 +51,10 @@ jobs:
         run: npm install -g azure-functions-core-tools@4 --unsafe-perm true
       - run: dotnet restore
       - run: dotnet build --no-restore --configuration Release
-      - run: dotnet test  --no-build --configuration Release --verbosity normal
+      - name: Test (everything except the Functions integration test)
+        run: dotnet test --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName!~AzureFunctions"
+      - name: Test (Azure Functions integration, isolated)
+        run: dotnet test tests/OpenServiceBus.AzureFunctions.IntegrationTests --no-build --configuration Release --verbosity normal
 
   smoke:
     name: SDK smoke
