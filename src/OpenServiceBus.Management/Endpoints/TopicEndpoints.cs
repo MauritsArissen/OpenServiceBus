@@ -39,6 +39,21 @@ public static class TopicEndpoints
                 Name = name,
                 DefaultMessageTimeToLive = body?.DefaultMessageTimeToLive,
             };
+            // Idempotent re-declaration is fine; an attempt to change settings on an existing
+            // topic is rejected rather than silently ignored (create is GetOrAdd - it returns the
+            // existing descriptor unchanged).
+            var existing = await topics.GetTopicAsync(name, ct);
+            if (existing is not null)
+            {
+                if (existing.DefaultMessageTimeToLive != descriptor.DefaultMessageTimeToLive)
+                {
+                    return Results.Conflict(new
+                    {
+                        error = $"Topic '{name}' already exists and its properties cannot be updated after creation.",
+                    });
+                }
+                return Results.Ok(TopicResponse.From(existing));
+            }
             var created = await topics.CreateTopicAsync(descriptor, ct);
             return Results.Ok(TopicResponse.From(created));
         });
@@ -85,6 +100,20 @@ public static class TopicEndpoints
                 ForwardTo = b.ForwardTo,
                 ForwardDeadLetteredMessagesTo = b.ForwardDeadLetteredMessagesTo,
             };
+            // Same create-vs-update honesty as queues: re-declaring identical settings is a 200,
+            // trying to change them on an existing subscription is a 409 instead of a silent no-op.
+            var existingSub = await topics.GetSubscriptionAsync(topic, name, ct);
+            if (existingSub is not null)
+            {
+                if (!SubscriptionMatchesRequest(existingSub, descriptor))
+                {
+                    return Results.Conflict(new
+                    {
+                        error = $"Subscription '{topic}/{name}' already exists and its properties cannot be updated after creation.",
+                    });
+                }
+                return Results.Ok(SubscriptionResponse.From(existingSub));
+            }
             try
             {
                 var created = await topics.CreateSubscriptionAsync(descriptor, ct);
@@ -146,6 +175,16 @@ public static class TopicEndpoints
 
         return endpoints;
     }
+
+    // Distinguishes an idempotent subscription re-declaration from an attempted settings update.
+    private static bool SubscriptionMatchesRequest(SubscriptionDescriptor existing, SubscriptionDescriptor requested) =>
+        existing.MaxDeliveryCount == requested.MaxDeliveryCount
+        && existing.LockDuration == requested.LockDuration
+        && existing.DeadLetteringOnMessageExpiration == requested.DeadLetteringOnMessageExpiration
+        && existing.DefaultMessageTimeToLive == requested.DefaultMessageTimeToLive
+        && existing.RequiresSession == requested.RequiresSession
+        && string.Equals(existing.ForwardTo, requested.ForwardTo, StringComparison.Ordinal)
+        && string.Equals(existing.ForwardDeadLetteredMessagesTo, requested.ForwardDeadLetteredMessagesTo, StringComparison.Ordinal);
 }
 
 public sealed record CreateTopicRequest

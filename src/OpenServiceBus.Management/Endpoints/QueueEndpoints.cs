@@ -43,6 +43,25 @@ public static class QueueEndpoints
         group.MapPut("/{name}", async (string name, CreateQueueRequest? body, IQueueRegistry registry, CancellationToken ct) =>
         {
             var descriptor = (body ?? new CreateQueueRequest()).ToDescriptor(name);
+
+            // CreateAsync is idempotent (GetOrAdd) and returns the EXISTING descriptor unchanged,
+            // so a PUT that tries to change settings would otherwise get a 200 while nothing was
+            // updated. Detect that: re-declaring identical settings is fine (200); asking to change
+            // them is rejected with 409 rather than silently ignored (the registry has no update
+            // path, and several Service Bus queue properties are immutable after creation anyway).
+            var existing = await registry.GetAsync(name, ct);
+            if (existing is not null)
+            {
+                if (!DescriptorMatchesRequest(existing, descriptor))
+                {
+                    return Results.Conflict(new
+                    {
+                        error = $"Queue '{name}' already exists and its properties cannot be updated after creation. Delete and recreate it to change settings.",
+                    });
+                }
+                return Results.Ok(QueueResponse.From(existing));
+            }
+
             try
             {
                 var created = await registry.CreateAsync(descriptor, ct);
@@ -62,6 +81,19 @@ public static class QueueEndpoints
 
         return endpoints;
     }
+
+    // Compares the settings a PUT is asking for against an existing queue. Used to tell an
+    // idempotent re-declaration (allowed) from an attempted update (rejected).
+    private static bool DescriptorMatchesRequest(QueueDescriptor existing, QueueDescriptor requested) =>
+        existing.MaxDeliveryCount == requested.MaxDeliveryCount
+        && existing.LockDuration == requested.LockDuration
+        && existing.DeadLetteringOnMessageExpiration == requested.DeadLetteringOnMessageExpiration
+        && existing.DefaultMessageTimeToLive == requested.DefaultMessageTimeToLive
+        && existing.RequiresSession == requested.RequiresSession
+        && existing.RequiresDuplicateDetection == requested.RequiresDuplicateDetection
+        && existing.DuplicateDetectionHistoryTimeWindow == requested.DuplicateDetectionHistoryTimeWindow
+        && string.Equals(existing.ForwardTo, requested.ForwardTo, StringComparison.Ordinal)
+        && string.Equals(existing.ForwardDeadLetteredMessagesTo, requested.ForwardDeadLetteredMessagesTo, StringComparison.Ordinal);
 }
 
 public sealed record CreateQueueRequest

@@ -3,12 +3,21 @@ namespace OpenServiceBus.Core.Filters.Sql;
 internal abstract class SqlExpressionNode
 {
     public abstract object? Evaluate(MessageFilterContext message);
+
+    /// <summary>
+    /// True when this node produces a boolean result and can therefore stand as the top level
+    /// of a filter. Service Bus rejects a filter whose expression is not boolean (e.g. a bare
+    /// property or a number) at rule-creation time; we use this to do the same instead of
+    /// throwing on every message during evaluation.
+    /// </summary>
+    public virtual bool ProducesBoolean => false;
 }
 
 internal sealed class SqlLiteralNode(object? value) : SqlExpressionNode
 {
     private readonly object? _value = value;
     public override object? Evaluate(MessageFilterContext message) => _value;
+    public override bool ProducesBoolean => _value is bool;
 }
 
 internal sealed class SqlPropertyRefNode(string source, string name) : SqlExpressionNode
@@ -28,18 +37,21 @@ internal sealed class SqlPropertyRefNode(string source, string name) : SqlExpres
 
 internal sealed class SqlAndNode(SqlExpressionNode left, SqlExpressionNode right) : SqlExpressionNode
 {
+    public override bool ProducesBoolean => true;
     public override object? Evaluate(MessageFilterContext message) =>
         SqlEvaluator.LogicalAnd(left.Evaluate(message), right.Evaluate(message));
 }
 
 internal sealed class SqlOrNode(SqlExpressionNode left, SqlExpressionNode right) : SqlExpressionNode
 {
+    public override bool ProducesBoolean => true;
     public override object? Evaluate(MessageFilterContext message) =>
         SqlEvaluator.LogicalOr(left.Evaluate(message), right.Evaluate(message));
 }
 
 internal sealed class SqlNotNode(SqlExpressionNode operand) : SqlExpressionNode
 {
+    public override bool ProducesBoolean => true;
     public override object? Evaluate(MessageFilterContext message) =>
         SqlEvaluator.LogicalNot(operand.Evaluate(message));
 }
@@ -48,6 +60,7 @@ internal enum SqlComparisonOp { Eq, NotEq, Lt, LtEq, Gt, GtEq }
 
 internal sealed class SqlComparisonNode(SqlComparisonOp op, SqlExpressionNode left, SqlExpressionNode right) : SqlExpressionNode
 {
+    public override bool ProducesBoolean => true;
     public override object? Evaluate(MessageFilterContext message)
     {
         var l = left.Evaluate(message);
@@ -67,6 +80,7 @@ internal sealed class SqlComparisonNode(SqlComparisonOp op, SqlExpressionNode le
 
 internal sealed class SqlIsNullNode(SqlExpressionNode operand, bool negate) : SqlExpressionNode
 {
+    public override bool ProducesBoolean => true;
     public override object? Evaluate(MessageFilterContext message)
     {
         var v = operand.Evaluate(message);
@@ -76,6 +90,7 @@ internal sealed class SqlIsNullNode(SqlExpressionNode operand, bool negate) : Sq
 
 internal sealed class SqlLikeNode(SqlExpressionNode operand, string pattern, bool negate) : SqlExpressionNode
 {
+    public override bool ProducesBoolean => true;
     public override object? Evaluate(MessageFilterContext message)
     {
         var matched = SqlEvaluator.MatchLike(operand.Evaluate(message), pattern);
@@ -86,6 +101,7 @@ internal sealed class SqlLikeNode(SqlExpressionNode operand, string pattern, boo
 
 internal sealed class SqlInNode(SqlExpressionNode operand, IReadOnlyList<SqlExpressionNode> values, bool negate) : SqlExpressionNode
 {
+    public override bool ProducesBoolean => true;
     public override object? Evaluate(MessageFilterContext message)
     {
         var v = operand.Evaluate(message);
@@ -99,6 +115,7 @@ internal sealed class SqlInNode(SqlExpressionNode operand, IReadOnlyList<SqlExpr
 
 internal sealed class SqlExistsNode(string source, string name, bool negate) : SqlExpressionNode
 {
+    public override bool ProducesBoolean => true;
     public override object? Evaluate(MessageFilterContext message)
     {
         // EXISTS is true iff the property is *defined* on the message (not just truthy/non-null).
