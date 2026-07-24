@@ -1,10 +1,13 @@
 import {
-  ClockIcon, InboxIcon, LayersIcon, LockIcon, RepeatIcon, SkullIcon, WaypointsIcon,
+  ClockIcon, InboxIcon, LayersIcon, LockIcon, RepeatIcon, SkullIcon, Trash2Icon, WaypointsIcon,
   type LucideIcon,
 } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { explorerApi } from "@/lib/api";
 import { humanTime, type Selected } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { dlqAddress, entityAddress, useStore } from "@/store";
@@ -47,6 +50,39 @@ export function EntityView() {
   const subs = sel.kind === "topic" ? store.subsByTopic[sel.name] ?? [] : [];
   const KindIcon = KIND_ICON[sel.kind];
 
+  // Delete the selected entity from its own card - an explicit, always-visible button that
+  // works on touch (the sidebar's hover-only trash icon was invisible on phones and easy to
+  // tap by accident). The confirm dialog guards the destructive action.
+  const handleDelete = () => {
+    const confirm = (title: string, description: string, action: () => Promise<void>) =>
+      store.setDialog({ type: "confirm", title, description, destructive: true, action });
+
+    if (sel.kind === "queue") {
+      confirm(`Delete queue '${sel.name}'?`, "The queue, its dead-letter queue, and all messages are removed.", async () => {
+        await explorerApi.deleteQueue(store.mgmt, sel.name);
+        store.clearEntityLocal(sel.name);
+        store.select(null);
+        toast.success(`Deleted queue '${sel.name}'`);
+        await store.refresh();
+      });
+    } else if (sel.kind === "topic") {
+      confirm(`Delete topic '${sel.name}'?`, "The topic and ALL its subscriptions are removed.", async () => {
+        await explorerApi.deleteTopic(store.mgmt, sel.name);
+        store.select(null);
+        toast.success(`Deleted topic '${sel.name}'`);
+        await store.refresh();
+      });
+    } else {
+      confirm(`Delete subscription '${sel.name}/${sel.sub}'?`, "The subscription and its messages are removed.", async () => {
+        await explorerApi.deleteSubscription(store.mgmt, sel.name, sel.sub!);
+        store.clearEntityLocal(`${sel.name}/Subscriptions/${sel.sub}`);
+        store.select(null);
+        toast.success(`Deleted subscription '${sel.name}/${sel.sub}'`);
+        await store.refresh();
+      });
+    }
+  };
+
   return (
     <main className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-muted/30" key={address}>
       <div className="mx-auto max-w-5xl space-y-5 p-5">
@@ -74,6 +110,14 @@ export function EntityView() {
                     )}
                   </div>
                 </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 text-muted-foreground hover:border-destructive/40 hover:text-destructive"
+                  onClick={handleDelete}
+                >
+                  <Trash2Icon /> Delete
+                </Button>
               </div>
               <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
                 {sel.kind === "topic" ? (
