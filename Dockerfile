@@ -61,6 +61,8 @@ RUN dotnet publish src/OpenServiceBus.Host/OpenServiceBus.Host.csproj \
 # ─── Runtime stage ────────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS runtime
 
+ARG VERSION=""
+
 # Run as a non-root user - the broker doesn't need root and OCI scanners flag images that do.
 RUN addgroup -S osb && adduser -S osb -G osb \
     && mkdir -p /data \
@@ -85,6 +87,7 @@ ENV OPENSERVICEBUS__STORAGE__MODE=Sqlite \
     OPENSERVICEBUS__STORAGE__DATASOURCE=/data/broker.db \
     ASPNETCORE_URLS_HOST=http://+:5300 \
     ASPNETCORE_URLS_EXPLORER=http://+:5400 \
+    OSB_EXPLORER_VERSION=${VERSION} \
     DOTNET_RUNNING_IN_CONTAINER=true
 
 VOLUME ["/data"]

@@ -42,6 +42,8 @@ type Store = {
   demoMode: boolean;
   /** Reset cadence (seconds) - the environment wipes & reseeds on these boundaries. */
   resetIntervalSeconds: number;
+  /** The Explorer's release version (from /api/config); null on local/source runs. */
+  version: string | null;
 
   queues: QueueInfo[];
   topics: QueueInfo[];
@@ -86,6 +88,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [demoMode, setDemoMode] = useState(false);
   const [resetIntervalSeconds, setResetIntervalSeconds] = useState(1800);
+  const [version, setVersion] = useState<string | null>(null);
 
   const setConn = useCallback((v: string) => {
     setConnState(v);
@@ -144,6 +147,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         const cfg = await fetch("/api/config").then((r) => r.json());
+        if (cfg?.version) setVersion(String(cfg.version));
         if (cfg?.demoMode) {
           setDemoMode(true);
           setResetIntervalSeconds(cfg.resetIntervalSeconds ?? 1800);
@@ -231,14 +235,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<Store>(
     () => ({
       conn, mgmt, setConn, setMgmt, status, pingResult, connect,
-      demoMode, resetIntervalSeconds,
+      demoMode, resetIntervalSeconds, version,
       queues: queues.filter((q) => isMainQueue(q.name)),
       topics, subsByTopic, loading, refresh,
       selected, select, descriptorFor, dlqCount,
       locked, peeked, lockedCount, setPeekedFor, trackLocked, untrack, updateLockedUntil, clearEntityLocal,
       dialog, setDialog,
     }),
-    [conn, mgmt, setConn, setMgmt, status, pingResult, connect, demoMode, resetIntervalSeconds, queues, topics, subsByTopic, loading,
+    [conn, mgmt, setConn, setMgmt, status, pingResult, connect, demoMode, resetIntervalSeconds, version, queues, topics, subsByTopic, loading,
      refresh, selected, select, descriptorFor, dlqCount, locked, peeked, lockedCount, setPeekedFor, trackLocked,
      untrack, updateLockedUntil, clearEntityLocal, dialog],
   );

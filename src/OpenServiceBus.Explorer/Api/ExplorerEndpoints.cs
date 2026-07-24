@@ -52,6 +52,7 @@ public static class ExplorerEndpoints
                 connectionString = Env("OSB_EXPLORER_CONNECTION"),
                 managementUrl = Env("OSB_EXPLORER_MGMT_URL"),
                 resetIntervalSeconds = reset,
+                version = Env("OSB_EXPLORER_VERSION"),
             });
         });
 
