@@ -1,6 +1,6 @@
 import {
   CableIcon, ChevronRightIcon, InboxIcon, PlusIcon, RadioIcon, RefreshCwIcon,
-  SearchIcon, Trash2Icon, WaypointsIcon, XIcon,
+  SearchIcon, WaypointsIcon, XIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { explorerApi, type QueueInfo } from "@/lib/api";
+import { type QueueInfo } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
 
@@ -45,35 +45,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
   const isSelected = (kind: string, name: string, sub?: string) =>
     store.selected?.kind === kind && store.selected.name === name && store.selected.sub === sub;
-
-  const confirmDelete = (title: string, description: string, action: () => Promise<void>) =>
-    store.setDialog({ type: "confirm", title, description, destructive: true, action });
-
-  const deleteQueue = (name: string) =>
-    confirmDelete(`Delete queue '${name}'?`, "The queue, its dead-letter queue, and all messages are removed.", async () => {
-      await explorerApi.deleteQueue(store.mgmt, name);
-      store.clearEntityLocal(name);
-      if (isSelected("queue", name)) store.select(null);
-      toast.success(`Deleted queue '${name}'`);
-      await store.refresh();
-    });
-
-  const deleteTopic = (name: string) =>
-    confirmDelete(`Delete topic '${name}'?`, "The topic and ALL its subscriptions are removed.", async () => {
-      await explorerApi.deleteTopic(store.mgmt, name);
-      if (store.selected?.name === name) store.select(null);
-      toast.success(`Deleted topic '${name}'`);
-      await store.refresh();
-    });
-
-  const deleteSubscription = (topic: string, sub: string) =>
-    confirmDelete(`Delete subscription '${topic}/${sub}'?`, "The subscription and its messages are removed.", async () => {
-      await explorerApi.deleteSubscription(store.mgmt, topic, sub);
-      store.clearEntityLocal(`${topic}/Subscriptions/${sub}`);
-      if (isSelected("subscription", topic, sub)) store.select(null);
-      toast.success(`Deleted subscription '${topic}/${sub}'`);
-      await store.refresh();
-    });
 
   return (
     <aside
@@ -146,7 +117,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               lockedCount={store.lockedCount(q.name) + store.lockedCount(q.name + "/$DeadLetterQueue")}
               count={q.activeMessageCount}
               onSelect={() => selectAndClose({ kind: "queue", name: q.name })}
-              onDelete={() => deleteQueue(q.name)}
             />
           ))}
         </div>
@@ -192,13 +162,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                       >
                         <PlusIcon />
                       </Button>
-                      <Button
-                        variant="ghost" size="icon-sm" title="Delete topic"
-                        className="text-muted-foreground hover:text-destructive"
-                        onClick={(e) => { e.stopPropagation(); deleteTopic(t.name); }}
-                      >
-                        <Trash2Icon />
-                      </Button>
                     </span>
                     <Badge variant="muted" className="tabular-nums">{subs.length}</Badge>
                   </div>
@@ -219,7 +182,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                         }
                         count={s.activeMessageCount}
                         onSelect={() => selectAndClose({ kind: "subscription", name: t.name, sub: s.name })}
-                        onDelete={() => deleteSubscription(t.name, s.name)}
                       />
                     ))}
               </div>
@@ -308,7 +270,7 @@ function EmptyRow({ text }: { text: string }) {
 }
 
 function EntityRow({
-  icon: Icon, name, active, count, lockedCount, indent, onSelect, onDelete,
+  icon: Icon, name, active, count, lockedCount, indent, onSelect,
 }: {
   icon: typeof InboxIcon;
   name: string;
@@ -317,7 +279,6 @@ function EntityRow({
   lockedCount: number;
   indent?: boolean;
   onSelect: () => void;
-  onDelete: () => void;
 }) {
   return (
     <div
@@ -331,15 +292,6 @@ function EntityRow({
       {active && <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />}
       <Icon className={cn("size-4 shrink-0", active ? "text-primary" : "text-muted-foreground")} />
       <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{name}</span>
-      <span className="opacity-0 transition-opacity group-hover:opacity-100">
-        <Button
-          variant="ghost" size="icon-sm" title="Delete"
-          className="text-muted-foreground hover:text-destructive"
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        >
-          <Trash2Icon />
-        </Button>
-      </span>
       {lockedCount > 0 && <Badge variant="warning" className="tabular-nums">{lockedCount}🔒</Badge>}
       <Badge variant="muted" className="tabular-nums">{count ?? "?"}</Badge>
     </div>
