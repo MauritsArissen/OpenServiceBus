@@ -4,8 +4,6 @@
   "description": "Browser console for OpenServiceBus - queues, topics, sessions, and the DLQ.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0b0b10",
-  "theme_color": "#0b0b10",
   "icons": [
     { "src": "/favicon.svg", "type": "image/svg+xml", "sizes": "any" },
     { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192" },
