@@ -12,8 +12,8 @@ const ROWS: Row[] = [
     osb: "Single binary / image",
     ms: "Docker + SQL Edge",
   },
-  { feature: "Image size", osb: "~50 MB Alpine", ms: "~1 GB+" },
-  { feature: "Cold-start time", osb: "< 1 second", ms: "30–60 seconds" },
+  { feature: "Image size", osb: "~300 MB Alpine", ms: "~1 GB+" },
+  { feature: "Cold-start time", osb: "< 1 second", ms: "30-60 seconds" },
   { feature: "Embeddable in tests (NuGet)", osb: true, ms: false },
   { feature: "Bundled Explorer UI", osb: true, ms: false },
   {

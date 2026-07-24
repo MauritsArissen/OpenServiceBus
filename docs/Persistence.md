@@ -115,6 +115,13 @@ When the broker restarts against an existing `.db` file:
 > restarts, mount a `config.json` - the bootstrap service runs before rehydration, so
 > config-declared queues come up with the right shape and rehydration is a no-op for them.
 
+> ⚠️ **Topics, subscriptions, and rules are not rehydrated at all.** Only queue names come
+> back from the store. Subscription backing queues (`events/Subscriptions/all`) resurface
+> as plain queues with their messages intact, but the topic itself, its subscription list,
+> and its filter rules are gone - senders attaching to the topic fail and fan-out stops.
+> If you use topics with SQLite persistence, declaring them in `config.json` is required,
+> not optional.
+
 ## File location tips
 
 - **Don't** put the `.db` on tmpfs unless you want ephemeral mode (you already have `:memory:` for that).

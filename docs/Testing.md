@@ -105,6 +105,18 @@ host.Store.ExpireMessages("ttl-test", time.GetUtcNow());
 
 No `Task.Delay`. Tests run deterministically + fast.
 
+Note: the test host runs the TTL sweeper and the scheduled-message activator, but **not**
+the background lock-expiry sweeper the standalone host runs. Sweeps you drive from a fake
+clock are explicit calls on the store:
+
+```csharp
+host.Store.ExpireMessages("q", time.GetUtcNow()); // TTL expiry
+host.Store.ExpireLocks("q", time.GetUtcNow());    // peek-lock expiry -> redelivery
+```
+
+If a test needs a lock to lapse and the message to be redelivered, call `ExpireLocks`
+after advancing the clock - waiting in real time will not release it.
+
 ## Parity testing
 
 Want to prove your code works against both stores? Boot a second host with

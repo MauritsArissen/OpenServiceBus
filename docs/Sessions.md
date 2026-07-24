@@ -22,7 +22,7 @@ await host.Queues.CreateAsync(new QueueDescriptor
 });
 ```
 
-Subscriptions support the same flag:
+Subscriptions accept the same flag:
 
 ```csharp
 await host.Topics.CreateSubscriptionAsync(new SubscriptionDescriptor
@@ -32,6 +32,13 @@ await host.Topics.CreateSubscriptionAsync(new SubscriptionDescriptor
     RequiresSession = true,
 });
 ```
+
+> ⚠️ **Known limitation:** session routing is not yet threaded through topic fan-out.
+> A `RequiresSession` subscription is accepted at creation time, but messages published
+> to the topic reach its backing queue through the sessionless path, so session receivers
+> on that subscription won't see them. Full session support currently applies to queues;
+> use a queue (or forward the subscription to a session-enabled queue) for session
+> semantics today.
 
 ## Send to a session
 

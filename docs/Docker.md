@@ -229,8 +229,9 @@ across recreates - proven by an end-to-end test: send a message via the SDK, `do
 
 > ⚠️ Queue **descriptors** (LockDuration, MaxDeliveryCount, RequiresSession, etc.) are
 > reset to defaults on restart because the in-memory registry rebuilds from the store's
-> queue names only. **Always declare per-queue settings in `config.json`** so they
-> survive restarts. The bootstrap service runs before rehydration.
+> queue names only, and **topics, subscriptions, and rules are not rehydrated at all** -
+> only their backing queues come back. **Always declare your topology in `config.json`**
+> so it survives restarts. The bootstrap service runs before rehydration.
 
 See [Persistence](Persistence) for the SQLite schema and restart semantics.
 

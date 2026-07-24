@@ -48,7 +48,7 @@ in the repo - every page here is committed in source.
 | ------------------------ | ------------------------------ | --------------------------- |
 | License                  | MIT                            | EULA-gated                  |
 | Embeddable in tests      | ✅                             | ❌                          |
-| Container size           | ~230 MB Alpine                 | ~2 GB                       |
+| Container size           | ~300 MB Alpine                 | ~2 GB                       |
 | Persistence              | In-memory or SQLite            | SQL Server (required)       |
 | Transports               | AMQP-TCP + AMQP-over-WebSocket | AMQP-TCP only               |
 | Telemetry                | Native OpenTelemetry           | None                        |

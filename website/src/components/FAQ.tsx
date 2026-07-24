@@ -37,9 +37,13 @@ const FAQS: QA[] = [
     q: "Where does the data live?",
     a: (
       <>
-        In-memory by default - gone on restart, perfect for tests. Set{" "}
-        <code>OpenServiceBus:Storage:Mode=Sqlite</code> for SQLite-backed
-        persistence that survives a restart.
+        The NuGet test fixture and the standalone host default to in-memory -
+        gone on restart, perfect for tests. The Docker image defaults to
+        SQLite at <code>/data/broker.db</code>, so messages survive container
+        recreates when you mount a volume. You can flip either mode with{" "}
+        <code>OpenServiceBus:Storage:Mode</code>. Entity settings (lock
+        duration, sessions, forwarding) are not stored in SQLite - declare
+        them in a <code>config.json</code> so they survive restarts too.
       </>
     ),
   },
@@ -52,8 +56,20 @@ const FAQS: QA[] = [
     a: (
       <>
         Yes. The Docker image bundles a web Explorer on port <code>5400</code> -
-        browse queues, send messages, peek the DLQ, manage subscriptions. The same
-        Explorer runs against either OpenServiceBus or the real Azure broker.
+        browse queues and topics, send messages, receive with real peek-locks,
+        drain and requeue DLQs, edit subscription rules, and watch live
+        throughput metrics. It's a real Azure SDK client under the hood, so
+        every action you take in the UI exercises the same code path your
+        application would. Try it at{" "}
+        <a
+          href="https://demo.openservicebus.net"
+          target="_blank"
+          rel="noreferrer"
+          className="text-violet-300 underline underline-offset-2"
+        >
+          demo.openservicebus.net
+        </a>
+        .
       </>
     ),
   },
@@ -61,8 +77,10 @@ const FAQS: QA[] = [
     q: "How does it differ from the Microsoft emulator?",
     a: (
       <>
-        MIT-licensed (no EULA), ~50&nbsp;MB Alpine image (no SQL Edge), embeddable
-        as a NuGet test fixture, sub-second cold start. See the comparison table
+        MIT-licensed (no EULA), a single ~300&nbsp;MB Alpine image with no SQL
+        Edge dependency, embeddable as a NuGet test fixture, sub-second cold
+        start, plus extras the official emulator lacks: a bundled Explorer UI,
+        AMQP-over-WebSocket, and native OpenTelemetry. See the comparison table
         on the home page for the full breakdown.
       </>
     ),
