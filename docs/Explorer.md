@@ -23,7 +23,7 @@ Open <http://localhost:5400>. The Explorer talks to the broker's REST management
 │ Search…     │  orders                              [Queue]          │
 │             │  12 active · lock 60s · ttl ∞                         │
 │ QUEUES   3  │                                                       │
-│ • orders 12 │  Overview | Send | Receive (3) | Rules                │
+│ • orders 12 │  Overview | Send | Receive (3) | Dead-letter | Metrics│
 │   $DLQ    0 │  ─────────                                            │
 │ • billing 0 │                                                       │
 │             │  (selected tab content)                               │
@@ -53,8 +53,18 @@ Open <http://localhost:5400>. The Explorer talks to the broker's REST management
   application properties. Disposition buttons grouped by intent: Complete (success),
   Abandon / Renew / Defer (neutral), DLQ (danger). Session ID input surfaces on
   session-enabled entities only.
+- **Dead-letter tab** (queues and subscriptions) - the same receive UI pointed at the
+  entity's `$DeadLetterQueue`: peek or lock DLQ messages, **Requeue** a cleaned copy back
+  to the parent (or through the topic so rules re-evaluate), or **Delete** it off the DLQ.
 - **Rules tab** (subscriptions only) - SQL / Correlation / True / False editor with
   examples in the help text. `$Default` rule visually distinguished from custom rules.
+- **Metrics tab** - live throughput (new / completed / dead-lettered per interval) and
+  message-count charts per entity, sampled every 15s while the Explorer runs, with a
+  30 min - 24 h window selector. History is in-memory only and resets with the Explorer.
+- **Auto-refresh** - topbar interval selector (off / 1-60s) that re-polls entity lists
+  and counts. Message lists and rules refresh on explicit actions, not on the timer.
+- **Responsive layout** - below tablet width the sidebar becomes an off-canvas drawer;
+  the whole UI works on a phone.
 - **Light/dark theme** with persisted preference.
 
 ## Connection panel

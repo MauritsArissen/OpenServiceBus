@@ -61,7 +61,8 @@ public sealed class TopicSenderProcessor : IMessageProcessor
 
             if (msg.Format == AmqpBatchedMessageFormat && msg.BodySection is DataList dataList)
             {
-                _ = FanOutBatchAsync(messageContext, dataList);
+                var batchTxnId = (messageContext.DeliveryState as TransactionalState)?.TxnId;
+                _ = FanOutBatchAsync(messageContext, dataList, batchTxnId);
                 return;
             }
 
@@ -138,10 +139,11 @@ public sealed class TopicSenderProcessor : IMessageProcessor
         }
     }
 
-    private async Task FanOutBatchAsync(MessageContext context, DataList dataList)
+    private async Task FanOutBatchAsync(MessageContext context, DataList dataList, byte[]? txnId)
     {
         try
         {
+            var enlisted = true;
             for (var i = 0; i < dataList.Count; i++)
             {
                 var innerBinary = dataList[i].Binary;
@@ -152,9 +154,38 @@ public sealed class TopicSenderProcessor : IMessageProcessor
                 var expiresAt = ComputeExpiresAt(inner);
                 var scheduledFor = ReadScheduledEnqueueTime(inner);
                 var filterContext = BuildFilterContext(inner, _timeProvider.GetUtcNow());
-                await _router.RouteAsync(_topic.Name, innerBytes, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext).ConfigureAwait(false);
+
+                if (txnId is { Length: > 0 })
+                {
+                    // Buffer the fan-out under the txn; it only runs on commit.
+                    if (!_transactions.Enlist(txnId, _ => _router.RouteAsync(_topic.Name, innerBytes, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext)))
+                    {
+                        enlisted = false;
+                        break;
+                    }
+                }
+                else
+                {
+                    await _router.RouteAsync(_topic.Name, innerBytes, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext).ConfigureAwait(false);
+                }
             }
-            context.Complete();
+
+            if (txnId is { Length: > 0 })
+            {
+                if (enlisted)
+                {
+                    context.Link.DisposeMessage(context.Message,
+                        new TransactionalState { TxnId = txnId, Outcome = new Accepted() }, settled: true);
+                }
+                else
+                {
+                    context.Complete(new Error(new Symbol(ErrorCode.IllegalState)) { Description = "Unknown or already-discharged transaction id." });
+                }
+            }
+            else
+            {
+                context.Complete();
+            }
         }
         catch (Exception ex)
         {

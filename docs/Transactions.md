@@ -55,10 +55,17 @@ B, send to topic C - all-or-nothing.
   the coordinator promotes nothing; `TransactionPromotionException` is reported back to
   the SDK if a promotion attempt happens. (DTC-style two-phase commit was explicitly
   scoped out of the roadmap.)
-- **In-memory store has no rollback on crash.** If the broker dies mid-commit-replay,
-  partially-applied operations stay applied. With the SQLite store the SQL transaction
-  semantics protect each op individually but cross-op atomicity within a txn still
-  depends on the broker process surviving the replay.
+- **Commit is acknowledged before the replay finishes.** The discharge is currently
+  settled while the buffered operations replay in the background, so an immediate
+  receive after `scope.Complete()` can race the enqueue, and a replay failure is logged
+  rather than reported to the client. Tracked as a known bug.
+- **Commit replay is best-effort, not atomic.** Operations replay in order, but a
+  failing op is logged and skipped rather than rolling back the ops already applied.
+  There is no rollback on crash either: if the broker dies mid-replay,
+  partially-applied operations stay applied (in both stores).
+- **Batched sends to topics bypass the transaction.** `SendMessagesAsync` (batch) to a
+  queue enlists correctly; the same batch to a topic currently fans out immediately and
+  ignores rollback. Single sends to topics enlist correctly. Tracked as a known bug.
 - **Per-txn isolation is not enforced.** A read inside a transactional receive may see
   data written by another concurrent client (no read-your-writes guarantee). This is also
   Service Bus's behavior - transactions cover writes, not reads.

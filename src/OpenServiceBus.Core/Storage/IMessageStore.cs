@@ -220,10 +220,16 @@ public interface IMessageStore
         string? requestingLinkName = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Release a session lock so another receiver can claim the session. No-op if not held.</summary>
+    /// <summary>
+    /// Release a session lock so another receiver can claim the session. No-op if not held.
+    /// When <paramref name="expectedLinkName"/> is provided, the lock is released only if it is
+    /// currently held by that link - this prevents a stale receiver's late detach from releasing
+    /// a lock another receiver has since acquired for the same session.
+    /// </summary>
     Task ReleaseSessionAsync(
         string queueName,
         string sessionId,
+        string? expectedLinkName = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Set the opaque per-session state blob. Passing null clears the state.</summary>

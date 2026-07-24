@@ -8,6 +8,29 @@ namespace OpenServiceBus.Explorer.Api;
 
 public static class ExplorerEndpoints
 {
+    // Bulk-send and receive-timeout ceilings. The Explorer is a manual testing tool, not a load
+    // generator; without a cap a single request (Count = 100_000_000, or a multi-week timeout)
+    // can exhaust the co-located broker or pin a request slot - a trivial DoS on the hosted demo.
+    private const int MaxSendCount = 1000;
+    private const int MaxReceiveTimeoutSeconds = 60;
+
+    // In the hosted live demo the broker addresses are fixed by the environment and the UI locks
+    // its connection inputs. The proxy endpoints must ignore any client-supplied broker address in
+    // that mode, otherwise the backend is an open proxy an anonymous caller can point at internal
+    // hosts (SSRF). Outside demo mode the Explorer is a local dev tool, so client control is kept.
+    private static readonly bool DemoMode =
+        string.Equals(Environment.GetEnvironmentVariable("OSB_EXPLORER_DEMO"), "true", StringComparison.OrdinalIgnoreCase);
+    private static readonly string? PinnedConnectionString = NonEmpty(Environment.GetEnvironmentVariable("OSB_EXPLORER_CONNECTION"));
+    private static readonly string? PinnedManagementUrl = NonEmpty(Environment.GetEnvironmentVariable("OSB_EXPLORER_MGMT_URL"));
+
+    private static string? NonEmpty(string? v) => string.IsNullOrWhiteSpace(v) ? null : v;
+
+    private static string ResolveManagementUrl(string? clientValue) =>
+        DemoMode && PinnedManagementUrl is not null ? PinnedManagementUrl : (clientValue ?? string.Empty);
+
+    private static string ResolveConnectionString(string? clientValue) =>
+        DemoMode && PinnedConnectionString is not null ? PinnedConnectionString : (clientValue ?? string.Empty);
+
     public static IEndpointRouteBuilder MapExplorerEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var api = endpoints.MapGroup("/api");
@@ -36,7 +59,7 @@ public static class ExplorerEndpoints
         api.MapGet("/queues", async (string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
             var http = httpFactory.CreateClient();
-            var resp = await http.GetAsync(Combine(managementUrl, "/queues/"), ct);
+            var resp = await http.GetAsync(Combine(ResolveManagementUrl(managementUrl), "/queues/"), ct);
             return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
         });
 
@@ -44,24 +67,24 @@ public static class ExplorerEndpoints
         {
             var http = httpFactory.CreateClient();
             var payload = JsonContent.Create(body.Options);
-            var resp = await http.PutAsync(Combine(body.ManagementUrl, $"/queues/{name}"), payload, ct);
+            var resp = await http.PutAsync(Combine(ResolveManagementUrl(body.ManagementUrl), $"/queues/{name}"), payload, ct);
             return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
         });
 
         api.MapDelete("/queues/{name}", async (string name, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
             var http = httpFactory.CreateClient();
-            var resp = await http.DeleteAsync(Combine(managementUrl, $"/queues/{name}"), ct);
+            var resp = await http.DeleteAsync(Combine(ResolveManagementUrl(managementUrl), $"/queues/{name}"), ct);
             return Results.StatusCode((int)resp.StatusCode);
         });
 
         // --- Data plane (real Azure SDK against the broker) ---
         api.MapPost("/send", async (SendRequest req, SessionManager sessions, CancellationToken ct) =>
         {
-            var session = sessions.GetOrCreate(req.ConnectionString);
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
             await using var sender = session.Sender(req.Queue);
 
-            var count = Math.Max(1, req.Count ?? 1);
+            var count = Math.Clamp(req.Count ?? 1, 1, MaxSendCount);
             var strategy = string.Equals(req.Strategy, "PARALLEL", StringComparison.OrdinalIgnoreCase)
                 ? "PARALLEL"
                 : "ATONCE";
@@ -128,13 +151,14 @@ public static class ExplorerEndpoints
 
         api.MapPost("/receive", async (ReceiveRequest req, SessionManager sessions, CancellationToken ct) =>
         {
-            var session = sessions.GetOrCreate(req.ConnectionString);
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
             // When SessionId is provided we open (or reuse) a session-locked receiver via
             // AcceptSessionAsync - required for session-enabled queues and subscriptions.
             ServiceBusReceiver receiver = string.IsNullOrEmpty(req.SessionId)
                 ? session.Receiver(req.Queue)
                 : await session.SessionReceiverAsync(req.Queue, req.SessionId);
-            var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(req.TimeoutSeconds ?? 5), ct);
+            var timeoutSeconds = Math.Clamp(req.TimeoutSeconds ?? 5, 1, MaxReceiveTimeoutSeconds);
+            var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(timeoutSeconds), ct);
             if (msg is null)
             {
                 return Results.Ok(new { received = false });
@@ -147,7 +171,7 @@ public static class ExplorerEndpoints
         // Each call anchors at sequenceNumber 0 so the result is stable across repeated peeks.
         api.MapPost("/peek", async (PeekRequest req, SessionManager sessions, CancellationToken ct) =>
         {
-            var session = sessions.GetOrCreate(req.ConnectionString);
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
             var receiver = session.Receiver(req.Queue);
             var max = Math.Clamp(req.MaxMessages ?? 1, 1, 100);
             var msgs = await receiver.PeekMessagesAsync(max, fromSequenceNumber: 0, ct);
@@ -157,40 +181,46 @@ public static class ExplorerEndpoints
 
         api.MapPost("/complete", async (DispositionRequest req, SessionManager sessions, CancellationToken ct) =>
         {
-            var session = sessions.GetOrCreate(req.ConnectionString);
-            if (!session.TryTakeLocked(req.LockToken, out var msg, out var receiver) || msg is null || receiver is null)
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
+            // Look up WITHOUT removing, settle at the broker, and only then drop the tracking
+            // entry. If the broker call fails the lock stays tracked so the user can retry -
+            // removing first would strand the message until its lock expired.
+            if (!session.TryPeekLocked(req.LockToken, out var msg, out var receiver) || msg is null || receiver is null)
             {
                 return Results.NotFound(new { error = "Unknown lock token (already completed or never tracked by this explorer session)." });
             }
             await receiver.CompleteMessageAsync(msg, ct);
+            session.TryTakeLocked(req.LockToken, out _, out _);
             return Results.Ok(new { completed = true });
         });
 
         api.MapPost("/abandon", async (DispositionRequest req, SessionManager sessions, CancellationToken ct) =>
         {
-            var session = sessions.GetOrCreate(req.ConnectionString);
-            if (!session.TryTakeLocked(req.LockToken, out var msg, out var receiver) || msg is null || receiver is null)
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
+            if (!session.TryPeekLocked(req.LockToken, out var msg, out var receiver) || msg is null || receiver is null)
             {
                 return Results.NotFound(new { error = "Unknown lock token." });
             }
             await receiver.AbandonMessageAsync(msg, cancellationToken: ct);
+            session.TryTakeLocked(req.LockToken, out _, out _);
             return Results.Ok(new { abandoned = true });
         });
 
         api.MapPost("/deadletter", async (DeadLetterRequest req, SessionManager sessions, CancellationToken ct) =>
         {
-            var session = sessions.GetOrCreate(req.ConnectionString);
-            if (!session.TryTakeLocked(req.LockToken, out var msg, out var receiver) || msg is null || receiver is null)
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
+            if (!session.TryPeekLocked(req.LockToken, out var msg, out var receiver) || msg is null || receiver is null)
             {
                 return Results.NotFound(new { error = "Unknown lock token." });
             }
             await receiver.DeadLetterMessageAsync(msg, req.Reason, req.Description, ct);
+            session.TryTakeLocked(req.LockToken, out _, out _);
             return Results.Ok(new { deadLettered = true });
         });
 
         api.MapPost("/renew", async (DispositionRequest req, SessionManager sessions, CancellationToken ct) =>
         {
-            var session = sessions.GetOrCreate(req.ConnectionString);
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
             // Renew uses the AMQP $management endpoint - does NOT consume the locked message,
             // so we look up but do NOT remove from the tracking dict.
             if (!session.TryPeekLocked(req.LockToken, out var msg, out var receiver) || msg is null || receiver is null)
@@ -203,12 +233,13 @@ public static class ExplorerEndpoints
 
         api.MapPost("/defer", async (DispositionRequest req, SessionManager sessions, CancellationToken ct) =>
         {
-            var session = sessions.GetOrCreate(req.ConnectionString);
-            if (!session.TryTakeLocked(req.LockToken, out var msg, out var receiver) || msg is null || receiver is null)
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
+            if (!session.TryPeekLocked(req.LockToken, out var msg, out var receiver) || msg is null || receiver is null)
             {
                 return Results.NotFound(new { error = "Unknown lock token." });
             }
             await receiver.DeferMessageAsync(msg, cancellationToken: ct);
+            session.TryTakeLocked(req.LockToken, out _, out _);
             return Results.Ok(new { deferred = true, sequenceNumber = msg.SequenceNumber });
         });
 
@@ -217,8 +248,11 @@ public static class ExplorerEndpoints
         // DLQ it is the topic (so the broker re-evaluates rules and fans out again).
         api.MapPost("/requeue", async (DispositionRequest req, SessionManager sessions, CancellationToken ct) =>
         {
-            var session = sessions.GetOrCreate(req.ConnectionString);
-            if (!session.TryTakeLocked(req.LockToken, out var msg, out var receiver) || msg is null || receiver is null)
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
+            // Peek (don't remove) so a mid-operation failure leaves the DLQ message tracked and
+            // re-settleable rather than stranded. The tracking entry is dropped only after the
+            // copy is published AND the original is completed.
+            if (!session.TryPeekLocked(req.LockToken, out var msg, out var receiver) || msg is null || receiver is null)
             {
                 return Results.NotFound(new { error = "Unknown lock token (already settled or never tracked)." });
             }
@@ -252,6 +286,7 @@ public static class ExplorerEndpoints
             await using var sender = session.Sender(target);
             await sender.SendMessageAsync(copy, ct);
             await receiver.CompleteMessageAsync(msg, ct);
+            session.TryTakeLocked(req.LockToken, out _, out _);
             return Results.Ok(new { requeued = true, target, messageId = copy.MessageId });
         });
 
@@ -259,7 +294,7 @@ public static class ExplorerEndpoints
         api.MapGet("/topics", async (string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
             var http = httpFactory.CreateClient();
-            var resp = await http.GetAsync(Combine(managementUrl, "/topics/"), ct);
+            var resp = await http.GetAsync(Combine(ResolveManagementUrl(managementUrl), "/topics/"), ct);
             return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
         });
 
@@ -267,14 +302,14 @@ public static class ExplorerEndpoints
         {
             var http = httpFactory.CreateClient();
             var payload = JsonContent.Create(body.Options ?? new());
-            var resp = await http.PutAsync(Combine(body.ManagementUrl, $"/topics/{name}"), payload, ct);
+            var resp = await http.PutAsync(Combine(ResolveManagementUrl(body.ManagementUrl), $"/topics/{name}"), payload, ct);
             return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
         });
 
         api.MapDelete("/topics/{name}", async (string name, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
             var http = httpFactory.CreateClient();
-            var resp = await http.DeleteAsync(Combine(managementUrl, $"/topics/{name}"), ct);
+            var resp = await http.DeleteAsync(Combine(ResolveManagementUrl(managementUrl), $"/topics/{name}"), ct);
             return Results.StatusCode((int)resp.StatusCode);
         });
 
@@ -282,7 +317,7 @@ public static class ExplorerEndpoints
         api.MapGet("/topics/{topic}/subscriptions", async (string topic, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
             var http = httpFactory.CreateClient();
-            var resp = await http.GetAsync(Combine(managementUrl, $"/topics/{topic}/subscriptions"), ct);
+            var resp = await http.GetAsync(Combine(ResolveManagementUrl(managementUrl), $"/topics/{topic}/subscriptions"), ct);
             return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
         });
 
@@ -290,14 +325,14 @@ public static class ExplorerEndpoints
         {
             var http = httpFactory.CreateClient();
             var payload = JsonContent.Create(body.Options ?? new());
-            var resp = await http.PutAsync(Combine(body.ManagementUrl, $"/topics/{topic}/subscriptions/{name}"), payload, ct);
+            var resp = await http.PutAsync(Combine(ResolveManagementUrl(body.ManagementUrl), $"/topics/{topic}/subscriptions/{name}"), payload, ct);
             return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
         });
 
         api.MapDelete("/topics/{topic}/subscriptions/{name}", async (string topic, string name, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
             var http = httpFactory.CreateClient();
-            var resp = await http.DeleteAsync(Combine(managementUrl, $"/topics/{topic}/subscriptions/{name}"), ct);
+            var resp = await http.DeleteAsync(Combine(ResolveManagementUrl(managementUrl), $"/topics/{topic}/subscriptions/{name}"), ct);
             return Results.StatusCode((int)resp.StatusCode);
         });
 
@@ -305,7 +340,7 @@ public static class ExplorerEndpoints
         api.MapGet("/topics/{topic}/subscriptions/{sub}/rules", async (string topic, string sub, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
             var http = httpFactory.CreateClient();
-            var resp = await http.GetAsync(Combine(managementUrl, $"/topics/{topic}/subscriptions/{sub}/rules"), ct);
+            var resp = await http.GetAsync(Combine(ResolveManagementUrl(managementUrl), $"/topics/{topic}/subscriptions/{sub}/rules"), ct);
             return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
         });
 
@@ -313,14 +348,14 @@ public static class ExplorerEndpoints
         {
             var http = httpFactory.CreateClient();
             var payload = JsonContent.Create(body.Rule);
-            var resp = await http.PutAsync(Combine(body.ManagementUrl, $"/topics/{topic}/subscriptions/{sub}/rules/{name}"), payload, ct);
+            var resp = await http.PutAsync(Combine(ResolveManagementUrl(body.ManagementUrl), $"/topics/{topic}/subscriptions/{sub}/rules/{name}"), payload, ct);
             return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
         });
 
         api.MapDelete("/topics/{topic}/subscriptions/{sub}/rules/{name}", async (string topic, string sub, string name, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
             var http = httpFactory.CreateClient();
-            var resp = await http.DeleteAsync(Combine(managementUrl, $"/topics/{topic}/subscriptions/{sub}/rules/{name}"), ct);
+            var resp = await http.DeleteAsync(Combine(ResolveManagementUrl(managementUrl), $"/topics/{topic}/subscriptions/{sub}/rules/{name}"), ct);
             return Results.StatusCode((int)resp.StatusCode);
         });
 
@@ -328,7 +363,8 @@ public static class ExplorerEndpoints
         api.MapPost("/ping", async (PingRequest req, SessionManager sessions, MetricsCollector metrics, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
             // Start historical sampling of this broker (idempotent).
-            metrics.RegisterManagementUrl(req.ManagementUrl);
+            var pingMgmt = ResolveManagementUrl(req.ManagementUrl);
+            metrics.RegisterManagementUrl(pingMgmt);
 
             var http = httpFactory.CreateClient();
             string? mgmtStatus = null;
@@ -336,7 +372,7 @@ public static class ExplorerEndpoints
 
             try
             {
-                var resp = await http.GetAsync(Combine(req.ManagementUrl, "/health"), ct);
+                var resp = await http.GetAsync(Combine(pingMgmt, "/health"), ct);
                 mgmtStatus = $"{(int)resp.StatusCode} {resp.StatusCode}";
             }
             catch (Exception ex)
@@ -346,7 +382,7 @@ public static class ExplorerEndpoints
 
             try
             {
-                var session = sessions.GetOrCreate(req.ConnectionString);
+                var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
                 // Cheap probe: open a sender then close it. ServiceBusClient opens on first send/receive.
                 await using var sender = session.Sender("__ping__probe__");
                 sdkStatus = "ok (client constructed; actual AMQP open happens on first send/receive)";

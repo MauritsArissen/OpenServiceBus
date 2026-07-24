@@ -25,6 +25,15 @@ public sealed class SqlFilter : RuleFilter
         ArgumentException.ThrowIfNullOrWhiteSpace(expression);
         Expression = expression;
         _root = new Sql.SqlParser(expression).ParseExpression();
+
+        // Reject non-boolean expressions here, at construction, the way Service Bus rejects them
+        // at rule-creation time. Otherwise a filter like "1" or "user.count" would parse fine and
+        // then throw on the publish hot path for every message the rule is evaluated against.
+        if (!_root.ProducesBoolean)
+        {
+            throw new ArgumentException(
+                $"SQL filter expression must evaluate to a boolean: \"{expression}\".", nameof(expression));
+        }
     }
 
     public override bool Matches(MessageFilterContext message) =>

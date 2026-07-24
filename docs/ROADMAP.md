@@ -1,8 +1,23 @@
 # OpenServiceBus - post-v1.0 roadmap
 
 v1.0 proved the protocol surface (queues + Functions trigger end-to-end via real AMQP 1.0).
-This document captures the next ~12 months of work, grouped into shippable phases. Each
+This document captures the work planned after that, grouped into shippable phases. Each
 phase ends with a tagged release; you don't have to ship the whole arc to make it useful.
+
+## Status (as of v1.2.x, July 2026)
+
+Everything in **Phase 2 is shipped**: topics + subscriptions + filters, sessions,
+duplicate detection, auto-forwarding, and transactions. Most of **Phase 3 is shipped**:
+SQLite persistence, OpenTelemetry, and AMQP-over-WebSocket; backpressure/memory bounds
+remain open. From **Phase 4**, the multi-arch Docker image (broker + Explorer) and most
+of the Explorer v2 feature list are shipped; Bicep/ARM bootstrap, the CLI, the Helm
+chart, and the standalone docs site are still open. Individual milestones below are
+marked accordingly - the original scope text is kept for reference.
+
+Known gaps within shipped milestones (tracked as bugs/limitations, see the feature docs):
+session routing through topic fan-out, transactional batched sends to topics, commit
+acknowledgement racing the replay, SAS enforcement for non-SDK clients that skip `$cbs`,
+and topic/subscription rehydration from SQLite (queues only today).
 
 ## Locked decisions
 
@@ -24,7 +39,7 @@ phase ends with a tagged release; you don't have to ship the whole arc to make i
 The biggest gaps in the SB feature surface. Ordered so each milestone builds on the
 routing/storage primitives the previous one added.
 
-### Topics + Subscriptions + Filters (v1.1)
+### Topics + Subscriptions + Filters (v1.1) - SHIPPED
 
 The flagship feature of Phase 2 and the largest single milestone in the roadmap.
 
@@ -48,7 +63,7 @@ The flagship feature of Phase 2 and the largest single milestone in the roadmap.
 **Gate:** SDK publishes to a topic with three subscriptions on different SQL filters;
 only matching subs receive the message.
 
-### Sessions (v1.2)
+### Sessions (v1.2) - SHIPPED (queues; session routing through topic fan-out still open)
 
 Can run parallel to topics work - independent code paths.
 
@@ -65,7 +80,7 @@ Can run parallel to topics work - independent code paths.
 **Gate:** SDK `CreateSessionReceiverAsync` + ordered receive of all messages with the
 same `SessionId` + state round-trip.
 
-### Duplicate detection (v1.3)
+### Duplicate detection (v1.3) - SHIPPED
 
 Smallest milestone - a quick win after the heavier .
 
@@ -77,7 +92,7 @@ Smallest milestone - a quick win after the heavier .
 
 **Gate:** Send the same `MessageId` twice within the window → receiver sees only one.
 
-### Auto-forwarding (v1.4)
+### Auto-forwarding (v1.4) - SHIPPED
 
 Builds on the routing layer.
 
@@ -91,7 +106,7 @@ Builds on the routing layer.
 **Gate:** Send to queue A configured `ForwardTo: B` → message lands in B only.
 Loop A→B→A → 4th hop rejected.
 
-### Transactions (v1.5)
+### Transactions (v1.5) - SHIPPED (known gaps listed in docs/Transactions.md)
 
 The complex one. The AMQP spec is precise but the implementation has many edge cases.
 
@@ -116,7 +131,7 @@ feature milestone - a release-stabilization milestone.
 
 The "this broker can run unattended for weeks" phase.
 
-### Persistent storage (SQLite) (v1.6)
+### Persistent storage (SQLite) (v1.6) - SHIPPED (idempotent DDL instead of versioned migrations; descriptors/topology still rehydrate from config.json)
 
 - `OpenServiceBus.SqliteStorage` package exposing `ISqlitePersistenceOptions` and an
   `AddOpenServiceBusSqliteStorage` DI extension.
@@ -127,7 +142,7 @@ The "this broker can run unattended for weeks" phase.
   the process died (lock-expired-on-restart).
 - Performance gate: 10k msg/sec sustained send+receive on a laptop SSD.
 
-### OpenTelemetry (v1.7)
+### OpenTelemetry (v1.7) - SHIPPED
 
 - `ActivitySource` for AMQP frame lifecycle, message lifecycle, lock lifecycle.
 - Metric instruments: queue depth (gauge), message-rate by op (counter), lock
@@ -136,7 +151,7 @@ The "this broker can run unattended for weeks" phase.
   names per subsystem.
 - OTel resource attributes (`service.namespace`, `service.name`, `service.version`).
 
-### AMQP-over-WebSocket (v1.8)
+### AMQP-over-WebSocket (v1.8) - SHIPPED (as a bridge on its own port rather than on the Kestrel host)
 
 - ASP.NET Core WebSocket endpoint on the same Kestrel host as the management API.
 - Routes `Upgrade: websocket` requests through AMQPNetLite's `WebSocketTransport`.
@@ -144,7 +159,7 @@ The "this broker can run unattended for weeks" phase.
   firewalled environments).
 - Tested end-to-end with the Azure SDK in WebSocket mode.
 
-### Backpressure + memory bounds (v1.9)
+### Backpressure + memory bounds (v1.9) - OPEN
 
 - Per-queue depth ceiling (configurable, default 100k messages or 256 MB whichever
   first).
@@ -159,7 +174,7 @@ The "this broker can run unattended for weeks" phase.
 
 This phase makes OpenServiceBus pleasant to use, not just functional.
 
-### Bicep / ARM template bootstrap (v2.0)
+### Bicep / ARM template bootstrap (v2.0) - OPEN
 
 The single most-requested ergonomic feature.
 
@@ -185,7 +200,7 @@ The single most-requested ergonomic feature.
 **Gate:** Take a real production Bicep file used by an Azure deployment, point
 OpenServiceBus at it, get a broker shaped identically (modulo deferred features).
 
-### Explorer v2 (v2.0)
+### Explorer v2 (v2.0) - MOSTLY SHIPPED (topics tree, rule editor, DLQ requeue, metrics; filter-test preview, scheduled timeline, and session viewer still open)
 
 - Topics + subscription tree view.
 - Subscription rule editor with a **"test this message against this filter"**
@@ -196,7 +211,7 @@ OpenServiceBus at it, get a broker shaped identically (modulo deferred features)
 - Session viewer.
 - All built on the management REST API - no Explorer-specific server code.
 
-### `openservicebus` CLI (v2.0)
+### `openservicebus` CLI (v2.0) - OPEN
 
 - Scriptable wrapper around the management REST API.
 - Verbs: `queue create/delete/list/describe`, `topic create`, `subscription create`,
@@ -204,7 +219,7 @@ OpenServiceBus at it, get a broker shaped identically (modulo deferred features)
 - Output formats: `--output json|table|jsonl` for piping into other tools.
 - Connection string read from `OPENSERVICEBUS_CONNECTION` env var or `--endpoint`.
 
-### Docker image + Helm chart (v2.0)
+### Docker image + Helm chart (v2.0) - IMAGE SHIPPED, HELM CHART OPEN
 
 - Multi-arch (amd64, arm64) `mauritsarissen/openservicebus` image.
 - Bundled `config.json`/Bicep bootstrap support via mounted volume.
@@ -213,7 +228,7 @@ OpenServiceBus at it, get a broker shaped identically (modulo deferred features)
 - Helm chart with sensible defaults; PVC for the SQLite file; ServiceMonitor for
   the OTel metrics.
 
-### Documentation site (v2.0)
+### Documentation site (v2.0) - OPEN (docs/ currently syncs to the GitHub wiki instead)
 
 - mkdocs-material site at `docs.openservicebus.dev` (or similar).
 - Sections: Getting Started, Concepts (queues/topics/subs/sessions/transactions),
@@ -229,8 +244,8 @@ OpenServiceBus at it, get a broker shaped identically (modulo deferred features)
 
 | Phase   | Releases    | Target                                            |
 | ------- | ----------- | ------------------------------------------------- |
-| Phase 2 | v1.1 → v1.5 | One milestone per minor release; ~4–8 weeks each. |
-| Phase 3 | v1.6 → v1.9 | One milestone per minor release; ~3–6 weeks each. |
+| Phase 2 | v1.1 → v1.5 | One milestone per minor release; ~4-8 weeks each. |
+| Phase 3 | v1.6 → v1.9 | One milestone per minor release; ~3-6 weeks each. |
 | Phase 4 | v2.0        | All five milestones land together as v2.0.        |
 
 ## Versioning

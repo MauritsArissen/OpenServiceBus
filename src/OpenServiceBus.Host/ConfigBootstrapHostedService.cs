@@ -67,22 +67,38 @@ public sealed class ConfigBootstrapHostedService : IHostedService
 
         foreach (var descriptor in result.Queues)
         {
-            await _queues.CreateAsync(descriptor, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation(
-                "Bootstrapped queue '{Name}' (lockDuration={Lock}, maxDeliveryCount={Max}, ttl={Ttl}, sessions={Sessions}, dedup={Dedup}, forwardTo={Forward})",
-                descriptor.Name, descriptor.LockDuration, descriptor.MaxDeliveryCount,
-                descriptor.DefaultMessageTimeToLive?.ToString() ?? "(none)",
-                descriptor.RequiresSession, descriptor.RequiresDuplicateDetection,
-                descriptor.ForwardTo ?? "(none)");
+            try
+            {
+                await _queues.CreateAsync(descriptor, cancellationToken).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "Bootstrapped queue '{Name}' (lockDuration={Lock}, maxDeliveryCount={Max}, ttl={Ttl}, sessions={Sessions}, dedup={Dedup}, forwardTo={Forward})",
+                    descriptor.Name, descriptor.LockDuration, descriptor.MaxDeliveryCount,
+                    descriptor.DefaultMessageTimeToLive?.ToString() ?? "(none)",
+                    descriptor.RequiresSession, descriptor.RequiresDuplicateDetection,
+                    descriptor.ForwardTo ?? "(none)");
+            }
+            catch (InvalidOperationException ex)
+            {
+                // A single bad queue (e.g. self-forward) must not abort startup - log and skip it,
+                // matching how subscription and rule bootstrap already handle their failures.
+                _logger.LogError(ex, "Failed to declare queue '{Name}' - skipping.", descriptor.Name);
+            }
         }
 
         if (_topics is not null)
         {
             foreach (var topic in result.Topics)
             {
-                await _topics.CreateTopicAsync(topic, cancellationToken).ConfigureAwait(false);
-                _logger.LogInformation("Bootstrapped topic '{Name}' (ttl={Ttl})",
-                    topic.Name, topic.DefaultMessageTimeToLive?.ToString() ?? "(none)");
+                try
+                {
+                    await _topics.CreateTopicAsync(topic, cancellationToken).ConfigureAwait(false);
+                    _logger.LogInformation("Bootstrapped topic '{Name}' (ttl={Ttl})",
+                        topic.Name, topic.DefaultMessageTimeToLive?.ToString() ?? "(none)");
+                }
+                catch (InvalidOperationException ex)
+                {
+                    _logger.LogError(ex, "Failed to declare topic '{Name}' - skipping.", topic.Name);
+                }
             }
 
             foreach (var sub in result.Subscriptions)

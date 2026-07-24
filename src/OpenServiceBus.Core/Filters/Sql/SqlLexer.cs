@@ -163,15 +163,17 @@ internal sealed class SqlLexer
             if (_index >= _source.Length) throw Error("Unterminated bracketed identifier.", start);
             identifier = _source[nameStart.._index];
             _index++; // closing ]
+            // A bracket-quoted name is always an identifier, never a keyword - that is the
+            // whole point of the quoting. Returning it directly lets a property literally
+            // named "true", "like", "not", etc. be referenced.
+            return new SqlToken(SqlTokenKind.Identifier, identifier, null, start);
         }
-        else
+
+        while (_index < _source.Length && (char.IsLetterOrDigit(_source[_index]) || _source[_index] == '_' || _source[_index] == '-'))
         {
-            while (_index < _source.Length && (char.IsLetterOrDigit(_source[_index]) || _source[_index] == '_' || _source[_index] == '-'))
-            {
-                _index++;
-            }
-            identifier = _source[start.._index];
+            _index++;
         }
+        identifier = _source[start.._index];
 
         return identifier.ToUpperInvariant() switch
         {

@@ -28,7 +28,7 @@ native **OpenTelemetry** instrumentation throughout.
 | ------------------------ | -------------------------------------- | --------------------------- |
 | License                  | MIT                                    | EULA-gated                  |
 | Embeddable in tests      | ✅ `OpenServiceBus.Testing` NuGet      | ❌                          |
-| Container size           | ~230 MB Alpine                         | ~2 GB                       |
+| Container size           | ~300 MB Alpine                         | ~2 GB                       |
 | Persistence              | In-memory or SQLite (single file)      | SQL Server (required)       |
 | Transports               | AMQP-TCP + AMQP-over-WebSocket         | AMQP-TCP only               |
 | Telemetry                | Native OpenTelemetry tracing + metrics | None                        |

@@ -143,8 +143,9 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
 
     public int Credit => 100;
 
-    public Message HandleRequest(Message request)
+    public Message HandleRequest(Message request, Connection? connection)
     {
+        _ = connection;
         var operation = GetOperation(request);
 
         try
@@ -265,7 +266,17 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
                     $"BadRequest: A SessionId is required for messages scheduled on session-enabled entity '{_entityName}'.");
             }
 
-            var stored = _store.EnqueueAsync(_entityName, encoded, expiresAt, scheduledTime, sessionId).GetAwaiter().GetResult();
+            // Honor duplicate detection on the schedule path too - otherwise scheduling the
+            // same MessageId twice delivers two copies, unlike the normal send path.
+            // (Auto-forwarding is deliberately not applied here: the caller needs a stable
+            // sequence number on THIS entity to cancel the scheduled message later, which a
+            // forwarded copy on another entity could not provide.)
+            var messageId = _descriptor.RequiresDuplicateDetection ? amqp.Properties?.MessageId?.ToString() : null;
+            var dedupWindow = _descriptor.RequiresDuplicateDetection
+                ? _descriptor.DuplicateDetectionHistoryTimeWindow ?? TimeSpan.FromMinutes(10)
+                : (TimeSpan?)null;
+
+            var stored = _store.EnqueueAsync(_entityName, encoded, expiresAt, scheduledTime, sessionId, messageId, dedupWindow).GetAwaiter().GetResult();
             sequenceNumbers[i] = stored.SequenceNumber;
         }
 

@@ -12,7 +12,7 @@ OpenServiceBus.Host reads configuration from three layers, in order of precedenc
 | ------------------------------------------ | ------------------------- | ------------------------------------------------- |
 | `OpenServiceBus__Amqp__Host`               | `0.0.0.0`                 | Host the AMQP listener binds to                   |
 | `OpenServiceBus__Amqp__Port`               | `5672`                    | AMQP listener port                                |
-| `OpenServiceBus__Amqp__ContainerId`        | random                    | Container-id reported in AMQP Open frame          |
+| `OpenServiceBus__Amqp__ContainerId`        | `OpenServiceBus`          | Container-id reported in AMQP Open frame          |
 | `OpenServiceBus__Amqp__IdleTimeoutMs`      | `30000`                   | AMQP idle-timeout advertised to clients           |
 | `OpenServiceBus__Amqp__MaxMessageSize`     | `262144`                  | Max message size on link attach (256 KB)          |
 | `OpenServiceBus__Amqp__RequireSasAuth`     | `false`                   | Enforce `$cbs put-token` validation               |
@@ -109,9 +109,15 @@ accepts any token. To enforce SAS:
 }
 ```
 
-When `RequireSasAuth=true` is set, the broker rejects every connection that doesn't include
-a valid `put-token` over `$cbs` before the first `attach`. Set the SDK connection string's
+When `RequireSasAuth=true` is set, the broker validates every `put-token` request sent to
+`$cbs` (signature, expiry, key name) and rejects invalid tokens, which the SDK surfaces as
+an authentication failure. Set the SDK connection string's
 `SharedAccessKeyName=`/`SharedAccessKey=` to one of the configured keys.
+
+> ⚠️ Validation currently only applies to clients that perform the `$cbs` handshake (the
+> Azure SDK always does). A raw AMQP client that skips `$cbs` is not yet blocked at
+> `attach` time, so `RequireSasAuth` is an SDK-level check, not a hard security boundary.
+> Treat the broker as a trusted-network dev tool either way.
 
 ## Storage mode
 

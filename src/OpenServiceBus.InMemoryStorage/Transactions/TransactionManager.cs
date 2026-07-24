@@ -63,9 +63,12 @@ public sealed class TransactionManager : ITransactionManager
             }
             catch (Exception ex)
             {
-                // Best-effort: log and continue. A real broker would fail the discharge,
-                // but on an in-memory store partial commits are already unavoidable on crashes.
-                _logger.LogError(ex, "Transactional op failed during commit of {TxnId}", FormatTxnId(txnId));
+                // Stop on the first failure and surface it so the coordinator fails the
+                // discharge - the client learns the commit did not fully apply rather than
+                // being told it succeeded. Ops already replayed stay applied (the in-memory
+                // store has no rollback), but stopping here keeps that footprint minimal.
+                _logger.LogError(ex, "Transactional op failed during commit of {TxnId}; failing the discharge", FormatTxnId(txnId));
+                throw;
             }
         }
     }

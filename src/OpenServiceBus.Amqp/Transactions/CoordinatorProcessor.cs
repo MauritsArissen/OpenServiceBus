@@ -56,20 +56,7 @@ public sealed class CoordinatorProcessor : IMessageProcessor
                     }
                 case Discharge discharge:
                     {
-                        if (discharge.Fail)
-                        {
-                            _transactions.Rollback(discharge.TxnId);
-                            _logger.LogDebug("Rolled back txn {TxnId}", Convert.ToHexString(discharge.TxnId));
-                        }
-                        else
-                        {
-                            // Fire-and-forget the commit replay - the SDK awaits the disposition,
-                            // not individual op completions, and the manager already drops ops
-                            // synchronously into the dictionary.
-                            _ = _transactions.CommitAsync(discharge.TxnId);
-                            _logger.LogDebug("Committed txn {TxnId}", Convert.ToHexString(discharge.TxnId));
-                        }
-                        messageContext.Complete();
+                        _ = HandleDischargeAsync(messageContext, discharge);
                         return;
                     }
                 default:
@@ -84,6 +71,35 @@ public sealed class CoordinatorProcessor : IMessageProcessor
         {
             _logger.LogError(ex, "Coordinator processing failed for body {Body}", body?.GetType().Name);
             messageContext.Complete(new Error(new Symbol(ErrorCode.InternalError)) { Description = ex.Message });
+        }
+    }
+
+    /// <summary>The AMQP error condition raised when a transaction cannot be committed.</summary>
+    private const string TransactionRollbackError = "amqp:transaction:rollback";
+
+    private async Task HandleDischargeAsync(MessageContext messageContext, Discharge discharge)
+    {
+        var txnId = Convert.ToHexString(discharge.TxnId);
+        try
+        {
+            if (discharge.Fail)
+            {
+                _transactions.Rollback(discharge.TxnId);
+                _logger.LogDebug("Rolled back txn {TxnId}", txnId);
+                messageContext.Complete();
+                return;
+            }
+
+            await _transactions.CommitAsync(discharge.TxnId).ConfigureAwait(false);
+            _logger.LogDebug("Committed txn {TxnId}", txnId);
+            messageContext.Complete();
+        }
+        catch (Exception ex)
+        {
+            // A replay op failed. Fail the discharge so the client's commit call throws
+            // instead of returning success over silently-lost operations.
+            _logger.LogError(ex, "Commit replay failed for txn {TxnId}; failing the discharge", txnId);
+            messageContext.Complete(new Error(new Symbol(TransactionRollbackError)) { Description = ex.Message });
         }
     }
 }

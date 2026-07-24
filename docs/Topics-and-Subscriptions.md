@@ -79,9 +79,13 @@ Supports:
 | Boolean          | `AND` `OR` `NOT`                                                             |
 | Membership       | `IN (a, b, c)` / `NOT IN (...)`                                              |
 | Pattern          | `LIKE 'foo%'`, `LIKE 'a_c'`, `NOT LIKE ...`                                  |
-| Existence        | `IS NULL`, `IS NOT NULL`                                                     |
+| Existence        | `IS NULL`, `IS NOT NULL`, `EXISTS(prop)` / `NOT EXISTS(prop)`                |
 | Property scoping | `sys.MessageId`, `user.region`, or bare `region` (defaults to user-property) |
 | Functions        | (none in v1 - keep it predictable)                                           |
+
+Not supported (rejected or unavailable): arithmetic and string concatenation, `BETWEEN`,
+the `ESCAPE` clause on `LIKE`, functions (`newid()`, `UPPER`, ...), parameterized filters,
+and rule **actions** (`SET x = y` is accepted on the wire but not evaluated).
 
 Property scoping note: `sys.*` refers to AMQP system properties (MessageId, CorrelationId,
 Subject, To, ReplyTo, etc.); `user.*` and unscoped names look up `ApplicationProperties`.

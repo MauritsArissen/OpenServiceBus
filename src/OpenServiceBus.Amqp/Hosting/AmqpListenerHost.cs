@@ -32,6 +32,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
     private ContainerHost? _host;
     private readonly RequestNodeRegistry _requestNodes = new();
     private readonly ResponsePairTable _responsePairs = new();
+    private readonly ConnectionAuthRegistry _connectionAuth = new();
 
     public AmqpListenerHost(
         IOptions<AmqpListenerOptions> options,
@@ -77,13 +78,13 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
             listener.HandlerFactory = _ => handler;
         }
 
-        _requestNodes.Register("$cbs", new CbsRequestProcessor(_options, _loggerFactory.CreateLogger<CbsRequestProcessor>()));
+        _requestNodes.Register("$cbs", new CbsRequestProcessor(_options, _connectionAuth, _loggerFactory.CreateLogger<CbsRequestProcessor>()));
 
         host.AddressResolver = (_, attach) => attach.Target is Coordinator ? CoordinatorProcessor.Address : null;
         host.RegisterMessageProcessor(CoordinatorProcessor.Address,
             new CoordinatorProcessor(_transactions, _loggerFactory.CreateLogger<CoordinatorProcessor>()));
 
-        var linkProcessor = new EntityLinkProcessor(_queueRegistry, _messageStore, _router, _transactions, Options.Create(_options), _timeProvider, _loggerFactory, _requestNodes, _responsePairs, _topicRegistry);
+        var linkProcessor = new EntityLinkProcessor(_queueRegistry, _messageStore, _router, _transactions, Options.Create(_options), _timeProvider, _loggerFactory, _requestNodes, _responsePairs, _connectionAuth, _topicRegistry);
         host.RegisterLinkProcessor(linkProcessor);
 
         host.Open();
