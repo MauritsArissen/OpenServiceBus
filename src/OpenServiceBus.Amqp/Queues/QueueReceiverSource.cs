@@ -197,7 +197,10 @@ public sealed class QueueReceiverSource : IMessageSource
                 }
                 else
                 {
-                    dispositionContext.Complete();
+                    dispositionContext.Complete(new Error(new Symbol(ErrorCode.IllegalState))
+                    {
+                        Description = "Unknown or already-discharged transaction id.",
+                    });
                 }
                 activity?.SetTag(OpenServiceBusDiagnostics.TagDisposition, "transactional");
                 return;

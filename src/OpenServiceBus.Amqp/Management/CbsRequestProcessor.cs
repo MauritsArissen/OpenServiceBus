@@ -28,18 +28,20 @@ namespace OpenServiceBus.Amqp.Management;
 public sealed class CbsRequestProcessor : IRequestNodeHandler
 {
     private readonly AmqpListenerOptions _options;
+    private readonly ConnectionAuthRegistry _connectionAuth;
     private readonly ILogger<CbsRequestProcessor>? _logger;
 
-    public CbsRequestProcessor(AmqpListenerOptions options, ILogger<CbsRequestProcessor>? logger = null)
+    public CbsRequestProcessor(AmqpListenerOptions options, ConnectionAuthRegistry connectionAuth, ILogger<CbsRequestProcessor>? logger = null)
     {
         _options = options;
+        _connectionAuth = connectionAuth;
         _logger = logger;
     }
 
     /// <summary>Link credit advertised to clients on the $cbs request link.</summary>
     public int Credit => 100;
 
-    public Message HandleRequest(Message request)
+    public Message HandleRequest(Message request, Connection? connection)
     {
         if (_options.RequireSasAuth)
         {
@@ -49,6 +51,11 @@ public sealed class CbsRequestProcessor : IRequestNodeHandler
             {
                 _logger?.LogWarning("Rejected $cbs put-token: {Reason}", result.FailureReason);
                 return BuildResponse(request, 401, "Unauthorized: " + result.FailureReason);
+            }
+
+            if (connection is not null)
+            {
+                _connectionAuth.MarkAuthenticated(connection);
             }
             _logger?.LogDebug("Accepted $cbs put-token for audience {Audience} (keyName={Key})", result.Audience, result.KeyName);
         }

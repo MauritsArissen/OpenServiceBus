@@ -17,7 +17,12 @@ public interface IRequestNodeHandler
     /// <summary>Link credit advertised to clients on the node's request link.</summary>
     int Credit { get; }
 
-    Message HandleRequest(Message request);
+    /// <summary>
+    /// Handle one request. <paramref name="connection"/> is the AMQP connection the request
+    /// arrived on - the CBS handler uses it to record successful authentication; other nodes
+    /// ignore it.
+    /// </summary>
+    Message HandleRequest(Message request, Connection? connection);
 }
 
 /// <summary>
@@ -94,14 +99,14 @@ public sealed class RequestNodeIngressProcessor : IMessageProcessor
 {
     private readonly IRequestNodeHandler _handler;
     private readonly ResponsePairTable _pairs;
-    private readonly object _session;
+    private readonly Session _session;
     private readonly string _address;
     private readonly ILogger _logger;
 
     public RequestNodeIngressProcessor(
         IRequestNodeHandler handler,
         ResponsePairTable pairs,
-        object session,
+        Session session,
         string address,
         ILogger logger)
     {
@@ -119,7 +124,7 @@ public sealed class RequestNodeIngressProcessor : IMessageProcessor
         Message response;
         try
         {
-            response = _handler.HandleRequest(messageContext.Message);
+            response = _handler.HandleRequest(messageContext.Message, _session.Connection);
         }
         catch (Exception ex)
         {

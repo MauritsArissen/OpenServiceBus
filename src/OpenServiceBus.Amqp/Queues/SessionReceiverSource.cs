@@ -98,6 +98,12 @@ public sealed class SessionReceiverSource : IMessageSource
                 {
                     // Poll timeout - loop and re-check drain state.
                 }
+
+                if (locked is null && !cts.IsCancellationRequested)
+                {
+                    _logger.LogDebug("Session lock lost for '{Session}' on '{Entity}'; ending receiver pump.", SessionId, _entityName);
+                    return null!;
+                }
             }
 
             if (locked.Message.IsExpired(_timeProvider.GetUtcNow()))
@@ -150,7 +156,13 @@ public sealed class SessionReceiverSource : IMessageSource
                 }
                 else
                 {
-                    dispositionContext.Complete();
+                    // Reject unknown/discharged txns instead of settling as success - see the
+                    // matching note in QueueReceiverSource; a false success silently loses the
+                    // disposition and lets the message redeliver.
+                    dispositionContext.Complete(new Error(new Symbol(ErrorCode.IllegalState))
+                    {
+                        Description = "Unknown or already-discharged transaction id.",
+                    });
                 }
                 return;
             }

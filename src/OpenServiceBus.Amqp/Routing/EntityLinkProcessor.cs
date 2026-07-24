@@ -45,6 +45,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
     private readonly ConcurrentDictionary<string, QueueReceiverSource> _receiverSources = new(StringComparer.OrdinalIgnoreCase);
     private readonly RequestNodeRegistry _requestNodes;
     private readonly ResponsePairTable _responsePairs;
+    private readonly ConnectionAuthRegistry _connectionAuth;
 
     public EntityLinkProcessor(
         IQueueRegistry registry,
@@ -56,6 +57,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         ILoggerFactory loggerFactory,
         RequestNodeRegistry requestNodes,
         ResponsePairTable responsePairs,
+        ConnectionAuthRegistry connectionAuth,
         ITopicRegistry? topics = null)
     {
         _registry = registry;
@@ -68,6 +70,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         _loggerFactory = loggerFactory;
         _requestNodes = requestNodes;
         _responsePairs = responsePairs;
+        _connectionAuth = connectionAuth;
         _logger = loggerFactory.CreateLogger<EntityLinkProcessor>();
     }
 
@@ -82,12 +85,14 @@ public sealed class EntityLinkProcessor : ILinkProcessor
                 ? (attach.Target as Target)?.Address
                 : (attach.Source as Source)?.Address);
 
-            // Request/response nodes ($cbs, <entity>/$management) are wired here rather than
-            // through ContainerHost's request processors - Azure routes their replies by link,
-            // while AMQPNetLite keys them on a single global reply-to address, which breaks
-            // rhea (no reply address at all) and proton-j (the same fixed address on every
-            // connection). See RequestNodeRegistry. Replies pair with requests via the AMQP
-            // session both live on, which all four official SDK stacks guarantee.
+            if (_options.RequireSasAuth && !IsCbsAddress(rawAddress)
+                && !_connectionAuth.IsAuthenticated(attachContext.Link.Session?.Connection))
+            {
+                Reject(attachContext, UnauthorizedAccessError,
+                    "Connection is not authenticated. Present a valid SAS token via $cbs before attaching.");
+                return;
+            }
+
             if (RequestNodeRegistry.IsRequestResponseAddress(rawAddress))
             {
                 WireRequestResponseNode(attachContext, RequestNodeRegistry.Normalize(rawAddress!), isReceiverFromClient);
@@ -354,7 +359,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
                             // session back so another receiver can take it.
                             _logger.LogDebug(ex, "Parked session attach on {Entity} failed to complete - releasing {Session}.",
                                 descriptor.Name, sessionLock.SessionId);
-                            await _store.ReleaseSessionAsync(descriptor.Name, sessionLock.SessionId).ConfigureAwait(false);
+                            await _store.ReleaseSessionAsync(descriptor.Name, sessionLock.SessionId, linkName).ConfigureAwait(false);
                         }
                         return;
                     }
@@ -408,12 +413,14 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         SessionFilter.WriteAcceptedSessionFilter(attachContext.Attach, sessionLock.SessionId, sessionLock.LockedUntil);
 
         // When the link closes (clean detach OR network drop), release the session lock so
-        // another receiver can pick the session up.
+        // another receiver can pick the session up - but only if THIS link still holds it.
+        // A stale detach arriving after the lock expired and was reacquired must not release
+        // the new owner's lock.
         attachContext.Link.Closed += (sender, error) =>
         {
             try
             {
-                _store.ReleaseSessionAsync(descriptor.Name, sessionLock.SessionId).GetAwaiter().GetResult();
+                _store.ReleaseSessionAsync(descriptor.Name, sessionLock.SessionId, linkName).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -472,4 +479,10 @@ public sealed class EntityLinkProcessor : ILinkProcessor
     {
         attachContext.Complete(new Error(new Symbol(code)) { Description = description });
     }
+
+    private const string UnauthorizedAccessError = "amqp:unauthorized-access";
+
+    private static bool IsCbsAddress(string? rawAddress) =>
+        rawAddress is not null
+        && RequestNodeRegistry.Normalize(rawAddress).Equals("$cbs", StringComparison.OrdinalIgnoreCase);
 }

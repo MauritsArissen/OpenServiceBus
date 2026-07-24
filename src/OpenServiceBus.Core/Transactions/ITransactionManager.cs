@@ -21,7 +21,11 @@ public interface ITransactionManager
     /// </summary>
     bool Enlist(byte[] txnId, Func<CancellationToken, Task> operation);
 
-    /// <summary>Replay every enlisted op in order and forget the txn. No-op on unknown txn id.</summary>
+    /// <summary>
+    /// Replay every enlisted op in order and forget the txn. No-op on unknown txn id.
+    /// Stops at the first op that throws and rethrows it so the coordinator can fail the
+    /// discharge; ops replayed before the failure stay applied (the store has no rollback).
+    /// </summary>
     Task CommitAsync(byte[] txnId, CancellationToken cancellationToken = default);
 
     /// <summary>Discard every enlisted op and forget the txn. No-op on unknown txn id.</summary>
