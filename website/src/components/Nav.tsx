@@ -27,18 +27,7 @@ export default function Nav() {
           to="/"
           className="flex items-center gap-2 text-sm font-semibold text-neutral-100 hover:text-white transition min-w-0"
         >
-          <span className="inline-flex h-6 w-6 items-center justify-center rounded bg-violet-600 shrink-0">
-            <svg
-              viewBox="0 0 24 24"
-              className="h-3.5 w-3.5 text-white"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-            >
-              <path d="M5 8h14M5 12h14M5 16h14" />
-            </svg>
-          </span>
+          <img src="/favicon.svg" alt="OpenServiceBus" className="h-7 w-7 shrink-0" />
           {/* Logo-only on phones (under 640px) so the three nav links don't get pushed off. */}
           <span className="hidden sm:inline truncate">OpenServiceBus</span>
         </Link>
