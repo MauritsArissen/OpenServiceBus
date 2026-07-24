@@ -5,6 +5,7 @@ import { EntityView } from "@/components/EntityView";
 import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { StoreProvider } from "@/store";
 
 export default function App() {
@@ -32,6 +33,7 @@ export default function App() {
           </div>
         </div>
         <DialogHost />
+        <UpdateBanner />
         <Toaster richColors position="bottom-right" closeButton />
       </TooltipProvider>
     </StoreProvider>

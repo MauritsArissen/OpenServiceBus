@@ -237,6 +237,13 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           )}
         </div>
       </Collapsible>
+
+      {/* Running version - only shown when the image baked one in (OSB_EXPLORER_VERSION). */}
+      {store.version && (
+        <div className="border-t px-3 py-1.5 text-center text-[11px] text-muted-foreground">
+          Explorer <span className="font-mono">v{store.version}</span>
+        </div>
+      )}
     </aside>
   );
 }

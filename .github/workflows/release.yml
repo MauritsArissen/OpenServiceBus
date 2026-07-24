@@ -209,6 +209,8 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          build-args: |
+            VERSION=${{ env.VERSION }}
           labels: |
             org.opencontainers.image.title=OpenServiceBus
             org.opencontainers.image.description=Zero-dependency, embeddable Azure Service Bus emulator
