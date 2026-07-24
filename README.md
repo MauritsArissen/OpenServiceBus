@@ -1,9 +1,13 @@
-# OpenServiceBus
+<p align="center">
+  <img src="docs/assets/logo.png" alt="OpenServiceBus" width="440" />
+</p>
 
-[![CI](https://github.com/mauritsarissen/OpenServiceBus/actions/workflows/ci.yml/badge.svg)](https://github.com/mauritsarissen/OpenServiceBus/actions/workflows/ci.yml)
-[![NuGet](https://img.shields.io/nuget/v/OpenServiceBus.Testing.svg?logo=nuget&label=nuget.org)](https://www.nuget.org/packages/OpenServiceBus.Testing)
-[![Docker Hub](https://img.shields.io/badge/Docker-mauritsarissen%2Fopenservicebus-2496ED?logo=docker)](https://hub.docker.com/r/mauritsarissen/openservicebus)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/mauritsarissen/OpenServiceBus/actions/workflows/ci.yml"><img src="https://github.com/mauritsarissen/OpenServiceBus/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://www.nuget.org/packages/OpenServiceBus.Testing"><img src="https://img.shields.io/nuget/v/OpenServiceBus.Testing.svg?logo=nuget&label=nuget.org" alt="NuGet" /></a>
+  <a href="https://hub.docker.com/r/mauritsarissen/openservicebus"><img src="https://img.shields.io/badge/Docker-mauritsarissen%2Fopenservicebus-2496ED?logo=docker" alt="Docker Hub" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+</p>
 
 > A zero-dependency, embeddable **Azure Service Bus emulator** for .NET. Speaks real AMQP 1.0
 > over TCP **and** WebSocket so `Azure.Messaging.ServiceBus`, Azure Functions `ServiceBusTrigger`,
