@@ -23,6 +23,13 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
     localStorage.setItem(LS_THEME, dark ? "dark" : "light");
+    // Keep the browser-chrome theme colour matched to the app background. Otherwise iOS Safari
+    // colours the URL bar from the phone's system appearance - a dark-mode phone then paints a
+    // dark bar over the light Explorer. Reading the computed body background makes the bar blend
+    // in for whichever theme is active (this is why openservicebus.net, which pins theme-color to
+    // its always-dark background, never shows the bar).
+    const bg = getComputedStyle(document.body).backgroundColor;
+    if (bg) document.querySelector('meta[name="theme-color"]')?.setAttribute("content", bg);
   }, [dark]);
 
   const meta = STATUS_META[status];
