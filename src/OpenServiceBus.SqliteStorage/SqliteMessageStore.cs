@@ -135,71 +135,87 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         try
         {
             var now = _timeProvider.GetUtcNow();
-            EnsureQueueRow(queueName);
-
-            // Dedup check happens before sequence allocation so duplicate sends don't burn ids.
-            if (duplicateDetectionWindow is not null && !string.IsNullOrEmpty(messageId))
-            {
-                SweepDedupHistory(queueName, now);
-                var existing = LookupDedupOriginal(queueName, messageId, now);
-                if (existing is not null) return existing;
-            }
-
-            // Per-queue monotonic sequence - allocate inside the gate so two concurrent
-            // enqueues can't collide. RETURNING gives us the new value atomically.
-            var seq = AllocateSequence(queueName);
+            var dedupEnabled = duplicateDetectionWindow is not null && !string.IsNullOrEmpty(messageId);
 
             // A scheduled time in the past has no meaning - fold it into "available immediately"
             // so the dequeue path doesn't need a "scheduled but already due" check.
             var effectiveSchedule = scheduledEnqueueTime is { } sched && sched > now ? scheduledEnqueueTime : null;
 
-            using (var cmd = _connection.CreateCommand())
+            // Queue-row creation, the dedup check, the sequence bump, the message INSERT, and the
+            // dedup-history INSERT all run in ONE transaction. Otherwise a crash between the
+            // message and dedup-history writes would persist the message without its dedup record,
+            // and the sender's retry of the same MessageId would be accepted as new after restart -
+            // defeating crash-safe dedup, which is the whole point of the persistent store.
+            var (stored, wasDuplicate) = WithTransaction(tx =>
             {
-                cmd.CommandText = """
-                    INSERT INTO messages
-                        (queue_name, sequence_number, enqueued_at, encoded_message,
-                         delivery_count, expires_at, scheduled_enqueue_time, is_deferred, session_id)
-                    VALUES
-                        ($q, $seq, $enq, $body, $dc, $exp, $sched, 0, $sid)
-                    """;
-                cmd.Parameters.AddWithValue("$q", queueName);
-                cmd.Parameters.AddWithValue("$dc", deliveryCount);
-                cmd.Parameters.AddWithValue("$seq", seq);
-                cmd.Parameters.AddWithValue("$enq", ToUnixMs(now));
-                cmd.Parameters.AddWithValue("$body", encodedMessage);
-                cmd.Parameters.AddWithValue("$exp", (object?)ToUnixMs(expiresAt) ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$sched", (object?)ToUnixMs(effectiveSchedule) ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$sid", (object?)sessionId ?? DBNull.Value);
-                cmd.ExecuteNonQuery();
-            }
+                EnsureQueueRow(tx, queueName);
 
-            if (duplicateDetectionWindow is not null && !string.IsNullOrEmpty(messageId))
-            {
-                using var cmd = _connection.CreateCommand();
-                cmd.CommandText = """
-                    INSERT INTO dedup_history(queue_name, message_id, original_sequence_number, expires_at)
-                    VALUES ($q, $mid, $seq, $exp)
-                    ON CONFLICT(queue_name, message_id) DO UPDATE SET
-                        original_sequence_number = excluded.original_sequence_number,
-                        expires_at = excluded.expires_at
-                    """;
-                cmd.Parameters.AddWithValue("$q", queueName);
-                cmd.Parameters.AddWithValue("$mid", messageId);
-                cmd.Parameters.AddWithValue("$seq", seq);
-                cmd.Parameters.AddWithValue("$exp", ToUnixMs(now + duplicateDetectionWindow.Value));
-                cmd.ExecuteNonQuery();
-            }
+                // Dedup check happens before sequence allocation so duplicate sends don't burn ids.
+                if (dedupEnabled)
+                {
+                    SweepDedupHistory(tx, queueName, now);
+                    var existing = LookupDedupOriginal(tx, queueName, messageId!, now);
+                    if (existing is not null) return (existing, true);
+                }
 
-            var stored = new StoredMessage
+                var seq = AllocateSequence(tx, queueName);
+
+                using (var cmd = _connection.CreateCommand())
+                {
+                    cmd.Transaction = tx;
+                    cmd.CommandText = """
+                        INSERT INTO messages
+                            (queue_name, sequence_number, enqueued_at, encoded_message,
+                             delivery_count, expires_at, scheduled_enqueue_time, is_deferred, session_id)
+                        VALUES
+                            ($q, $seq, $enq, $body, $dc, $exp, $sched, 0, $sid)
+                        """;
+                    cmd.Parameters.AddWithValue("$q", queueName);
+                    cmd.Parameters.AddWithValue("$dc", deliveryCount);
+                    cmd.Parameters.AddWithValue("$seq", seq);
+                    cmd.Parameters.AddWithValue("$enq", ToUnixMs(now));
+                    cmd.Parameters.AddWithValue("$body", encodedMessage);
+                    cmd.Parameters.AddWithValue("$exp", (object?)ToUnixMs(expiresAt) ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$sched", (object?)ToUnixMs(effectiveSchedule) ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$sid", (object?)sessionId ?? DBNull.Value);
+                    cmd.ExecuteNonQuery();
+                }
+
+                if (dedupEnabled)
+                {
+                    using var cmd = _connection.CreateCommand();
+                    cmd.Transaction = tx;
+                    cmd.CommandText = """
+                        INSERT INTO dedup_history(queue_name, message_id, original_sequence_number, expires_at)
+                        VALUES ($q, $mid, $seq, $exp)
+                        ON CONFLICT(queue_name, message_id) DO UPDATE SET
+                            original_sequence_number = excluded.original_sequence_number,
+                            expires_at = excluded.expires_at
+                        """;
+                    cmd.Parameters.AddWithValue("$q", queueName);
+                    cmd.Parameters.AddWithValue("$mid", messageId);
+                    cmd.Parameters.AddWithValue("$seq", seq);
+                    cmd.Parameters.AddWithValue("$exp", ToUnixMs(now + duplicateDetectionWindow!.Value));
+                    cmd.ExecuteNonQuery();
+                }
+
+                var message = new StoredMessage
+                {
+                    SequenceNumber = seq,
+                    EnqueuedAt = now,
+                    EncodedMessage = encodedMessage,
+                    ExpiresAt = expiresAt,
+                    ScheduledEnqueueTime = effectiveSchedule,
+                    SessionId = sessionId,
+                    DeliveryCount = deliveryCount,
+                };
+                return (message, false);
+            });
+
+            if (wasDuplicate)
             {
-                SequenceNumber = seq,
-                EnqueuedAt = now,
-                EncodedMessage = encodedMessage,
-                ExpiresAt = expiresAt,
-                ScheduledEnqueueTime = effectiveSchedule,
-                SessionId = sessionId,
-                DeliveryCount = deliveryCount,
-            };
+                return stored;
+            }
 
             _enqueuedTotal.AddOrUpdate(queueName, 1, (_, v) => v + 1); // cumulative "new messages"
 
@@ -215,9 +231,10 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
-    private long AllocateSequence(string queueName)
+    private long AllocateSequence(SqliteTransaction tx, string queueName)
     {
         using var cmd = _connection.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             UPDATE sequence_counters
             SET next_sequence = next_sequence + 1
@@ -231,11 +248,12 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             : Convert.ToInt64(result);
     }
 
-    private void EnsureQueueRow(string queueName)
+    private void EnsureQueueRow(SqliteTransaction tx, string queueName)
     {
         // Called inside the gate; idempotent - handles the "enqueue to a queue created
         // moments ago in a parallel session" edge case where the FK would otherwise fail.
         using var cmd = _connection.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO queues(name) VALUES ($q) ON CONFLICT(name) DO NOTHING;
             INSERT INTO sequence_counters(queue_name, next_sequence) VALUES ($q, 0)
@@ -245,23 +263,30 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         cmd.ExecuteNonQuery();
     }
 
-    private void SweepDedupHistory(string queueName, DateTimeOffset now)
+    private void SweepDedupHistory(SqliteTransaction tx, string queueName, DateTimeOffset now)
     {
         using var cmd = _connection.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = "DELETE FROM dedup_history WHERE queue_name = $q AND expires_at <= $now";
         cmd.Parameters.AddWithValue("$q", queueName);
         cmd.Parameters.AddWithValue("$now", ToUnixMs(now));
         cmd.ExecuteNonQuery();
     }
 
-    private StoredMessage? LookupDedupOriginal(string queueName, string messageId, DateTimeOffset now)
+    private StoredMessage? LookupDedupOriginal(SqliteTransaction tx, string queueName, string messageId, DateTimeOffset now)
     {
         using var cmd = _connection.CreateCommand();
+        cmd.Transaction = tx;
+        // Left join so a duplicate is still recognised (and dropped) even after the original
+        // message has been settled/expired and removed from the messages table - the dedup
+        // window, not the message's continued existence, defines a duplicate. When the original
+        // row is gone we return a synthetic StoredMessage carrying the recorded sequence number.
         cmd.CommandText = """
-            SELECT m.sequence_number, m.enqueued_at, m.encoded_message, m.delivery_count,
+            SELECT d.original_sequence_number,
+                   m.enqueued_at, m.encoded_message, m.delivery_count,
                    m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id
             FROM dedup_history d
-            JOIN messages m
+            LEFT JOIN messages m
               ON m.queue_name = d.queue_name AND m.sequence_number = d.original_sequence_number
             WHERE d.queue_name = $q AND d.message_id = $mid AND d.expires_at > $now
             """;
@@ -270,6 +295,18 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         cmd.Parameters.AddWithValue("$now", ToUnixMs(now));
         using var rdr = cmd.ExecuteReader();
         if (!rdr.Read()) return null;
+
+        // If the original message row is gone, the joined columns are NULL - return a minimal
+        // record so callers that only propagate the sequence number stay consistent.
+        if (rdr.IsDBNull(2))
+        {
+            return new StoredMessage
+            {
+                SequenceNumber = rdr.GetInt64(0),
+                EnqueuedAt = now,
+                EncodedMessage = Array.Empty<byte>(),
+            };
+        }
         return ReadStoredMessage(rdr, sequenceColIndex: 0);
     }
 
@@ -451,6 +488,15 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         {
             var now = _timeProvider.GetUtcNow();
             using var tx = _connection.BeginTransaction();
+
+            // For a session receive, only the current lock holder may claim a message. Checking
+            // inside the same transaction as the claim keeps sessions exclusive: a receiver whose
+            // lock expired (and was handed to someone else) cannot pull from the session.
+            if (sessionId is not null && !SessionLockHeldBy(tx, queueName, sessionId, associatedLinkName, now))
+            {
+                tx.Commit();
+                return null;
+            }
 
             // Find the lowest-seq message that's available (not deferred, not scheduled-future,
             // not currently locked, optionally matching a session). The session filter is used
@@ -905,6 +951,11 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         // Same long-poll shape as TryDequeueAsync but with the session filter applied.
         while (!cancellationToken.IsCancellationRequested)
         {
+            // If this receiver no longer holds the session lock, return null WITHOUT the poll
+            // cancellation so the AMQP session receiver stops its pump (lock-lost) instead of
+            // spinning against a session another receiver now owns.
+            if (!IsSessionLockHeld(queueName, sessionId, linkName)) return null;
+
             var locked = TryClaimNextNow(queueName, messageLockDuration, linkName, sessionId);
             if (locked is not null) return locked;
             var notify = GetNotifyChannel(queueName);
@@ -921,6 +972,37 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             }
         }
         return null;
+    }
+
+    /// <summary>
+    /// True when the session is locked, unexpired, and (if the lock records a holder link) held
+    /// by <paramref name="linkName"/>. Evaluated inside the caller's transaction.
+    /// </summary>
+    private bool SessionLockHeldBy(SqliteTransaction tx, string queueName, string sessionId, string? linkName, DateTimeOffset now)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT locked_until, link_name FROM session_locks WHERE queue_name = $q AND session_id = $sid";
+        cmd.Parameters.AddWithValue("$q", queueName);
+        cmd.Parameters.AddWithValue("$sid", sessionId);
+        using var rdr = cmd.ExecuteReader();
+        if (!rdr.Read()) return false;
+        if (FromUnixMs(rdr.GetInt64(0)) <= now) return false;
+        var holder = rdr.IsDBNull(1) ? null : rdr.GetString(1);
+        return holder is null || linkName is null || string.Equals(holder, linkName, StringComparison.Ordinal);
+    }
+
+    private bool IsSessionLockHeld(string queueName, string sessionId, string? linkName)
+    {
+        _gate.Wait();
+        try
+        {
+            using var tx = _connection.BeginTransaction();
+            var held = SessionLockHeldBy(tx, queueName, sessionId, linkName, _timeProvider.GetUtcNow());
+            tx.Commit();
+            return held;
+        }
+        finally { _gate.Release(); }
     }
 
     public async Task<DateTimeOffset?> TryRenewSessionLockAsync(
@@ -968,15 +1050,23 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
-    public async Task ReleaseSessionAsync(string queueName, string sessionId, CancellationToken cancellationToken = default)
+    public async Task ReleaseSessionAsync(string queueName, string sessionId, string? expectedLinkName = null, CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM session_locks WHERE queue_name = $q AND session_id = $sid";
+            // Release only if we still hold it: when expectedLinkName is given, require the stored
+            // holder to match (or be NULL) so a stale receiver's late detach can't drop the lock a
+            // new receiver already acquired for the same session.
+            cmd.CommandText = """
+                DELETE FROM session_locks
+                WHERE queue_name = $q AND session_id = $sid
+                  AND ($link IS NULL OR link_name IS NULL OR link_name = $link)
+                """;
             cmd.Parameters.AddWithValue("$q", queueName);
             cmd.Parameters.AddWithValue("$sid", sessionId);
+            cmd.Parameters.AddWithValue("$link", (object?)expectedLinkName ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         }
         finally { _gate.Release(); }

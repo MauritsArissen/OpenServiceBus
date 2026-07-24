@@ -58,59 +58,72 @@ public sealed class InMemoryMessageStore : IMessageStore
         var state = GetQueue(queueName);
         var now = _timeProvider.GetUtcNow();
 
-        // Silent-drop duplicate sends. Azure SB does not surface the dup to the sender -
-        // the SDK gets an "accepted" disposition either way. We return the *original*
-        // StoredMessage so callers that propagate sequence numbers stay consistent.
-        if (duplicateDetectionWindow is not null && !string.IsNullOrEmpty(messageId))
+        // The dedup check and the enqueue must be atomic relative to each other, otherwise two
+        // concurrent sends of the same MessageId (exactly the retry case dedup exists for) can
+        // both pass the check and both land. Hold the per-queue lock for the whole body; it is
+        // all synchronous (no await), so this cannot block the thread pool for long.
+        StoredMessage message;
+        lock (state.Sync)
         {
-            // Lazy sweep of expired entries on each check; cheap because the map is small.
-            foreach (var (key, expiresAtUtc) in state.SeenMessageIds)
+            // Silent-drop duplicate sends. Azure SB does not surface the dup to the sender -
+            // the SDK gets an "accepted" disposition either way. We return the *original*
+            // StoredMessage so callers that propagate sequence numbers stay consistent.
+            if (duplicateDetectionWindow is not null && !string.IsNullOrEmpty(messageId))
             {
-                if (expiresAtUtc <= now) state.SeenMessageIds.TryRemove(key, out _);
+                // Lazy sweep of expired entries on each check; cheap because the map is small.
+                // Drop both parallel maps together so OriginalsByMessageId can't grow unbounded.
+                foreach (var (key, expiresAtUtc) in state.SeenMessageIds)
+                {
+                    if (expiresAtUtc <= now)
+                    {
+                        state.SeenMessageIds.TryRemove(key, out _);
+                        state.OriginalsByMessageId.TryRemove(key, out _);
+                    }
+                }
+                if (state.SeenMessageIds.TryGetValue(messageId, out var existingDeadline) && existingDeadline > now
+                    && state.OriginalsByMessageId.TryGetValue(messageId, out var original))
+                {
+                    return Task.FromResult(original);
+                }
             }
-            if (state.SeenMessageIds.TryGetValue(messageId, out var existingDeadline) && existingDeadline > now
-                && state.OriginalsByMessageId.TryGetValue(messageId, out var original))
-            {
-                return Task.FromResult(original);
-            }
-        }
 
-        var seq = Interlocked.Increment(ref state.NextSequenceNumber);
-        // A scheduled time in the past is meaningless - treat it as available immediately.
-        var effectiveSchedule = scheduledEnqueueTime is { } sched && sched > now ? scheduledEnqueueTime : null;
-        var message = new StoredMessage
-        {
-            SequenceNumber = seq,
-            EnqueuedAt = now,
-            EncodedMessage = encodedMessage,
-            ExpiresAt = expiresAt,
-            ScheduledEnqueueTime = effectiveSchedule,
-            SessionId = sessionId,
-            DeliveryCount = deliveryCount,
-        };
+            var seq = Interlocked.Increment(ref state.NextSequenceNumber);
+            // A scheduled time in the past is meaningless - treat it as available immediately.
+            var effectiveSchedule = scheduledEnqueueTime is { } sched && sched > now ? scheduledEnqueueTime : null;
+            message = new StoredMessage
+            {
+                SequenceNumber = seq,
+                EnqueuedAt = now,
+                EncodedMessage = encodedMessage,
+                ExpiresAt = expiresAt,
+                ScheduledEnqueueTime = effectiveSchedule,
+                SessionId = sessionId,
+                DeliveryCount = deliveryCount,
+            };
 
-        state.Messages[seq] = message;
-        Interlocked.Increment(ref state.EnqueuedTotal); // cumulative "new messages" counter
-        if (duplicateDetectionWindow is not null && !string.IsNullOrEmpty(messageId))
-        {
-            state.SeenMessageIds[messageId] = now + duplicateDetectionWindow.Value;
-            state.OriginalsByMessageId[messageId] = message;
-        }
-        if (effectiveSchedule is null)
-        {
-            if (sessionId is not null)
+            state.Messages[seq] = message;
+            Interlocked.Increment(ref state.EnqueuedTotal); // cumulative "new messages" counter
+            if (duplicateDetectionWindow is not null && !string.IsNullOrEmpty(messageId))
             {
-                // Session messages go to the per-session channel; only a session-locked receiver
-                // can read them, and ordering inside a session is preserved.
-                var session = state.GetOrAddSession(sessionId);
-                session.Available.Writer.TryWrite(seq);
+                state.SeenMessageIds[messageId] = now + duplicateDetectionWindow.Value;
+                state.OriginalsByMessageId[messageId] = message;
             }
-            else if (!state.Available.Writer.TryWrite(seq))
+            if (effectiveSchedule is null)
             {
-                throw new InvalidOperationException($"Queue '{queueName}' is closed.");
+                if (sessionId is not null)
+                {
+                    // Session messages go to the per-session channel; only a session-locked receiver
+                    // can read them, and ordering inside a session is preserved.
+                    var session = state.GetOrAddSession(sessionId);
+                    session.Available.Writer.TryWrite(seq);
+                }
+                else if (!state.Available.Writer.TryWrite(seq))
+                {
+                    throw new InvalidOperationException($"Queue '{queueName}' is closed.");
+                }
             }
+            // else: scheduled - waits in Messages until ActivateScheduled promotes it.
         }
-        // else: scheduled - waits in Messages until ActivateScheduled promotes it.
 
         return Task.FromResult(message);
     }
@@ -174,17 +187,23 @@ public sealed class InMemoryMessageStore : IMessageStore
 
         // Build a set of currently-locked sequence numbers - locked messages stay alive
         // even if they cross their TTL deadline; the lock holder gets the chance to settle them.
-        var locked = new HashSet<long>();
-        foreach (var entry in state.Locks.Values) locked.Add(entry.SequenceNumber);
-
         var expired = new List<StoredMessage>();
-        foreach (var (seq, msg) in state.Messages)
+        // Hold the queue lock so a message being claimed by a concurrent dequeue (which inserts
+        // its lock entry under the same lock) is never removed here between the claim and the
+        // lock insert - otherwise a message could be both delivered and expired.
+        lock (state.Sync)
         {
-            if (!msg.IsExpired(now)) continue;
-            if (locked.Contains(seq)) continue;
-            if (state.Messages.TryRemove(seq, out var removed))
+            var locked = new HashSet<long>();
+            foreach (var entry in state.Locks.Values) locked.Add(entry.SequenceNumber);
+
+            foreach (var (seq, msg) in state.Messages)
             {
-                expired.Add(removed);
+                if (!msg.IsExpired(now)) continue;
+                if (locked.Contains(seq)) continue;
+                if (state.Messages.TryRemove(seq, out var removed))
+                {
+                    expired.Add(removed);
+                }
             }
         }
         return expired;
@@ -224,27 +243,32 @@ public sealed class InMemoryMessageStore : IMessageStore
             return null;
         }
 
-        if (!state.Messages.TryGetValue(seq, out var stored))
+        // Claim the message and place the lock atomically w.r.t. the TTL sweeper. Without the
+        // lock, ExpireMessages could remove this sequence between the lookup and the lock insert,
+        // handing the same message to both the receiver and the DLQ.
+        lock (state.Sync)
         {
-            // The message was completed/deleted out-of-band - skip and try the next.
-            return await TryDequeueAsync(queueName, lockDuration, associatedLinkName, cancellationToken).ConfigureAwait(false);
+            if (state.Messages.TryGetValue(seq, out var stored))
+            {
+                var lockToken = Guid.NewGuid();
+                var lockedUntil = _timeProvider.GetUtcNow() + lockDuration;
+                state.Locks[lockToken] = new LockEntry
+                {
+                    SequenceNumber = seq,
+                    LockedUntil = lockedUntil,
+                    AssociatedLink = associatedLinkName,
+                };
+                return new LockedMessage
+                {
+                    Message = stored,
+                    LockToken = lockToken,
+                    LockedUntil = lockedUntil,
+                };
+            }
         }
 
-        var lockToken = Guid.NewGuid();
-        var lockedUntil = _timeProvider.GetUtcNow() + lockDuration;
-        state.Locks[lockToken] = new LockEntry
-        {
-            SequenceNumber = seq,
-            LockedUntil = lockedUntil,
-            AssociatedLink = associatedLinkName,
-        };
-
-        return new LockedMessage
-        {
-            Message = stored,
-            LockToken = lockToken,
-            LockedUntil = lockedUntil,
-        };
+        // The message was completed/deleted/expired out-of-band - skip and try the next.
+        return await TryDequeueAsync(queueName, lockDuration, associatedLinkName, cancellationToken).ConfigureAwait(false);
     }
 
     public Task<bool> TryCompleteAsync(
@@ -292,24 +316,29 @@ public sealed class InMemoryMessageStore : IMessageStore
         if (!_queues.TryGetValue(queueName, out var state)) return 0;
 
         var expired = 0;
-        foreach (var (token, entry) in state.Locks)
+        // Lock so a renewal (which mutates LockedUntil in place) can't slip between reading the
+        // deadline here and removing the token - otherwise a just-renewed lock could be revoked.
+        lock (state.Sync)
         {
-            if (entry.LockedUntil > now) continue;
-            if (!state.Locks.TryRemove(token, out _)) continue;
+            foreach (var (token, entry) in state.Locks)
+            {
+                if (entry.LockedUntil > now) continue;
+                if (!state.Locks.TryRemove(token, out _)) continue;
 
-            if (entry.WasDeferred)
-            {
-                // Deferred-then-locked messages return to Deferred on expiry, not to Active.
-                if (state.Messages.TryGetValue(entry.SequenceNumber, out var msg))
+                if (entry.WasDeferred)
                 {
-                    state.Messages[entry.SequenceNumber] = msg with { IsDeferred = true };
+                    // Deferred-then-locked messages return to Deferred on expiry, not to Active.
+                    if (state.Messages.TryGetValue(entry.SequenceNumber, out var msg))
+                    {
+                        state.Messages[entry.SequenceNumber] = msg with { IsDeferred = true };
+                    }
                 }
+                else
+                {
+                    ReturnToAvailableWithIncrementedDeliveryCount(state, entry.SequenceNumber, entry.SessionId);
+                }
+                expired++;
             }
-            else
-            {
-                ReturnToAvailableWithIncrementedDeliveryCount(state, entry.SequenceNumber, entry.SessionId);
-            }
-            expired++;
         }
         return expired;
     }
@@ -344,24 +373,29 @@ public sealed class InMemoryMessageStore : IMessageStore
         CancellationToken cancellationToken = default)
     {
         var state = GetQueue(queueName);
-        if (!state.Locks.TryGetValue(lockToken, out var entry))
+        // Lock so the renewal is atomic against ExpireLocks: it must not renew a token the
+        // sweeper is concurrently revoking, and the sweeper must not revoke one just renewed.
+        lock (state.Sync)
         {
-            return Task.FromResult<DateTimeOffset?>(null);
-        }
+            if (!state.Locks.TryGetValue(lockToken, out var entry))
+            {
+                return Task.FromResult<DateTimeOffset?>(null);
+            }
 
-        // Link-affinity check: if the lock was taken from a specific link, only that link
-        // can renew it. Matches Service Bus's lock-link scoping - a sneaky cross-link renew
-        // attempt returns Gone.
-        if (entry.AssociatedLink is not null
-            && requestingLinkName is not null
-            && !string.Equals(entry.AssociatedLink, requestingLinkName, StringComparison.Ordinal))
-        {
-            return Task.FromResult<DateTimeOffset?>(null);
-        }
+            // Link-affinity check: if the lock was taken from a specific link, only that link
+            // can renew it. Matches Service Bus's lock-link scoping - a sneaky cross-link renew
+            // attempt returns Gone.
+            if (entry.AssociatedLink is not null
+                && requestingLinkName is not null
+                && !string.Equals(entry.AssociatedLink, requestingLinkName, StringComparison.Ordinal))
+            {
+                return Task.FromResult<DateTimeOffset?>(null);
+            }
 
-        var newUntil = _timeProvider.GetUtcNow() + lockDuration;
-        entry.LockedUntil = newUntil;
-        return Task.FromResult<DateTimeOffset?>(newUntil);
+            var newUntil = _timeProvider.GetUtcNow() + lockDuration;
+            entry.LockedUntil = newUntil;
+            return Task.FromResult<DateTimeOffset?>(newUntil);
+        }
     }
 
     public Task<StoredMessage?> TryRemoveLockedAsync(
@@ -528,6 +562,15 @@ public sealed class InMemoryMessageStore : IMessageStore
         var state = GetQueue(queueName);
         if (!state.Sessions.TryGetValue(sessionId, out var session)) return null;
 
+        // Only the current lock holder may pull from the session. If the lock has expired or
+        // been handed to another receiver, return null (without cancellation) so the caller's
+        // pump stops instead of interleaving with the new owner - this is the signal the AMQP
+        // session receiver treats as "session lock lost".
+        if (!IsSessionLockHeldBy(session, linkName))
+        {
+            return null;
+        }
+
         long seq;
         try
         {
@@ -590,12 +633,24 @@ public sealed class InMemoryMessageStore : IMessageStore
         }
     }
 
-    public Task ReleaseSessionAsync(string queueName, string sessionId, CancellationToken cancellationToken = default)
+    public Task ReleaseSessionAsync(string queueName, string sessionId, string? expectedLinkName = null, CancellationToken cancellationToken = default)
     {
         var state = GetQueue(queueName);
         if (state.Sessions.TryGetValue(sessionId, out var session))
         {
-            lock (session) { session.Lock = null; }
+            lock (session)
+            {
+                // Only release the lock we still own. If expectedLinkName is given and the
+                // current holder is a different link, another receiver has taken over the
+                // session since - leave its lock intact.
+                if (expectedLinkName is null
+                    || session.Lock is null
+                    || session.Lock.LinkName is null
+                    || string.Equals(session.Lock.LinkName, expectedLinkName, StringComparison.Ordinal))
+                {
+                    session.Lock = null;
+                }
+            }
         }
         return Task.CompletedTask;
     }
@@ -637,11 +692,41 @@ public sealed class InMemoryMessageStore : IMessageStore
         return state;
     }
 
+    /// <summary>
+    /// True when <paramref name="session"/> is currently locked, not expired, and (if the lock
+    /// records a holder link) held by <paramref name="linkName"/>. Used to keep session receives
+    /// exclusive to the lock owner.
+    /// </summary>
+    private bool IsSessionLockHeldBy(SessionState session, string? linkName)
+    {
+        var now = _timeProvider.GetUtcNow();
+        lock (session)
+        {
+            if (session.Lock is null || session.Lock.LockedUntil <= now) return false;
+            if (session.Lock.LinkName is not null && linkName is not null
+                && !string.Equals(session.Lock.LinkName, linkName, StringComparison.Ordinal))
+            {
+                return false;
+            }
+            return true;
+        }
+    }
+
     private sealed class QueueState
     {
         public long NextSequenceNumber;
         public long EnqueuedTotal;   // cumulative new arrivals (for metrics)
         public long CompletedTotal;  // cumulative completions (for metrics)
+
+        /// <summary>
+        /// Guards compound read-modify-write sequences that span more than one of the
+        /// concurrent collections below - the dedup check-then-insert, the dequeue
+        /// claim-then-lock, and the lock renew-vs-expire pair. Each collection is
+        /// individually thread-safe, but those multi-step operations need to be atomic
+        /// relative to the TTL/lock sweepers to avoid a message being both delivered and
+        /// expired, or a lock surviving its own expiry. Never held across an await.
+        /// </summary>
+        public readonly object Sync = new();
         public readonly ConcurrentDictionary<long, StoredMessage> Messages = new();
         public readonly ConcurrentDictionary<Guid, LockEntry> Locks = new();
         public readonly Channel<long> Available = Channel.CreateUnbounded<long>(new UnboundedChannelOptions
