@@ -8,16 +8,23 @@ import com.azure.messaging.servicebus.ServiceBusReceiverClient;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import com.azure.messaging.servicebus.ServiceBusSessionReceiverClient;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Java SDK smoke test against OpenServiceBus (proton-j AMQP stack).
  *
  * Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
+ *   -> admin create/get/roundtrip/delete (ATOM management API)
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -106,6 +113,67 @@ public final class Smoke {
             }
         } catch (Exception e) {
             results.add("FAIL session receive: " + e);
+        }
+
+        // 8-11. admin entity CRUD over the ATOM management API served on the same port as
+        // AMQP. The Java SDK's ServiceBusAdministrationClient cannot target a plaintext
+        // emulator yet - verified against 7.17.11: it dials https://host:443 even with an
+        // explicit http endpoint() override - so this exercises the exact same protocol
+        // with plain HTTP until the SDK catches up.
+        try {
+            Matcher endpoint = Pattern.compile("Endpoint=sb://([^;/]+)", Pattern.CASE_INSENSITIVE).matcher(conn);
+            if (!endpoint.find()) {
+                throw new IllegalStateException("no sb:// endpoint in connection string");
+            }
+            String base = "http://" + endpoint.group(1);
+            String adminQueue = "smoke-admin-java-" + stamp;
+            String queueXml =
+                "<entry xmlns=\"http://www.w3.org/2005/Atom\"><content type=\"application/xml\">"
+                + "<QueueDescription xmlns=\"http://schemas.microsoft.com/netservices/2010/10/servicebus/connect\">"
+                + "<MaxDeliveryCount>7</MaxDeliveryCount></QueueDescription></content></entry>";
+            HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+            URI queueUri = URI.create(base + "/" + adminQueue + "?api-version=2021-05");
+
+            HttpResponse<String> put = http.send(
+                HttpRequest.newBuilder(queueUri)
+                    .header("Content-Type", "application/atom+xml")
+                    .PUT(HttpRequest.BodyPublishers.ofString(queueXml)).build(),
+                HttpResponse.BodyHandlers.ofString());
+            results.add(put.statusCode() == 201
+                ? "PASS admin create queue"
+                : "FAIL admin create queue: status " + put.statusCode());
+
+            HttpResponse<String> got = http.send(
+                HttpRequest.newBuilder(queueUri).GET().build(), HttpResponse.BodyHandlers.ofString());
+            results.add(got.statusCode() == 200 && got.body().contains("<MaxDeliveryCount>7</MaxDeliveryCount>")
+                ? "PASS admin get queue"
+                : "FAIL admin get queue: status " + got.statusCode());
+
+            // The admin-created queue must be immediately usable on the data plane.
+            boolean roundTripped = false;
+            try (ServiceBusSenderClient adminSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(adminQueue).buildClient();
+                 ServiceBusReceiverClient adminReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(adminQueue).disableAutoComplete().buildClient()) {
+                adminSender.sendMessage(new ServiceBusMessage("admin roundtrip"));
+                for (ServiceBusReceivedMessage m : adminReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    roundTripped = "admin roundtrip".equals(m.getBody().toString());
+                    adminReceiver.complete(m);
+                }
+            }
+            results.add(roundTripped ? "PASS admin roundtrip" : "FAIL admin roundtrip: no message within 10s");
+
+            HttpResponse<String> del = http.send(
+                HttpRequest.newBuilder(queueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> gone = http.send(
+                HttpRequest.newBuilder(queueUri).GET().build(), HttpResponse.BodyHandlers.ofString());
+            results.add(del.statusCode() == 200 && gone.statusCode() == 404
+                ? "PASS admin delete queue"
+                : "FAIL admin delete queue: delete " + del.statusCode() + ", get-after " + gone.statusCode());
+        } catch (Exception e) {
+            results.add("FAIL admin: " + e);
         }
 
         results.forEach(System.out::println);

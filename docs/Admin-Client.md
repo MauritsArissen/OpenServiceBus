@@ -101,6 +101,21 @@ On `OpenServiceBusTestHost` the equivalent switch is
 - The management surface is plain HTTP + ATOM XML, so `curl` works too:
   `curl "http://localhost:5672/orders?api-version=2021-05"`.
 - The JSON REST API on port 5300 (used by the Explorer UI) is unchanged and independent.
-- Other SDKs implement the same protocol; whether their admin client can target an
-  emulator endpoint (custom port, no TLS) varies by SDK version - the .NET floor is
-  7.20.1, see above.
+
+### Cross-SDK admin client status
+
+The other SDKs implement the same protocol but (as of their latest releases, verified
+2026-07-29) their admin clients cannot target a plaintext emulator endpoint yet - each
+hardcodes `https://`:
+
+| SDK | Version checked | Admin client vs emulator |
+| --- | --- | --- |
+| .NET `Azure.Messaging.ServiceBus` | 7.20.1 | ✅ works (7.20.1+ required) |
+| JS `@azure/service-bus` | 7.9.5 | ❌ `serviceBusAtomManagementClient` builds `https://{endpoint}` |
+| Python `azure-servicebus` | 7.14.3 | ❌ `_management_client.py` builds `https://` + namespace |
+| Java `azure-messaging-servicebus` | 7.17.11 | ❌ dials `https://host:443` even with an explicit http `endpoint()` override |
+
+The broker side is ready for all of them the moment those SDKs follow the .NET client's
+lead. Until then, `tests/sdk-smoke/` exercises the ATOM surface from Node, Python, and
+Java with plain HTTP (and from .NET with the native admin client), so the protocol stays
+smoke-gated in CI from all four runtimes.

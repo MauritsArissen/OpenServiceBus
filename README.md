@@ -69,8 +69,8 @@ docker run -d --name openservicebus \
 
 | Port   | What                                                                  |
 | ------ | --------------------------------------------------------------------- |
-| `5672` | AMQP (use this in the Azure SDK connection string)                    |
-| `5300` | REST management API + `/health`                                       |
+| `5672` | AMQP + ATOM management - one port serves `ServiceBusClient` and `ServiceBusAdministrationClient` |
+| `5300` | JSON REST management API + `/health`                                  |
 | `5400` | Explorer browser UI - open <http://localhost:5400>                    |
 | `5673` | AMQP-over-WebSocket (when `OPENSERVICEBUS__WEBSOCKETS__ENABLED=true`) |
 

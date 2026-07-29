@@ -38,6 +38,7 @@ COPY src/OpenServiceBus.InMemoryStorage/OpenServiceBus.InMemoryStorage.csproj sr
 COPY src/OpenServiceBus.SqliteStorage/OpenServiceBus.SqliteStorage.csproj     src/OpenServiceBus.SqliteStorage/
 COPY src/OpenServiceBus.Amqp/OpenServiceBus.Amqp.csproj                       src/OpenServiceBus.Amqp/
 COPY src/OpenServiceBus.Management/OpenServiceBus.Management.csproj           src/OpenServiceBus.Management/
+COPY src/OpenServiceBus.Management.Atom/OpenServiceBus.Management.Atom.csproj src/OpenServiceBus.Management.Atom/
 COPY src/OpenServiceBus.Host/OpenServiceBus.Host.csproj                       src/OpenServiceBus.Host/
 COPY src/OpenServiceBus.Explorer/OpenServiceBus.Explorer.csproj               src/OpenServiceBus.Explorer/
 

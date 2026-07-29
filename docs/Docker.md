@@ -19,8 +19,8 @@ default.
 
 | Port   | Protocol       | Service         | When                                                       |
 | ------ | -------------- | --------------- | ---------------------------------------------------------- |
-| `5672` | AMQP           | Broker          | Always exposed - Service Bus SDK + AMQPNetLite clients     |
-| `5300` | HTTP           | Management API  | Always exposed - REST CRUD + `/health`                     |
+| `5672` | AMQP + HTTP    | Broker          | Always exposed - data plane (Service Bus SDK, AMQPNetLite) AND the ATOM management API (`ServiceBusAdministrationClient`); a protocol front door serves both on this one port, see [Admin-Client](Admin-Client.md) |
+| `5300` | HTTP           | Management API  | Always exposed - JSON REST CRUD + `/health`                |
 | `5400` | HTTP           | **Explorer UI** | Always exposed - open <http://localhost:5400> in a browser |
 | `5673` | HTTP/WebSocket | AMQP-over-WS    | Only when `OPENSERVICEBUS__WEBSOCKETS__ENABLED=true`       |
 
@@ -58,7 +58,7 @@ services:
     image: mauritsarissen/openservicebus:latest
     container_name: openservicebus
     ports:
-      - "5672:5672" # AMQP - Service Bus SDK connects here
+      - "5672:5672" # AMQP + ATOM management - both Service Bus SDK clients connect here
       - "5300:5300" # REST management API + /health
       - "5400:5400" # Explorer UI - open http://localhost:5400
     environment:
@@ -209,7 +209,7 @@ messages, and watch them route through filters and forwarding chains in real tim
 | -------------------------------------- | ----------------- | ------------------------------------------------------------------------- |
 | `OPENSERVICEBUS__STORAGE__MODE`        | `Sqlite`          | Override to `InMemory` for ephemeral mode                                 |
 | `OPENSERVICEBUS__STORAGE__DATASOURCE`  | `/data/broker.db` | Where the SQLite file lives - must be on a mounted volume for persistence |
-| `OPENSERVICEBUS__AMQP__PORT`           | `5672`            | AMQP listener                                                             |
+| `OPENSERVICEBUS__AMQP__PORT`           | `5672`            | AMQP + ATOM management port                                               |
 | `OPENSERVICEBUS__AMQP__REQUIRESASAUTH` | `false`           | Flip to `true` and provide `__SASKEYS__<name>` to enforce SAS             |
 | `OPENSERVICEBUS__WEBSOCKETS__ENABLED`  | `false`           | Start the AMQP-over-WebSocket bridge                                      |
 | `OPENSERVICEBUS__WEBSOCKETS__PORT`     | `5673`            | WebSocket port                                                            |

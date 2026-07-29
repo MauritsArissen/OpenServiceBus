@@ -2,12 +2,14 @@
 //
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
+//   -> admin create/get/roundtrip/delete (ATOM management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
 // comparison honest: all four stacks run the exact same operations the same way.
 
 using Azure.Messaging.ServiceBus;
+using Azure.Messaging.ServiceBus.Administration;
 
 var conn = Environment.GetEnvironmentVariable("SMOKE_CONNECTION")
     ?? "Endpoint=sb://localhost:5672;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true";
@@ -64,6 +66,31 @@ try
     Check("session receive", sessionMsg is not null && sessionMsg.Body.ToString() == "session msg");
     if (sessionMsg is not null) await session.CompleteMessageAsync(sessionMsg);
     await session.CloseAsync();
+
+    // 8-11. admin entity CRUD - the native ServiceBusAdministrationClient against the
+    // ATOM management API served on the same port as AMQP. Needs SDK 7.20.1+: older
+    // versions ignore UseDevelopmentEmulator endpoints and dial https://host:443.
+    var adminQueue = $"smoke-admin-dotnet-{stamp}";
+    var admin = new ServiceBusAdministrationClient(conn);
+
+    var created = (await admin.CreateQueueAsync(new CreateQueueOptions(adminQueue) { MaxDeliveryCount = 7 })).Value;
+    Check("admin create queue", created.Name == adminQueue);
+
+    QueueProperties fetched = await admin.GetQueueAsync(adminQueue);
+    Check("admin get queue", fetched.MaxDeliveryCount == 7);
+
+    // The admin-created queue must be immediately usable on the data plane.
+    var adminSender = client.CreateSender(adminQueue);
+    await adminSender.SendMessageAsync(new ServiceBusMessage("admin roundtrip"));
+    await adminSender.CloseAsync();
+    var adminReceiver = client.CreateReceiver(adminQueue);
+    var adminMsg = await adminReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    Check("admin roundtrip", adminMsg is not null && adminMsg.Body.ToString() == "admin roundtrip");
+    if (adminMsg is not null) await adminReceiver.CompleteMessageAsync(adminMsg);
+    await adminReceiver.CloseAsync();
+
+    await admin.DeleteQueueAsync(adminQueue);
+    Check("admin delete queue", !(await admin.QueueExistsAsync(adminQueue)).Value);
 }
 catch (Exception e)
 {
