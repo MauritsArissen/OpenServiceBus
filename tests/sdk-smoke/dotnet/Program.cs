@@ -2,7 +2,7 @@
 //
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-//   -> admin create/get/roundtrip/delete (ATOM management API)
+//   -> topic session receive -> admin create/get/roundtrip/delete (ATOM management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -67,7 +67,20 @@ try
     if (sessionMsg is not null) await session.CompleteMessageAsync(sessionMsg);
     await session.CloseAsync();
 
-    // 8-11. admin entity CRUD - the native ServiceBusAdministrationClient against the
+    // 8. topic session receive - publish with a session id, accept the session on a
+    // session-enabled SUBSCRIPTION (regression guard for issue #18).
+    var topicSessionId = $"dotnet-topic-session-{stamp}";
+    var topicSender = client.CreateSender("smoke-topic");
+    await topicSender.SendMessageAsync(new ServiceBusMessage("topic session msg") { SessionId = topicSessionId });
+    await topicSender.CloseAsync();
+
+    var topicSession = await client.AcceptSessionAsync("smoke-topic", "smoke-topic-sessions", topicSessionId);
+    var topicSessionMsg = await topicSession.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    Check("topic session receive", topicSessionMsg is not null && topicSessionMsg.Body.ToString() == "topic session msg");
+    if (topicSessionMsg is not null) await topicSession.CompleteMessageAsync(topicSessionMsg);
+    await topicSession.CloseAsync();
+
+    // 9-12. admin entity CRUD - the native ServiceBusAdministrationClient against the
     // ATOM management API served on the same port as AMQP. Needs SDK 7.20.1+: older
     // versions ignore UseDevelopmentEmulator endpoints and dial https://host:443.
     var adminQueue = $"smoke-admin-dotnet-{stamp}";

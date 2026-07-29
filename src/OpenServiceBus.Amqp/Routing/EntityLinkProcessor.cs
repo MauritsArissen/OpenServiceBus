@@ -218,6 +218,16 @@ public sealed class EntityLinkProcessor : ILinkProcessor
             return false;
         }
 
+        if (entityAddress.SubResource == EntitySubResource.Main)
+        {
+            var sessionFilter = SessionFilter.TryReadFromAttach(attachContext.Attach);
+            if (sessionFilter.IsSet)
+            {
+                WireSessionReceiver(attachContext, descriptor, sessionFilter);
+                return true;
+            }
+        }
+
         var source = _receiverSources.GetOrAdd(backingQueue, name => new QueueReceiverSource(
             name, descriptor, _store, _router, _transactions, _timeProvider, _loggerFactory.CreateLogger<QueueReceiverSource>()));
         var endpoint = new SourceLinkEndpoint(source, attachContext.Link);

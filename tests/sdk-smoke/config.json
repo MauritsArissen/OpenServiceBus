@@ -19,6 +19,21 @@
               "RequiresSession": true
             }
           }
+        ],
+        "Topics": [
+          {
+            "Name": "smoke-topic",
+            "Subscriptions": [
+              {
+                "Name": "smoke-topic-sessions",
+                "Properties": {
+                  "LockDuration": "PT30S",
+                  "MaxDeliveryCount": 5,
+                  "RequiresSession": true
+                }
+              }
+            ]
+          }
         ]
       }
     ]

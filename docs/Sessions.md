@@ -33,12 +33,18 @@ await host.Topics.CreateSubscriptionAsync(new SubscriptionDescriptor
 });
 ```
 
-> ⚠️ **Known limitation:** session routing is not yet threaded through topic fan-out.
-> A `RequiresSession` subscription is accepted at creation time, but messages published
-> to the topic reach its backing queue through the sessionless path, so session receivers
-> on that subscription won't see them. Full session support currently applies to queues;
-> use a queue (or forward the subscription to a session-enabled queue) for session
-> semantics today.
+Publishing to the topic with a `SessionId` fans out session-aware, per subscription:
+
+- A **session-enabled** subscription stores its copy in per-session channels;
+  `AcceptSessionAsync("events", "by-tenant", sessionId)` (or accept-next-session, or a
+  `ServiceBusSessionProcessor`) delivers it under an exclusive session lock, with
+  session state and lock renewal - exactly like a session queue.
+- A **plain** sibling subscription on the same topic gets an ordinary copy, receivable
+  by normal receivers (the `SessionId` property is still on the message).
+- A message published **without** a session id can never be delivered by a
+  session-enabled subscription; its copy is **dead-lettered** to that subscription's
+  DLQ instead of being stranded. (The topic itself accepts the send - unlike a session
+  queue, which rejects sessionless sends outright.)
 
 ## Send to a session
 
