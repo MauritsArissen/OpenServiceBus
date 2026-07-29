@@ -92,51 +92,57 @@ async function api<T = unknown>(path: string, options: RequestInit = {}): Promis
   return json as T;
 }
 
-const q = (managementUrl: string) => "?managementUrl=" + encodeURIComponent(managementUrl);
+// Entity CRUD is served by the backend's ServiceBusAdministrationClient, which needs the
+// broker CONNECTION STRING (the ATOM management API lives on the AMQP port), not the
+// JSON management URL - that one is still used for /health pings and metrics sampling.
+const cs = (connectionString: string) => "?connectionString=" + encodeURIComponent(connectionString);
 const post = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
 const put = (body: unknown): RequestInit => ({ method: "PUT", body: JSON.stringify(body) });
 
 export const explorerApi = {
   ping: (connectionString: string, managementUrl: string) =>
-    api<{ management: string; serviceBus: string }>("/api/ping", post({ connectionString, managementUrl })),
+    api<{ management: string; serviceBus: string; atomManagement: string }>(
+      "/api/ping",
+      post({ connectionString, managementUrl }),
+    ),
 
-  listQueues: (mgmt: string) => api<QueueInfo[]>("/api/queues" + q(mgmt)),
-  createQueue: (mgmt: string, name: string, options: Record<string, unknown>) =>
-    api("/api/queues/" + encodeURIComponent(name), put({ managementUrl: mgmt, options })),
-  deleteQueue: (mgmt: string, name: string) =>
-    api("/api/queues/" + encodeURIComponent(name) + q(mgmt), { method: "DELETE" }),
+  listQueues: (conn: string) => api<QueueInfo[]>("/api/queues" + cs(conn)),
+  createQueue: (conn: string, name: string, options: Record<string, unknown>) =>
+    api("/api/queues/" + encodeURIComponent(name), put({ connectionString: conn, options })),
+  deleteQueue: (conn: string, name: string) =>
+    api("/api/queues/" + encodeURIComponent(name) + cs(conn), { method: "DELETE" }),
 
-  listTopics: (mgmt: string) => api<QueueInfo[]>("/api/topics" + q(mgmt)),
-  createTopic: (mgmt: string, name: string, options: Record<string, unknown>) =>
-    api("/api/topics/" + encodeURIComponent(name), put({ managementUrl: mgmt, options })),
-  deleteTopic: (mgmt: string, name: string) =>
-    api("/api/topics/" + encodeURIComponent(name) + q(mgmt), { method: "DELETE" }),
+  listTopics: (conn: string) => api<QueueInfo[]>("/api/topics" + cs(conn)),
+  createTopic: (conn: string, name: string, options: Record<string, unknown>) =>
+    api("/api/topics/" + encodeURIComponent(name), put({ connectionString: conn, options })),
+  deleteTopic: (conn: string, name: string) =>
+    api("/api/topics/" + encodeURIComponent(name) + cs(conn), { method: "DELETE" }),
 
-  listSubscriptions: (mgmt: string, topic: string) =>
-    api<QueueInfo[]>(`/api/topics/${encodeURIComponent(topic)}/subscriptions` + q(mgmt)),
-  createSubscription: (mgmt: string, topic: string, name: string, options: Record<string, unknown>) =>
+  listSubscriptions: (conn: string, topic: string) =>
+    api<QueueInfo[]>(`/api/topics/${encodeURIComponent(topic)}/subscriptions` + cs(conn)),
+  createSubscription: (conn: string, topic: string, name: string, options: Record<string, unknown>) =>
     api(
       `/api/topics/${encodeURIComponent(topic)}/subscriptions/${encodeURIComponent(name)}`,
-      put({ managementUrl: mgmt, options }),
+      put({ connectionString: conn, options }),
     ),
-  deleteSubscription: (mgmt: string, topic: string, name: string) =>
-    api(`/api/topics/${encodeURIComponent(topic)}/subscriptions/${encodeURIComponent(name)}` + q(mgmt), {
+  deleteSubscription: (conn: string, topic: string, name: string) =>
+    api(`/api/topics/${encodeURIComponent(topic)}/subscriptions/${encodeURIComponent(name)}` + cs(conn), {
       method: "DELETE",
     }),
 
-  listRules: (mgmt: string, topic: string, sub: string) =>
+  listRules: (conn: string, topic: string, sub: string) =>
     api<RuleInfo[]>(
-      `/api/topics/${encodeURIComponent(topic)}/subscriptions/${encodeURIComponent(sub)}/rules` + q(mgmt),
+      `/api/topics/${encodeURIComponent(topic)}/subscriptions/${encodeURIComponent(sub)}/rules` + cs(conn),
     ),
-  putRule: (mgmt: string, topic: string, sub: string, name: string, rule: Record<string, unknown>) =>
+  putRule: (conn: string, topic: string, sub: string, name: string, rule: Record<string, unknown>) =>
     api(
       `/api/topics/${encodeURIComponent(topic)}/subscriptions/${encodeURIComponent(sub)}/rules/${encodeURIComponent(name)}`,
-      put({ managementUrl: mgmt, rule }),
+      put({ connectionString: conn, rule }),
     ),
-  deleteRule: (mgmt: string, topic: string, sub: string, name: string) =>
+  deleteRule: (conn: string, topic: string, sub: string, name: string) =>
     api(
       `/api/topics/${encodeURIComponent(topic)}/subscriptions/${encodeURIComponent(sub)}/rules/${encodeURIComponent(name)}` +
-        q(mgmt),
+        cs(conn),
       { method: "DELETE" },
     ),
 

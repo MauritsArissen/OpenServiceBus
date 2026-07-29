@@ -34,6 +34,18 @@ public sealed record SubscriptionDescriptor
     public string? ForwardDeadLetteredMessagesTo { get; init; }
 
     /// <summary>
+    /// Free-form metadata attached by management clients (the SDK's <c>UserMetadata</c>).
+    /// Carried and returned verbatim; no broker semantics.
+    /// </summary>
+    public string? UserMetadata { get; init; }
+
+    /// <summary>When the entity was created. Reported through the management API.</summary>
+    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>When the entity was last updated, or null if never updated after creation.</summary>
+    public DateTimeOffset? UpdatedAt { get; init; }
+
+    /// <summary>
     /// The backing queue address: <c>&lt;TopicName&gt;/subscriptions/&lt;Name&gt;</c>.
     /// This is what AMQP receivers attach to and what the in-memory store keys on.
     /// </summary>

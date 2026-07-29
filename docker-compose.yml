@@ -17,8 +17,8 @@ services:
     image: mauritsarissen/openservicebus:latest
     container_name: openservicebus
     ports:
-      - "5672:5672"      # AMQP
-      - "5300:5300"      # management REST + /health
+      - "5672:5672"      # AMQP + ATOM management (ServiceBusClient AND ServiceBusAdministrationClient)
+      - "5300:5300"      # JSON management REST + /health
       - "5400:5400"      # Explorer browser UI
     environment:
       OPENSERVICEBUS__STORAGE__MODE: Sqlite

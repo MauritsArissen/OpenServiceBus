@@ -22,6 +22,7 @@ in the repo - every page here is committed in source.
 
 ### Service Bus features
 
+- **[SDK Admin Client](Admin-Client)** - `ServiceBusAdministrationClient` entity CRUD on the AMQP port.
 - **[Topics and Subscriptions](Topics-and-Subscriptions)** - fan-out with SQL + correlation filters.
 - **[Sessions](Sessions)** - per-session FIFO, session state, session locks.
 - **[Auto-Forwarding](Auto-Forwarding)** - `ForwardTo`, DLQ forwarding, cycle protection.
@@ -53,6 +54,7 @@ in the repo - every page here is committed in source.
 | Transports               | AMQP-TCP + AMQP-over-WebSocket | AMQP-TCP only               |
 | Telemetry                | Native OpenTelemetry           | None                        |
 | `config.json` compatible | ✅                             | ✅                          |
+| `ServiceBusAdministrationClient` | ✅ (ATOM API, same port) | ❌                          |
 
 ## Install
 

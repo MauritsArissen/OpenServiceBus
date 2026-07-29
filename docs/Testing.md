@@ -54,6 +54,10 @@ await using var host = await OpenServiceBusTestHost.StartAsync(o =>
     // Enable AMQP-over-WebSocket alongside plain TCP.
     o.EnableWebSocketBridge = true;
 
+    // ServiceBusAdministrationClient support (ATOM management API on the same port).
+    // On by default; disable to bind the AMQP listener to the public port directly.
+    o.EnableAtomManagement = true;
+
     // Swap in a different IMessageStore. The SQLite tests project uses this to run
     // the full SDK suite against a persistent backing store.
     o.StoreFactory = tp => new SqliteMessageStore(
@@ -67,7 +71,7 @@ After `StartAsync` the host exposes the broker's internals directly so tests can
 state without going through the AMQP wire:
 
 ```csharp
-host.ConnectionString          // for ServiceBusClient
+host.ConnectionString          // for ServiceBusClient AND ServiceBusAdministrationClient
 host.WebSocketConnectionString // when EnableWebSocketBridge=true
 host.AmqpUri                   // for low-level AMQPNetLite clients
 host.Port

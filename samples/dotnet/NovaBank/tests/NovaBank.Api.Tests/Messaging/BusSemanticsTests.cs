@@ -92,12 +92,18 @@ public class BusSemanticsTests : IClassFixture<ServiceBusFixture>
             clock.GetUtcNow().AddMinutes(5));
 
         // Before the due time: the session exists but the broker holds the message back.
-        var session = await client.AcceptSessionAsync("standing-orders", "ACC-TT");
-        (await session.ReceiveMessageAsync(TimeSpan.FromMilliseconds(300)))
+        var earlyCheck = await client.AcceptSessionAsync("standing-orders", "ACC-TT");
+        (await earlyCheck.ReceiveMessageAsync(TimeSpan.FromMilliseconds(300)))
             .ShouldBeNull("a standing order must not execute early");
+        await earlyCheck.DisposeAsync();
 
         // Jump the broker clock past the due time - no Task.Delay(5 minutes) anywhere.
         clock.Advance(TimeSpan.FromMinutes(6));
+
+        // The jump also blew past the session lock's expiry - on real Azure that receiver
+        // would be session-lock-lost, and the broker enforces the same. Accept the session
+        // fresh, exactly as a worker picking up the standing order at its due time would.
+        var session = await client.AcceptSessionAsync("standing-orders", "ACC-TT");
 
         ServiceBusReceivedMessage? due = null;
         var deadline = DateTime.UtcNow.AddSeconds(5);

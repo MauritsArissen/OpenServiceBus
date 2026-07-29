@@ -41,7 +41,7 @@ export function CreateQueueDialog() {
       if (forwardTo.trim()) options.forwardTo = forwardTo.trim();
       if (forwardDlq.trim()) options.forwardDeadLetteredMessagesTo = forwardDlq.trim();
 
-      await explorerApi.createQueue(store.mgmt, name.trim(), options);
+      await explorerApi.createQueue(store.conn, name.trim(), options);
       toast.success(`Created queue '${name.trim()}'`);
       store.setDialog(null);
       await store.refresh();

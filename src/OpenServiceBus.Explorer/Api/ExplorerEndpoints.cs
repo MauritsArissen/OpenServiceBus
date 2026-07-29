@@ -1,5 +1,3 @@
-using System.Net.Http.Json;
-using System.Text;
 using Azure.Messaging.ServiceBus;
 using OpenServiceBus.Explorer.Metrics;
 using OpenServiceBus.Explorer.Sessions;
@@ -28,7 +26,8 @@ public static class ExplorerEndpoints
     private static string ResolveManagementUrl(string? clientValue) =>
         DemoMode && PinnedManagementUrl is not null ? PinnedManagementUrl : (clientValue ?? string.Empty);
 
-    private static string ResolveConnectionString(string? clientValue) =>
+    // Shared with AdminEndpoints - entity CRUD resolves its broker the same pinned-in-demo way.
+    internal static string ResolveConnectionString(string? clientValue) =>
         DemoMode && PinnedConnectionString is not null ? PinnedConnectionString : (clientValue ?? string.Empty);
 
     public static IEndpointRouteBuilder MapExplorerEndpoints(this IEndpointRouteBuilder endpoints)
@@ -56,28 +55,8 @@ public static class ExplorerEndpoints
             });
         });
 
-        // --- Queue CRUD (proxied to broker's management REST API) ---
-        api.MapGet("/queues", async (string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var resp = await http.GetAsync(Combine(ResolveManagementUrl(managementUrl), "/queues/"), ct);
-            return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
-        });
-
-        api.MapPut("/queues/{name}", async (string name, CreateQueueRequest body, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var payload = JsonContent.Create(body.Options);
-            var resp = await http.PutAsync(Combine(ResolveManagementUrl(body.ManagementUrl), $"/queues/{name}"), payload, ct);
-            return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
-        });
-
-        api.MapDelete("/queues/{name}", async (string name, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var resp = await http.DeleteAsync(Combine(ResolveManagementUrl(managementUrl), $"/queues/{name}"), ct);
-            return Results.StatusCode((int)resp.StatusCode);
-        });
+        // Entity CRUD lives in AdminEndpoints - it drives the broker through the real
+        // ServiceBusAdministrationClient (the ATOM management API on the AMQP port).
 
         // --- Data plane (real Azure SDK against the broker) ---
         api.MapPost("/send", async (SendRequest req, SessionManager sessions, CancellationToken ct) =>
@@ -291,75 +270,6 @@ public static class ExplorerEndpoints
             return Results.Ok(new { requeued = true, target, messageId = copy.MessageId });
         });
 
-        // --- Topic CRUD (proxied) ---
-        api.MapGet("/topics", async (string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var resp = await http.GetAsync(Combine(ResolveManagementUrl(managementUrl), "/topics/"), ct);
-            return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
-        });
-
-        api.MapPut("/topics/{name}", async (string name, CreateTopicProxyRequest body, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var payload = JsonContent.Create(body.Options ?? new());
-            var resp = await http.PutAsync(Combine(ResolveManagementUrl(body.ManagementUrl), $"/topics/{name}"), payload, ct);
-            return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
-        });
-
-        api.MapDelete("/topics/{name}", async (string name, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var resp = await http.DeleteAsync(Combine(ResolveManagementUrl(managementUrl), $"/topics/{name}"), ct);
-            return Results.StatusCode((int)resp.StatusCode);
-        });
-
-        // --- Subscription CRUD (proxied) ---
-        api.MapGet("/topics/{topic}/subscriptions", async (string topic, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var resp = await http.GetAsync(Combine(ResolveManagementUrl(managementUrl), $"/topics/{topic}/subscriptions"), ct);
-            return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
-        });
-
-        api.MapPut("/topics/{topic}/subscriptions/{name}", async (string topic, string name, CreateSubscriptionProxyRequest body, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var payload = JsonContent.Create(body.Options ?? new());
-            var resp = await http.PutAsync(Combine(ResolveManagementUrl(body.ManagementUrl), $"/topics/{topic}/subscriptions/{name}"), payload, ct);
-            return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
-        });
-
-        api.MapDelete("/topics/{topic}/subscriptions/{name}", async (string topic, string name, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var resp = await http.DeleteAsync(Combine(ResolveManagementUrl(managementUrl), $"/topics/{topic}/subscriptions/{name}"), ct);
-            return Results.StatusCode((int)resp.StatusCode);
-        });
-
-        // --- Rule CRUD (proxied) ---
-        api.MapGet("/topics/{topic}/subscriptions/{sub}/rules", async (string topic, string sub, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var resp = await http.GetAsync(Combine(ResolveManagementUrl(managementUrl), $"/topics/{topic}/subscriptions/{sub}/rules"), ct);
-            return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
-        });
-
-        api.MapPut("/topics/{topic}/subscriptions/{sub}/rules/{name}", async (string topic, string sub, string name, CreateRuleProxyRequest body, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var payload = JsonContent.Create(body.Rule);
-            var resp = await http.PutAsync(Combine(ResolveManagementUrl(body.ManagementUrl), $"/topics/{topic}/subscriptions/{sub}/rules/{name}"), payload, ct);
-            return Results.Content(await resp.Content.ReadAsStringAsync(ct), "application/json", statusCode: (int)resp.StatusCode);
-        });
-
-        api.MapDelete("/topics/{topic}/subscriptions/{sub}/rules/{name}", async (string topic, string sub, string name, string managementUrl, IHttpClientFactory httpFactory, CancellationToken ct) =>
-        {
-            var http = httpFactory.CreateClient();
-            var resp = await http.DeleteAsync(Combine(ResolveManagementUrl(managementUrl), $"/topics/{topic}/subscriptions/{sub}/rules/{name}"), ct);
-            return Results.StatusCode((int)resp.StatusCode);
-        });
-
         // --- Connectivity check ---
         api.MapPost("/ping", async (PingRequest req, SessionManager sessions, MetricsCollector metrics, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
@@ -370,6 +280,7 @@ public static class ExplorerEndpoints
             var http = httpFactory.CreateClient();
             string? mgmtStatus = null;
             string? sdkStatus = null;
+            string? atomStatus = null;
 
             try
             {
@@ -381,9 +292,9 @@ public static class ExplorerEndpoints
                 mgmtStatus = "error: " + ex.Message;
             }
 
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
             try
             {
-                var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
                 // Cheap probe: open a sender then close it. ServiceBusClient opens on first send/receive.
                 await using var sender = session.Sender("__ping__probe__");
                 sdkStatus = "ok (client constructed; actual AMQP open happens on first send/receive)";
@@ -393,7 +304,19 @@ public static class ExplorerEndpoints
                 sdkStatus = "error: " + ex.Message;
             }
 
-            return Results.Ok(new { management = mgmtStatus, serviceBus = sdkStatus });
+            try
+            {
+                // A real management-plane round trip: the SDK admin client against the ATOM
+                // API on the broker's AMQP port - the same path entity CRUD uses.
+                var ns = (await session.Admin.GetNamespacePropertiesAsync(ct)).Value;
+                atomStatus = $"ok (namespace '{ns.Name}')";
+            }
+            catch (Exception ex)
+            {
+                atomStatus = "error: " + ex.Message;
+            }
+
+            return Results.Ok(new { management = mgmtStatus, serviceBus = sdkStatus, atomManagement = atomStatus });
         });
 
         // Historical metrics for an entity: its own sampled series plus its dead-letter
@@ -486,10 +409,6 @@ public static class ExplorerEndpoints
     }
 }
 
-public sealed record CreateQueueRequest(string ManagementUrl, Dictionary<string, object>? Options);
-public sealed record CreateTopicProxyRequest(string ManagementUrl, Dictionary<string, object>? Options);
-public sealed record CreateSubscriptionProxyRequest(string ManagementUrl, Dictionary<string, object>? Options);
-public sealed record CreateRuleProxyRequest(string ManagementUrl, Dictionary<string, object?> Rule);
 public sealed record SendRequest(
     string ConnectionString,
     string Queue,

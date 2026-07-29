@@ -68,4 +68,16 @@ public sealed record QueueDescriptor
     /// dead-letter, max-delivery, TTL expiration. Enforced. Null = standard local DLQ.
     /// </summary>
     public string? ForwardDeadLetteredMessagesTo { get; init; }
+
+    /// <summary>
+    /// Free-form metadata attached by management clients (the SDK's <c>UserMetadata</c>).
+    /// Carried and returned verbatim; no broker semantics.
+    /// </summary>
+    public string? UserMetadata { get; init; }
+
+    /// <summary>When the entity was created. Reported through the management API.</summary>
+    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>When the entity was last updated, or null if never updated after creation.</summary>
+    public DateTimeOffset? UpdatedAt { get; init; }
 }

@@ -2,6 +2,7 @@
 //
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
+//   -> admin create/get/roundtrip/delete (ATOM management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -59,6 +60,45 @@ const run = async () => {
   check("session receive", smsgs.length === 1 && smsgs[0].body === "session msg");
   await session.completeMessage(smsgs[0]);
   await session.close();
+
+  // 8-11. admin entity CRUD over the ATOM management API served on the same port as
+  // AMQP. The JS SDK's ServiceBusAdministrationClient cannot target a plaintext
+  // emulator yet - @azure/service-bus 7.9.5 hardcodes the scheme
+  // (serviceBusAtomManagementClient.js: `https://${this.endpoint}/${path}`) - so this
+  // exercises the exact same protocol with plain HTTP until the SDK catches up.
+  const httpBase = `http://${conn.match(/Endpoint=sb:\/\/([^;/]+)/i)[1]}`;
+  const adminQueue = `smoke-admin-node-${stamp}`;
+  const queueXml =
+    '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">' +
+    '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
+    "<MaxDeliveryCount>7</MaxDeliveryCount></QueueDescription></content></entry>";
+
+  const put = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/atom+xml" },
+    body: queueXml,
+  });
+  check("admin create queue", put.status === 201, put.status === 201 ? "" : `status ${put.status}`);
+
+  const got = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`);
+  const gotBody = await got.text();
+  check("admin get queue", got.status === 200 && gotBody.includes("<MaxDeliveryCount>7</MaxDeliveryCount>"));
+
+  // The admin-created queue must be immediately usable on the data plane.
+  const adminSender = client.createSender(adminQueue);
+  // messageId is required: the JS SDK keys its auto-lock-renewal bookkeeping on it and
+  // completeMessage throws on a message that has none.
+  await adminSender.sendMessages({ body: "admin roundtrip", messageId: `node-admin-${stamp}` });
+  await adminSender.close();
+  const adminReceiver = client.createReceiver(adminQueue);
+  const aMsgs = await adminReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  check("admin roundtrip", aMsgs.length === 1 && aMsgs[0].body === "admin roundtrip");
+  if (aMsgs.length === 1) await adminReceiver.completeMessage(aMsgs[0]);
+  await adminReceiver.close();
+
+  const del = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`, { method: "DELETE" });
+  const gone = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`);
+  check("admin delete queue", del.status === 200 && gone.status === 404);
 };
 
 const timeout = new Promise((_, rej) =>

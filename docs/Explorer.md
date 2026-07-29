@@ -11,8 +11,10 @@ dotnet run --project src/OpenServiceBus.Host
 dotnet run --project src/OpenServiceBus.Explorer
 ```
 
-Open <http://localhost:5400>. The Explorer talks to the broker's REST management API
-(default `http://localhost:5300`) - no AMQP knowledge needed in the UI.
+Open <http://localhost:5400>. Entity CRUD goes through the real
+`ServiceBusAdministrationClient` (the [ATOM management API](Admin-Client.md) on the AMQP
+port) and messaging through the real `ServiceBusClient` - the JSON REST API (default
+`http://localhost:5300`) is only used for the `/health` probe and metrics sampling.
 
 ## Layout
 
@@ -72,15 +74,18 @@ Open <http://localhost:5400>. The Explorer talks to the broker's REST management
 Bottom of the sidebar is a collapsible **Connection** drawer with the SDK connection
 string and management URL. Persisted in localStorage so it survives refreshes.
 
-The "Connect" button does both a `/health` probe (REST) and an SDK `ServiceBusClient`
-construction (AMQP) - green chip = both working.
+The "Connect" button probes all three planes - `/health` (JSON REST), an SDK
+`ServiceBusClient` construction (AMQP), and a real `GetNamespacePropertiesAsync` round
+trip through the ATOM management API (`atom` line in the result panel).
 
 ## Architecture note
 
 The Explorer is its own ASP.NET Core app (`OpenServiceBus.Explorer`) hosting a static HTML
-page + a thin proxy at `/api/*` that:
+page + a thin backend at `/api/*` that:
 
-- Proxies queue/topic/subscription/rule CRUD straight to the broker's REST API.
+- Drives queue/topic/subscription/rule CRUD through the real
+  `ServiceBusAdministrationClient` - the same ATOM management protocol every SDK admin
+  client speaks, over the connection string's AMQP port.
 - Translates "receive next" / "complete" / "abandon" / etc. into real Azure SDK calls
   against the broker over AMQP - so what you exercise in the UI is exactly what your
   production code would exercise.

@@ -94,6 +94,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
         // Per-queue $management endpoint registration. Subscribe BEFORE listing so we don't
         // miss any queues created concurrently with startup.
         _queueRegistry.QueueCreated += OnQueueCreated;
+        _queueRegistry.QueueUpdated += OnQueueCreated;
         _queueRegistry.QueueDeleted += OnQueueDeleted;
         foreach (var existing in await _queueRegistry.ListAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -105,6 +106,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
         if (_topicRegistry is not null)
         {
             _topicRegistry.SubscriptionCreated += OnSubscriptionCreated;
+            _topicRegistry.SubscriptionUpdated += OnSubscriptionCreated;
             _topicRegistry.SubscriptionDeleted += OnSubscriptionDeleted;
             foreach (var topic in await _topicRegistry.ListTopicsAsync(cancellationToken).ConfigureAwait(false))
             {
@@ -123,10 +125,12 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
     public Task StopAsync(CancellationToken cancellationToken)
     {
         _queueRegistry.QueueCreated -= OnQueueCreated;
+        _queueRegistry.QueueUpdated -= OnQueueCreated;
         _queueRegistry.QueueDeleted -= OnQueueDeleted;
         if (_topicRegistry is not null)
         {
             _topicRegistry.SubscriptionCreated -= OnSubscriptionCreated;
+            _topicRegistry.SubscriptionUpdated -= OnSubscriptionCreated;
             _topicRegistry.SubscriptionDeleted -= OnSubscriptionDeleted;
         }
 
@@ -154,6 +158,8 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
 
     public ValueTask DisposeAsync() => new(StopAsync(CancellationToken.None));
 
+    // Also invoked on QueueUpdated: RequestNodeRegistry.Register replaces in place, so
+    // re-registering swaps the $management processor's captured descriptor for the new one.
     private void OnQueueCreated(object? sender, QueueDescriptor descriptor) => RegisterManagementEndpoint(descriptor);
 
     private void OnQueueDeleted(object? sender, QueueDescriptor descriptor)

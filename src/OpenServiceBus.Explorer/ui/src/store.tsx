@@ -35,7 +35,7 @@ type Store = {
   setConn: (v: string) => void;
   setMgmt: (v: string) => void;
   status: ConnStatus;
-  pingResult: { management: string; serviceBus: string } | null;
+  pingResult: { management: string; serviceBus: string; atomManagement: string } | null;
   connect: () => Promise<void>;
 
   /** Hosted live demo: connection is locked and a reset countdown is shown. */
@@ -99,15 +99,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(LS_MGMT, v);
   }, []);
 
-  const refresh = useCallback(async (mgmtOverride?: string) => {
-    const m = mgmtOverride ?? mgmt;
+  // Entity CRUD goes through the backend's ServiceBusAdministrationClient, keyed by the
+  // broker connection string (the ATOM management API shares the AMQP port).
+  const refresh = useCallback(async (connOverride?: string) => {
+    const c = connOverride ?? conn;
     setLoading(true);
     try {
-      const [qs, ts] = await Promise.all([explorerApi.listQueues(m), explorerApi.listTopics(m)]);
+      const [qs, ts] = await Promise.all([explorerApi.listQueues(c), explorerApi.listTopics(c)]);
       const subs: Record<string, QueueInfo[]> = {};
       await Promise.all(
         ts.map(async (t) => {
-          subs[t.name] = await explorerApi.listSubscriptions(m, t.name);
+          subs[t.name] = await explorerApi.listSubscriptions(c, t.name);
         }),
       );
       setQueues(qs);
@@ -118,7 +120,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [mgmt]);
+  }, [conn]);
 
   const connect = useCallback(async (connOverride?: string, mgmtOverride?: string) => {
     const c = connOverride ?? conn;
@@ -129,7 +131,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const r = await explorerApi.ping(c, m);
       setPingResult(r);
       setStatus("ok");
-      await refresh(m);
+      await refresh(c);
     } catch (e) {
       setStatus("err");
       setPingResult(null);

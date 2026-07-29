@@ -59,7 +59,7 @@ export function EntityView() {
 
     if (sel.kind === "queue") {
       confirm(`Delete queue '${sel.name}'?`, "The queue, its dead-letter queue, and all messages are removed.", async () => {
-        await explorerApi.deleteQueue(store.mgmt, sel.name);
+        await explorerApi.deleteQueue(store.conn, sel.name);
         store.clearEntityLocal(sel.name);
         store.select(null);
         toast.success(`Deleted queue '${sel.name}'`);
@@ -67,14 +67,14 @@ export function EntityView() {
       });
     } else if (sel.kind === "topic") {
       confirm(`Delete topic '${sel.name}'?`, "The topic and ALL its subscriptions are removed.", async () => {
-        await explorerApi.deleteTopic(store.mgmt, sel.name);
+        await explorerApi.deleteTopic(store.conn, sel.name);
         store.select(null);
         toast.success(`Deleted topic '${sel.name}'`);
         await store.refresh();
       });
     } else {
       confirm(`Delete subscription '${sel.name}/${sel.sub}'?`, "The subscription and its messages are removed.", async () => {
-        await explorerApi.deleteSubscription(store.mgmt, sel.name, sel.sub!);
+        await explorerApi.deleteSubscription(store.conn, sel.name, sel.sub!);
         store.clearEntityLocal(`${sel.name}/Subscriptions/${sel.sub}`);
         store.select(null);
         toast.success(`Deleted subscription '${sel.name}/${sel.sub}'`);

@@ -2,14 +2,18 @@
 
 Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
+  -> admin create/get/roundtrip/delete (ATOM management API)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.
 """
 
 import os
+import re
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
@@ -25,6 +29,18 @@ results: list[str] = []
 
 def check(name: str, ok: bool, extra: str = "") -> None:
     results.append(f"{'PASS' if ok else 'FAIL'} {name}{' ' + extra if extra else ''}")
+
+
+def http(method: str, url: str, body: "bytes | None" = None) -> "tuple[int, str]":
+    """Bare HTTP helper for the ATOM management steps; returns (status, body)."""
+    request = urllib.request.Request(url, data=body, method=method)
+    if body is not None:
+        request.add_header("Content-Type", "application/atom+xml")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, response.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
 
 
 def run() -> None:
@@ -68,6 +84,40 @@ def run() -> None:
             check("session receive", got)
             if smsgs:
                 session.complete_message(smsgs[0])
+
+        # 8-11. admin entity CRUD over the ATOM management API served on the same port
+        # as AMQP. The Python SDK's ServiceBusAdministrationClient cannot target a
+        # plaintext emulator yet - azure-servicebus 7.14.3 hardcodes the scheme
+        # (_management_client.py: `self._endpoint = "https://" + fully_qualified_namespace`)
+        # - so this exercises the exact same protocol with plain HTTP until the SDK
+        # catches up.
+        base = "http://" + re.search(r"Endpoint=sb://([^;/]+)", CONN, re.I).group(1)
+        admin_queue = f"smoke-admin-python-{stamp}"
+        queue_xml = (
+            '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">'
+            '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
+            "<MaxDeliveryCount>7</MaxDeliveryCount></QueueDescription></content></entry>"
+        )
+
+        status, _ = http("PUT", f"{base}/{admin_queue}?api-version=2021-05", queue_xml.encode())
+        check("admin create queue", status == 201, "" if status == 201 else f"status {status}")
+
+        status, body = http("GET", f"{base}/{admin_queue}?api-version=2021-05")
+        check("admin get queue", status == 200 and "<MaxDeliveryCount>7</MaxDeliveryCount>" in body)
+
+        # The admin-created queue must be immediately usable on the data plane.
+        with client.get_queue_sender(admin_queue) as admin_sender:
+            admin_sender.send_messages(ServiceBusMessage("admin roundtrip"))
+        with client.get_queue_receiver(admin_queue, max_wait_time=10) as admin_receiver:
+            amsgs = admin_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+            got = len(amsgs) == 1 and str(amsgs[0]) == "admin roundtrip"
+            check("admin roundtrip", got)
+            if amsgs:
+                admin_receiver.complete_message(amsgs[0])
+
+        status, _ = http("DELETE", f"{base}/{admin_queue}?api-version=2021-05")
+        gone, _ = http("GET", f"{base}/{admin_queue}?api-version=2021-05")
+        check("admin delete queue", status == 200 and gone == 404)
 
 
 try:

@@ -19,12 +19,19 @@ public sealed class QueueManager : IQueueRegistry
     }
 
     public event EventHandler<QueueDescriptor>? QueueCreated;
+    public event EventHandler<QueueDescriptor>? QueueUpdated;
     public event EventHandler<QueueDescriptor>? QueueDeleted;
 
     event EventHandler<QueueDescriptor> IQueueRegistry.QueueCreated
     {
         add => QueueCreated += value;
         remove => QueueCreated -= value;
+    }
+
+    event EventHandler<QueueDescriptor> IQueueRegistry.QueueUpdated
+    {
+        add => QueueUpdated += value;
+        remove => QueueUpdated -= value;
     }
 
     event EventHandler<QueueDescriptor> IQueueRegistry.QueueDeleted
@@ -78,6 +85,48 @@ public sealed class QueueManager : IQueueRegistry
                 MaxDeliveryCount = int.MaxValue,
             };
             await CreateAsync(dlq, cancellationToken).ConfigureAwait(false);
+        }
+
+        return descriptor;
+    }
+
+    public async Task<QueueDescriptor> UpdateAsync(QueueDescriptor descriptor, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
+
+        if (!string.IsNullOrEmpty(descriptor.ForwardTo) && string.Equals(descriptor.ForwardTo, descriptor.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Queue '{descriptor.Name}' cannot forward to itself.");
+        }
+        if (!string.IsNullOrEmpty(descriptor.ForwardDeadLetteredMessagesTo) && string.Equals(descriptor.ForwardDeadLetteredMessagesTo, descriptor.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Queue '{descriptor.Name}' cannot forward dead-lettered messages to itself.");
+        }
+
+        // Swap loop: keep the stored key's identity (create-time name) and only replace when the
+        // queue still exists at the moment of the swap - a concurrent delete must win, not be
+        // resurrected by a racing update.
+        while (true)
+        {
+            if (!_queues.TryGetValue(descriptor.Name, out var existing))
+            {
+                throw new InvalidOperationException($"Queue '{descriptor.Name}' does not exist.");
+            }
+            if (_queues.TryUpdate(descriptor.Name, descriptor, existing))
+            {
+                break;
+            }
+        }
+
+        QueueUpdated?.Invoke(this, descriptor);
+
+        // Keep the DLQ sibling's lock duration in step with the parent, mirroring create.
+        if (!IsDeadLetterQueue(descriptor.Name)
+            && _queues.TryGetValue(descriptor.Name + DeadLetterSuffix, out var dlq)
+            && dlq.LockDuration != descriptor.LockDuration)
+        {
+            await UpdateAsync(dlq with { LockDuration = descriptor.LockDuration }, cancellationToken).ConfigureAwait(false);
         }
 
         return descriptor;

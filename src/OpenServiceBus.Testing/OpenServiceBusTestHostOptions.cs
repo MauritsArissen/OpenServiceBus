@@ -83,6 +83,16 @@ public sealed class OpenServiceBusTestHostOptions
     public Func<TimeProvider, IMessageStore>? StoreFactory { get; set; }
 
     /// <summary>
+    /// When true (the default) the test host serves the Service Bus ATOM management API on the
+    /// same port as AMQP, so <c>ServiceBusAdministrationClient</c> works against
+    /// <see cref="OpenServiceBusTestHost.ConnectionString"/> unmodified (requires
+    /// Azure.Messaging.ServiceBus 7.20.1+, which is when the SDK started honouring
+    /// <c>UseDevelopmentEmulator=true</c> endpoints in the admin client). A protocol front door
+    /// peeks each connection's preamble and routes AMQP and HTTP to the right backend.
+    /// </summary>
+    public bool EnableAtomManagement { get; set; } = true;
+
+    /// <summary>
     /// When true the test host also starts an AMQP-over-WebSocket bridge on a free port
     /// and exposes <see cref="OpenServiceBusTestHost.WebSocketPort"/>. The resulting
     /// <see cref="OpenServiceBusTestHost.WebSocketConnectionString"/> is what

@@ -15,5 +15,6 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.MapExplorerEndpoints();
+app.MapAdminEndpoints();
 
 await app.RunAsync();

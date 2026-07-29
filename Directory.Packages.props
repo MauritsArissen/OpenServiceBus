@@ -8,7 +8,10 @@
   <ItemGroup>
     <!-- AMQP / Service Bus -->
     <PackageVersion Include="AMQPNetLite" Version="2.4.11" />
-    <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.18.2" />
+    <!-- 7.20.1 is the first version whose ServiceBusAdministrationClient honours
+         UseDevelopmentEmulator=true endpoints (scheme AND port); older versions dial
+         https://host:443 or http://host:80 regardless of the connection string. -->
+    <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.20.1" />
 
     <!-- Persistence (M18) -->
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="9.0.18" />
