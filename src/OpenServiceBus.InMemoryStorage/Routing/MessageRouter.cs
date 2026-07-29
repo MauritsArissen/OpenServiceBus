@@ -100,14 +100,27 @@ public sealed class MessageRouter : IMessageRouter
                         await RouteInternalAsync(sub.ForwardTo, encoded, expiresAt, scheduledFor,
                             sessionId, messageId, dedupWindow, filterContext, deliveryCount,
                             depth + 1, landed, cancellationToken).ConfigureAwait(false);
+                        continue;
                     }
-                    else
+
+                    var subSessionId = sub.RequiresSession ? (sessionId ?? filterContext?.SessionId) : null;
+                    if (sub.RequiresSession && string.IsNullOrEmpty(subSessionId))
                     {
+                        var dlq = sub.BackingQueueName + "/$DeadLetterQueue";
                         await _store.EnqueueAsync(
-                            sub.BackingQueueName, encoded, expiresAt, scheduledFor,
-                            sessionId, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
-                        landed.Add(sub.BackingQueueName);
+                            dlq, encoded, expiresAt, scheduledFor,
+                            sessionId: null, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
+                        landed.Add(dlq);
+                        _logger.LogWarning(
+                            "Message without a session id matched session-enabled subscription '{Subscription}' - copy dead-lettered.",
+                            sub.BackingQueueName);
+                        continue;
                     }
+
+                    await _store.EnqueueAsync(
+                        sub.BackingQueueName, encoded, expiresAt, scheduledFor,
+                        subSessionId, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
+                    landed.Add(sub.BackingQueueName);
                 }
                 return;
             }

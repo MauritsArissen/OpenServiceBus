@@ -2,7 +2,7 @@
 
 Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-  -> admin create/get/roundtrip/delete (ATOM management API)
+  -> topic session receive -> admin create/get/roundtrip/delete (ATOM management API)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.
@@ -85,7 +85,22 @@ def run() -> None:
             if smsgs:
                 session.complete_message(smsgs[0])
 
-        # 8-11. admin entity CRUD over the ATOM management API served on the same port
+        # 8. topic session receive - publish with a session id, accept the session on a
+        # session-enabled SUBSCRIPTION (regression guard for issue #18).
+        topic_session_id = f"python-topic-session-{stamp}"
+        with client.get_topic_sender("smoke-topic") as topic_sender:
+            topic_sender.send_messages(ServiceBusMessage("topic session msg", session_id=topic_session_id))
+
+        with client.get_subscription_receiver(
+            "smoke-topic", "smoke-topic-sessions", session_id=topic_session_id, max_wait_time=10
+        ) as topic_session:
+            tmsgs = topic_session.receive_messages(max_message_count=1, max_wait_time=10)
+            got = len(tmsgs) == 1 and str(tmsgs[0]) == "topic session msg"
+            check("topic session receive", got)
+            if tmsgs:
+                topic_session.complete_message(tmsgs[0])
+
+        # 9-12. admin entity CRUD over the ATOM management API served on the same port
         # as AMQP. The Python SDK's ServiceBusAdministrationClient cannot target a
         # plaintext emulator yet - azure-servicebus 7.14.3 hardcodes the scheme
         # (_management_client.py: `self._endpoint = "https://" + fully_qualified_namespace`)

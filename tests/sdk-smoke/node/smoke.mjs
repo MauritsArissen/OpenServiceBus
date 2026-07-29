@@ -2,7 +2,7 @@
 //
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-//   -> admin create/get/roundtrip/delete (ATOM management API)
+//   -> topic session receive -> admin create/get/roundtrip/delete (ATOM management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -61,7 +61,20 @@ const run = async () => {
   await session.completeMessage(smsgs[0]);
   await session.close();
 
-  // 8-11. admin entity CRUD over the ATOM management API served on the same port as
+  // 8. topic session receive - publish with a session id, accept the session on a
+  // session-enabled SUBSCRIPTION (regression guard for issue #18).
+  const topicSessionId = `node-topic-session-${stamp}`;
+  const topicSender = client.createSender("smoke-topic");
+  await topicSender.sendMessages({ body: "topic session msg", sessionId: topicSessionId, messageId: `nts-${stamp}` });
+  await topicSender.close();
+
+  const topicSession = await client.acceptSession("smoke-topic", "smoke-topic-sessions", topicSessionId);
+  const tsMsgs = await topicSession.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  check("topic session receive", tsMsgs.length === 1 && tsMsgs[0].body === "topic session msg");
+  if (tsMsgs.length === 1) await topicSession.completeMessage(tsMsgs[0]);
+  await topicSession.close();
+
+  // 9-12. admin entity CRUD over the ATOM management API served on the same port as
   // AMQP. The JS SDK's ServiceBusAdministrationClient cannot target a plaintext
   // emulator yet - @azure/service-bus 7.9.5 hardcodes the scheme
   // (serviceBusAtomManagementClient.js: `https://${this.endpoint}/${path}`) - so this

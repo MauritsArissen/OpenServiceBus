@@ -24,7 +24,7 @@ import java.util.regex.Pattern;
  *
  * Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
- *   -> admin create/get/roundtrip/delete (ATOM management API)
+ *   -> topic session receive -> admin create/get/roundtrip/delete (ATOM management API)
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -115,7 +115,35 @@ public final class Smoke {
             results.add("FAIL session receive: " + e);
         }
 
-        // 8-11. admin entity CRUD over the ATOM management API served on the same port as
+        // 8. topic session receive - publish with a session id, accept the session on a
+        // session-enabled SUBSCRIPTION (regression guard for issue #18).
+        String topicSessionId = "java-topic-session-" + stamp;
+        try (ServiceBusSenderClient topicSender = new ServiceBusClientBuilder()
+                .connectionString(conn).retryOptions(retry)
+                .sender().topicName("smoke-topic").buildClient()) {
+
+            ServiceBusMessage topicMessage = new ServiceBusMessage("topic session msg");
+            topicMessage.setSessionId(topicSessionId);
+            topicSender.sendMessage(topicMessage);
+
+            try (ServiceBusSessionReceiverClient topicSessionClient = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sessionReceiver().topicName("smoke-topic").subscriptionName("smoke-topic-sessions")
+                    .disableAutoComplete().buildClient();
+                 ServiceBusReceiverClient topicSession = topicSessionClient.acceptSession(topicSessionId)) {
+
+                boolean received = false;
+                for (ServiceBusReceivedMessage m : topicSession.receiveMessages(1, Duration.ofSeconds(10))) {
+                    received = "topic session msg".equals(m.getBody().toString());
+                    topicSession.complete(m);
+                }
+                results.add(received ? "PASS topic session receive" : "FAIL topic session receive: no message within 10s");
+            }
+        } catch (Exception e) {
+            results.add("FAIL topic session receive: " + e);
+        }
+
+        // 9-12. admin entity CRUD over the ATOM management API served on the same port as
         // AMQP. The Java SDK's ServiceBusAdministrationClient cannot target a plaintext
         // emulator yet - verified against 7.17.11: it dials https://host:443 even with an
         // explicit http endpoint() override - so this exercises the exact same protocol

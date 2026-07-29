@@ -15,9 +15,9 @@ chart, and the standalone docs site are still open. Individual milestones below 
 marked accordingly - the original scope text is kept for reference.
 
 Known gaps within shipped milestones (tracked as bugs/limitations, see the feature docs):
-session routing through topic fan-out, transactional batched sends to topics, commit
-acknowledgement racing the replay, SAS enforcement for non-SDK clients that skip `$cbs`,
-and topic/subscription rehydration from SQLite (queues only today).
+transactional batched sends to topics, commit acknowledgement racing the replay, SAS
+enforcement for non-SDK clients that skip `$cbs`, and topic/subscription rehydration
+from SQLite (queues only today).
 
 ## Locked decisions
 
@@ -63,7 +63,7 @@ The flagship feature of Phase 2 and the largest single milestone in the roadmap.
 **Gate:** SDK publishes to a topic with three subscriptions on different SQL filters;
 only matching subs receive the message.
 
-### Sessions (v1.2) - SHIPPED (queues; session routing through topic fan-out still open)
+### Sessions (v1.2) - SHIPPED (queues and topic subscriptions)
 
 Can run parallel to topics work - independent code paths.
 
