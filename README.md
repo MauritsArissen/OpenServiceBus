@@ -26,7 +26,9 @@ It implements the full Service Bus feature surface that real client code uses: *
 topics + subscriptions (SQL/correlation filters), sessions, duplicate detection,
 auto-forwarding, transactions, defer, scheduled messages, TTL, peek-lock with renewal,
 dead-letter routing**, exposed over both **plain AMQP** and **AMQP-over-WebSocket**, with
-native **OpenTelemetry** instrumentation throughout.
+native **OpenTelemetry** instrumentation throughout. Entity CRUD works through the real
+**`ServiceBusAdministrationClient`** too - the broker serves the ATOM management API on the
+same port as AMQP, so one connection string drives both planes.
 
 |                          | OpenServiceBus                         | Official Microsoft emulator |
 | ------------------------ | -------------------------------------- | --------------------------- |
@@ -37,6 +39,7 @@ native **OpenTelemetry** instrumentation throughout.
 | Transports               | AMQP-TCP + AMQP-over-WebSocket         | AMQP-TCP only               |
 | Telemetry                | Native OpenTelemetry tracing + metrics | None                        |
 | `config.json` compatible | ✅                                     | ✅                          |
+| `ServiceBusAdministrationClient` | ✅ ATOM management API on the AMQP port | ❌                   |
 
 ---
 
@@ -94,6 +97,16 @@ var msg = await client.CreateReceiver("orders").ReceiveMessageAsync();
 
 `UseDevelopmentEmulator=true` tells the Azure SDK to skip TLS and accept the broker on
 plain TCP - the same trick the official Microsoft emulator uses.
+
+The same connection string also drives the management plane
+(`Azure.Messaging.ServiceBus` 7.20.1+):
+
+```csharp
+var admin = new ServiceBusAdministrationClient(connectionString);
+await admin.CreateQueueAsync(new CreateQueueOptions("orders") { MaxDeliveryCount = 5 });
+```
+
+→ [SDK Admin Client](docs/Admin-Client.md)
 
 ---
 
@@ -278,8 +291,9 @@ The host honors these `appsettings.json` / environment variable keys:
 
 | Key                                  | Default    | Notes                                                               |
 | ------------------------------------ | ---------- | ------------------------------------------------------------------- |
-| `OpenServiceBus:Amqp:Port`           | `5672`     | AMQP listener port                                                  |
-| `OpenServiceBus:Amqp:RequireSasAuth` | `false`    | Validate `$cbs put-token` against `SasKeys`                         |
+| `OpenServiceBus:Amqp:Port`           | `5672`     | AMQP + ATOM management port                                         |
+| `OpenServiceBus:Amqp:RequireSasAuth` | `false`    | Validate `$cbs put-token` and management requests against `SasKeys` |
+| `OpenServiceBus:AtomManagement:Enabled` | `true`  | Serve the `ServiceBusAdministrationClient` API on the AMQP port     |
 | `OpenServiceBus:Storage:Mode`        | `InMemory` | `Sqlite` to persist via the SQLite store                            |
 | `OpenServiceBus:Storage:DataSource`  | `:memory:` | Path to the SQLite `.db` file (use `/data/broker.db` in containers) |
 | `OpenServiceBus:WebSockets:Enabled`  | `false`    | Start the AMQP-over-WebSocket bridge                                |
@@ -316,6 +330,7 @@ Multi-page guides in [`docs/`](docs/) - also published to the [GitHub Wiki](http
 - **[Architecture](docs/Architecture.md)** - assemblies, AMQP layer, store contracts
 - **[Docker](docs/Docker.md)** - image, compose, env vars, persistence
 - **[Persistence](docs/Persistence.md)** - SQLite store, schema, restart semantics
+- **[SDK Admin Client](docs/Admin-Client.md)** - `ServiceBusAdministrationClient`, ATOM API, one-port design
 - **[Topics and Subscriptions](docs/Topics-and-Subscriptions.md)** - filters, rules, fan-out
 - **[Sessions](docs/Sessions.md)** - session-locked receivers, state, ordering
 - **[Auto-Forwarding](docs/Auto-Forwarding.md)** - `ForwardTo`, DLQ forwarding, cycles

@@ -30,11 +30,13 @@ public sealed class TopicManager : ITopicRegistry
     public event EventHandler<TopicDescriptor>? TopicCreated;
     public event EventHandler<TopicDescriptor>? TopicDeleted;
     public event EventHandler<SubscriptionDescriptor>? SubscriptionCreated;
+    public event EventHandler<SubscriptionDescriptor>? SubscriptionUpdated;
     public event EventHandler<SubscriptionDescriptor>? SubscriptionDeleted;
 
     event EventHandler<TopicDescriptor> ITopicRegistry.TopicCreated { add => TopicCreated += value; remove => TopicCreated -= value; }
     event EventHandler<TopicDescriptor> ITopicRegistry.TopicDeleted { add => TopicDeleted += value; remove => TopicDeleted -= value; }
     event EventHandler<SubscriptionDescriptor> ITopicRegistry.SubscriptionCreated { add => SubscriptionCreated += value; remove => SubscriptionCreated -= value; }
+    event EventHandler<SubscriptionDescriptor> ITopicRegistry.SubscriptionUpdated { add => SubscriptionUpdated += value; remove => SubscriptionUpdated -= value; }
     event EventHandler<SubscriptionDescriptor> ITopicRegistry.SubscriptionDeleted { add => SubscriptionDeleted += value; remove => SubscriptionDeleted -= value; }
 
     public Task<TopicDescriptor> CreateTopicAsync(TopicDescriptor descriptor, CancellationToken cancellationToken = default)
@@ -47,6 +49,24 @@ public sealed class TopicManager : ITopicRegistry
             TopicCreated?.Invoke(this, descriptor);
         }
         return Task.FromResult(stored);
+    }
+
+    public Task<TopicDescriptor> UpdateTopicAsync(TopicDescriptor descriptor, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
+
+        while (true)
+        {
+            if (!_topics.TryGetValue(descriptor.Name, out var existing))
+            {
+                throw new InvalidOperationException($"Topic '{descriptor.Name}' does not exist.");
+            }
+            if (_topics.TryUpdate(descriptor.Name, descriptor, existing))
+            {
+                return Task.FromResult(descriptor);
+            }
+        }
     }
 
     public Task<TopicDescriptor?> GetTopicAsync(string name, CancellationToken cancellationToken = default)
@@ -139,6 +159,44 @@ public sealed class TopicManager : ITopicRegistry
         };
 
         SubscriptionCreated?.Invoke(this, descriptor);
+        return descriptor;
+    }
+
+    public async Task<SubscriptionDescriptor> UpdateSubscriptionAsync(SubscriptionDescriptor descriptor, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.TopicName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
+
+        var key = SubKey(descriptor.TopicName, descriptor.Name);
+        while (true)
+        {
+            if (!_subscriptions.TryGetValue(key, out var existing))
+            {
+                throw new InvalidOperationException($"Subscription '{descriptor.TopicName}/{descriptor.Name}' does not exist.");
+            }
+            if (_subscriptions.TryUpdate(key, descriptor, existing))
+            {
+                break;
+            }
+        }
+
+        // Mirror the same settings onto the backing queue that create mirrors, so the
+        // receiver sources (which key off the queue descriptor) pick up the new values.
+        var backing = await _queues.GetAsync(descriptor.BackingQueueName, cancellationToken).ConfigureAwait(false);
+        if (backing is not null)
+        {
+            await _queues.UpdateAsync(backing with
+            {
+                LockDuration = descriptor.LockDuration,
+                MaxDeliveryCount = descriptor.MaxDeliveryCount,
+                DefaultMessageTimeToLive = descriptor.DefaultMessageTimeToLive,
+                DeadLetteringOnMessageExpiration = descriptor.DeadLetteringOnMessageExpiration,
+                ForwardDeadLetteredMessagesTo = descriptor.ForwardDeadLetteredMessagesTo,
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        SubscriptionUpdated?.Invoke(this, descriptor);
         return descriptor;
     }
 

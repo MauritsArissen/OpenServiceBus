@@ -14,6 +14,9 @@ using OpenServiceBus.InMemoryStorage.Queues;
 using OpenServiceBus.InMemoryStorage.Routing;
 using OpenServiceBus.InMemoryStorage.Topics;
 using OpenServiceBus.InMemoryStorage.Transactions;
+using OpenServiceBus.Management.Atom;
+using OpenServiceBus.Management.Atom.Hosting;
+using OpenServiceBus.Management.Atom.Protocol;
 
 namespace OpenServiceBus.Testing;
 
@@ -36,6 +39,8 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
     private readonly TtlExpirationService _ttlSweeper;
     private readonly ScheduledMessageActivator _scheduledActivator;
     private readonly WebSocketBridgeService? _wsBridge;
+    private readonly ProtocolFrontDoor? _frontDoor;
+    private readonly AtomHttpServer? _atomServer;
     private bool _disposed;
 
     private OpenServiceBusTestHost(
@@ -43,6 +48,8 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
         TtlExpirationService ttlSweeper,
         ScheduledMessageActivator scheduledActivator,
         WebSocketBridgeService? wsBridge,
+        ProtocolFrontDoor? frontDoor,
+        AtomHttpServer? atomServer,
         IQueueRegistry queues,
         ITopicRegistry topics,
         IMessageStore store,
@@ -56,6 +63,8 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
         _ttlSweeper = ttlSweeper;
         _scheduledActivator = scheduledActivator;
         _wsBridge = wsBridge;
+        _frontDoor = frontDoor;
+        _atomServer = atomServer;
         Queues = queues;
         Topics = topics;
         Store = store;
@@ -105,10 +114,14 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
 
         var port = opts.Port ?? GetFreePort();
 
+        // With ATOM management enabled the public port is owned by the protocol front door;
+        // the AMQP listener moves to an internal loopback port the front door pipes into.
+        var amqpPort = opts.EnableAtomManagement ? GetFreePort() : port;
+
         var listenerOptions = new AmqpListenerOptions
         {
-            Host = opts.Host,
-            Port = port,
+            Host = opts.EnableAtomManagement ? "127.0.0.1" : opts.Host,
+            Port = amqpPort,
             ContainerId = opts.ContainerId,
             IdleTimeoutMs = opts.IdleTimeoutMs,
             MaxMessageSize = opts.MaxMessageSize,
@@ -167,6 +180,27 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
         await scheduledActivator.StartAsync(CancellationToken.None);
         await diagnostics.StartAsync(CancellationToken.None);
 
+        // The ATOM management surface: the SDK's admin client derives its HTTP endpoint from
+        // the same host:port as AMQP, so the public port must speak both protocols. The front
+        // door sniffs each connection and pipes it to the AMQP listener or the ATOM server.
+        AtomHttpServer? atomServer = null;
+        ProtocolFrontDoor? frontDoor = null;
+        if (opts.EnableAtomManagement)
+        {
+            var atomOptions = new AtomManagementOptions();
+            if (opts.RequireSasAuth)
+            {
+                var keys = new Dictionary<string, string>(listenerOptions.SasKeys, StringComparer.Ordinal);
+                atomOptions.AuthorizeRequest = header =>
+                    SasTokenValidator.Validate(header, keys, opts.TimeProvider.GetUtcNow()).IsValid;
+            }
+            var handler = new AtomManagementHandler(queues, topics, storeAsIface, opts.TimeProvider, atomOptions);
+            atomServer = new AtomHttpServer(handler, GetFreePort(), atomOptions);
+            atomServer.Start();
+            frontDoor = new ProtocolFrontDoor(opts.Host, port, amqpPort, atomServer.Port);
+            frontDoor.Start();
+        }
+
         var connectionString =
             $"Endpoint=sb://{opts.Host}:{port};SharedAccessKeyName={opts.SasKeyName};SharedAccessKey={opts.SasKey};UseDevelopmentEmulator=true";
 
@@ -187,7 +221,7 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
                 Host = opts.Host,
                 Port = wsPort.Value,
                 UpstreamHost = "127.0.0.1",
-                UpstreamPort = port,
+                UpstreamPort = amqpPort,
             };
             wsBridge = new WebSocketBridgeService(
                 Options.Create(wsOptions),
@@ -203,6 +237,8 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
             ttlSweeper,
             scheduledActivator,
             wsBridge,
+            frontDoor,
+            atomServer,
             queues,
             topics,
             storeAsIface,
@@ -226,6 +262,14 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
         if (_disposed) return;
         _disposed = true;
 
+        if (_frontDoor is not null)
+        {
+            await _frontDoor.DisposeAsync();
+        }
+        if (_atomServer is not null)
+        {
+            await _atomServer.DisposeAsync();
+        }
         if (_wsBridge is not null)
         {
             await _wsBridge.DisposeAsync();

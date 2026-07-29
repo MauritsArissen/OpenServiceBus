@@ -6,6 +6,7 @@
     <Project Path="src/OpenServiceBus.Explorer/OpenServiceBus.Explorer.csproj" />
     <Project Path="src/OpenServiceBus.Host/OpenServiceBus.Host.csproj" />
     <Project Path="src/OpenServiceBus.Management/OpenServiceBus.Management.csproj" />
+    <Project Path="src/OpenServiceBus.Management.Atom/OpenServiceBus.Management.Atom.csproj" />
     <Project Path="src/OpenServiceBus.SqliteStorage/OpenServiceBus.SqliteStorage.csproj" />
     <Project Path="src/OpenServiceBus.Testing/OpenServiceBus.Testing.csproj" />
   </Folder>

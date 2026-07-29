@@ -12,6 +12,7 @@
     <ProjectReference Include="..\OpenServiceBus.Amqp\OpenServiceBus.Amqp.csproj" />
     <ProjectReference Include="..\OpenServiceBus.InMemoryStorage\OpenServiceBus.InMemoryStorage.csproj" />
     <ProjectReference Include="..\OpenServiceBus.Management\OpenServiceBus.Management.csproj" />
+    <ProjectReference Include="..\OpenServiceBus.Management.Atom\OpenServiceBus.Management.Atom.csproj" />
     <ProjectReference Include="..\OpenServiceBus.SqliteStorage\OpenServiceBus.SqliteStorage.csproj" />
   </ItemGroup>
 

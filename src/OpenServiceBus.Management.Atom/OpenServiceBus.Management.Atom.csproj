@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Description>Azure Service Bus ATOM-pub management protocol (the surface ServiceBusAdministrationClient speaks) plus the single-port AMQP/HTTP front door. Framework-only dependencies so the Testing package can embed it.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenServiceBus.Core\OpenServiceBus.Core.csproj" />
+  </ItemGroup>
+
+</Project>

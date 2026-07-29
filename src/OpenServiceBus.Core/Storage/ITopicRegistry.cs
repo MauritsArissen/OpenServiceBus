@@ -12,11 +12,24 @@ namespace OpenServiceBus.Core.Storage;
 public interface ITopicRegistry
 {
     Task<TopicDescriptor> CreateTopicAsync(TopicDescriptor descriptor, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replace the descriptor of an existing topic in place. Throws
+    /// <see cref="InvalidOperationException"/> when the topic does not exist.
+    /// </summary>
+    Task<TopicDescriptor> UpdateTopicAsync(TopicDescriptor descriptor, CancellationToken cancellationToken = default);
     Task<TopicDescriptor?> GetTopicAsync(string name, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TopicDescriptor>> ListTopicsAsync(CancellationToken cancellationToken = default);
     Task<bool> DeleteTopicAsync(string name, CancellationToken cancellationToken = default);
 
     Task<SubscriptionDescriptor> CreateSubscriptionAsync(SubscriptionDescriptor descriptor, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replace the descriptor of an existing subscription in place, mirroring the updated
+    /// settings onto its backing queue. Messages are untouched. Throws
+    /// <see cref="InvalidOperationException"/> when the subscription does not exist.
+    /// </summary>
+    Task<SubscriptionDescriptor> UpdateSubscriptionAsync(SubscriptionDescriptor descriptor, CancellationToken cancellationToken = default);
     Task<SubscriptionDescriptor?> GetSubscriptionAsync(string topicName, string subscriptionName, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SubscriptionDescriptor>> ListSubscriptionsAsync(string topicName, CancellationToken cancellationToken = default);
     Task<bool> DeleteSubscriptionAsync(string topicName, string subscriptionName, CancellationToken cancellationToken = default);
@@ -35,5 +48,8 @@ public interface ITopicRegistry
     event EventHandler<TopicDescriptor> TopicCreated;
     event EventHandler<TopicDescriptor> TopicDeleted;
     event EventHandler<SubscriptionDescriptor> SubscriptionCreated;
+
+    /// <summary>Raised after a subscription's descriptor has been replaced via <see cref="UpdateSubscriptionAsync"/>.</summary>
+    event EventHandler<SubscriptionDescriptor> SubscriptionUpdated;
     event EventHandler<SubscriptionDescriptor> SubscriptionDeleted;
 }
