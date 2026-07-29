@@ -38,7 +38,7 @@ export function CreateSubscriptionDialog({ presetTopic }: { presetTopic?: string
       if (forwardTo.trim()) options.forwardTo = forwardTo.trim();
       if (forwardDlq.trim()) options.forwardDeadLetteredMessagesTo = forwardDlq.trim();
 
-      await explorerApi.createSubscription(store.mgmt, topic, name.trim(), options);
+      await explorerApi.createSubscription(store.conn, topic, name.trim(), options);
       toast.success(`Created subscription '${topic}/${name.trim()}'`);
       store.setDialog(null);
       await store.refresh();

@@ -233,6 +233,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             <div className="space-y-0.5 rounded-md bg-muted/60 p-2 font-mono text-[11px] text-muted-foreground">
               <div>mgmt&nbsp;&nbsp;{store.pingResult.management}</div>
               <div>amqp&nbsp;&nbsp;{store.pingResult.serviceBus}</div>
+              <div>atom&nbsp;&nbsp;{store.pingResult.atomManagement}</div>
             </div>
           )}
         </div>

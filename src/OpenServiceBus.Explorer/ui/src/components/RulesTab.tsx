@@ -13,7 +13,7 @@ export function RulesTab({ topic, sub }: { topic: string; sub: string }) {
 
   const load = async () => {
     try {
-      setRules(await explorerApi.listRules(store.mgmt, topic, sub));
+      setRules(await explorerApi.listRules(store.conn, topic, sub));
     } catch (e) {
       toast.error("Loading rules failed: " + (e as Error).message);
     }
@@ -32,7 +32,7 @@ export function RulesTab({ topic, sub }: { topic: string; sub: string }) {
       description: "Messages matching only this rule will no longer be delivered to the subscription.",
       destructive: true,
       action: async () => {
-        await explorerApi.deleteRule(store.mgmt, topic, sub, name);
+        await explorerApi.deleteRule(store.conn, topic, sub, name);
         toast.success(`Deleted rule '${name}'`);
         await load();
       },

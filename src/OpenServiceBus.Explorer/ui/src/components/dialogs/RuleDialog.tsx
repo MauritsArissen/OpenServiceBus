@@ -39,7 +39,7 @@ export function RuleDialog({ topic, sub, edit }: { topic: string; sub: string; e
         put("contentType", rcContentType);
         put("replyTo", rcReplyTo);
       }
-      await explorerApi.putRule(store.mgmt, topic, sub, name.trim(), rule);
+      await explorerApi.putRule(store.conn, topic, sub, name.trim(), rule);
       toast.success(`${editing ? "Updated" : "Added"} rule '${name.trim()}'`);
       store.setDialog(null); // RulesTab reloads on dialog change
     } catch (e) {

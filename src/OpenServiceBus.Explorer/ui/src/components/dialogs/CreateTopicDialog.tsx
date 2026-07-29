@@ -20,7 +20,7 @@ export function CreateTopicDialog() {
       const options: Record<string, unknown> = {};
       const ttlN = parseInt(ttl, 10);
       if (ttlN > 0) options.defaultMessageTimeToLive = secondsToTimeSpan(ttlN);
-      await explorerApi.createTopic(store.mgmt, name.trim(), options);
+      await explorerApi.createTopic(store.conn, name.trim(), options);
       toast.success(`Created topic '${name.trim()}'`);
       store.setDialog(null);
       await store.refresh();

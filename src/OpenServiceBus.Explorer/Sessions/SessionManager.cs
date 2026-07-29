@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Azure.Messaging.ServiceBus;
+using Azure.Messaging.ServiceBus.Administration;
 
 namespace OpenServiceBus.Explorer.Sessions;
 
@@ -30,14 +31,29 @@ public sealed class SessionManager : IAsyncDisposable
 
 public sealed class Session : IAsyncDisposable
 {
+    private readonly string _connectionString;
     private readonly ServiceBusClient _client;
+    private ServiceBusAdministrationClient? _admin;
     private readonly ConcurrentDictionary<string, ServiceBusReceiver> _receivers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (ServiceBusReceivedMessage Message, ServiceBusReceiver Receiver)> _lockedMessages = new(StringComparer.OrdinalIgnoreCase);
 
     internal Session(string connectionString)
     {
+        _connectionString = connectionString;
         _client = new ServiceBusClient(connectionString);
     }
+
+    /// <summary>
+    /// The real SDK admin client for this connection - entity CRUD goes through the broker's
+    /// ATOM management API, the same protocol every other Service Bus admin client speaks.
+    /// Fail-fast retry: the Explorer is interactive, a dead endpoint should error in seconds.
+    /// </summary>
+    public ServiceBusAdministrationClient Admin => _admin ??= new ServiceBusAdministrationClient(
+        _connectionString,
+        new ServiceBusAdministrationClientOptions
+        {
+            Retry = { MaxRetries = 1, NetworkTimeout = TimeSpan.FromSeconds(10) },
+        });
 
     public ServiceBusSender Sender(string queueOrTopic) => _client.CreateSender(queueOrTopic);
 

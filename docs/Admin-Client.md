@@ -100,7 +100,11 @@ On `OpenServiceBusTestHost` the equivalent switch is
 
 - The management surface is plain HTTP + ATOM XML, so `curl` works too:
   `curl "http://localhost:5672/orders?api-version=2021-05"`.
-- The JSON REST API on port 5300 (used by the Explorer UI) is unchanged and independent.
+- The [Explorer UI](Explorer.md) manages entities through the real
+  `ServiceBusAdministrationClient` against this API - the UI, the SDKs, and `curl` all
+  share one management plane.
+- The JSON REST API on port 5300 is unchanged and still serves `/health` and the
+  Explorer's metrics sampling.
 
 ### Cross-SDK admin client status
 
