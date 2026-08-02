@@ -1,6 +1,7 @@
 node_modules
 dist
 .lighthouseci
+.lighthouse
 dist-ssr
 .vite
 *.log
