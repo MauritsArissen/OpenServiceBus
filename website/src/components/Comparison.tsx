@@ -70,7 +70,7 @@ export default function Comparison() {
                 <Cell value={row.osb} />
               </div>
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-1 font-semibold">
+                <div className="text-[10px] uppercase tracking-wider text-neutral-400 mb-1 font-semibold">
                   MS Emulator
                 </div>
                 <Cell value={row.ms} />

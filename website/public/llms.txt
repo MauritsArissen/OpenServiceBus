@@ -1,0 +1,23 @@
+# OpenServiceBus
+
+> Lightweight, MIT-licensed Azure Service Bus emulator for .NET. It runs in Docker or embeds directly in tests as a NuGet package, and the official Azure Service Bus SDKs (.NET, Node.js, Java, Python) connect to it unmodified: AMQP 1.0 for messaging and the ATOM management API (ServiceBusAdministrationClient) on the same port. Feature surface: queues, topics and subscriptions with SQL/correlation filters and SQL rule actions, sessions, duplicate detection, auto-forwarding, transactions, scheduled messages, TTL, peek-lock, dead-lettering, and native OpenTelemetry.
+
+## Website
+
+- [Home](https://openservicebus.net/): overview, quickstart, feature comparison with the official Microsoft emulator
+- [Examples](https://openservicebus.net/examples): runnable send/receive, topics, sessions, and admin examples for every SDK
+
+## Documentation
+
+- [Getting started](https://github.com/mauritsarissen/OpenServiceBus/blob/main/docs/Getting-Started.md): install and first send/receive
+- [Configuration](https://github.com/mauritsarissen/OpenServiceBus/blob/main/docs/Configuration.md): config.json schema and environment variables
+- [SDK admin client](https://github.com/mauritsarissen/OpenServiceBus/blob/main/docs/Admin-Client.md): ServiceBusAdministrationClient and the ATOM management API
+- [Testing](https://github.com/mauritsarissen/OpenServiceBus/blob/main/docs/Testing.md): the embeddable OpenServiceBusTestHost for in-process broker tests
+- [Topics and subscriptions](https://github.com/mauritsarissen/OpenServiceBus/blob/main/docs/Topics-and-Subscriptions.md): filters, SQL rule actions, fan-out
+- [Sessions](https://github.com/mauritsarissen/OpenServiceBus/blob/main/docs/Sessions.md): session queues and session-enabled subscriptions
+
+## Source and packages
+
+- [GitHub repository](https://github.com/mauritsarissen/OpenServiceBus): source, issues, full docs folder
+- [OpenServiceBus.Testing on NuGet](https://www.nuget.org/packages/OpenServiceBus.Testing): embeddable test host package
+- [Docker image](https://hub.docker.com/r/mauritsarissen/openservicebus): broker plus Explorer UI container
