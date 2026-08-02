@@ -25,9 +25,10 @@ export default function Nav() {
       <div className="mx-auto max-w-5xl px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
         <Link
           to="/"
+          aria-label="OpenServiceBus"
           className="flex items-center gap-2 text-sm font-semibold text-neutral-100 hover:text-white transition min-w-0"
         >
-          <img src="/favicon.svg" alt="OpenServiceBus" className="h-7 w-7 shrink-0" />
+          <img src="/favicon.svg" alt="" className="h-7 w-7 shrink-0" />
           {/* Logo-only on phones (under 640px) so the three nav links don't get pushed off. */}
           <span className="hidden sm:inline truncate">OpenServiceBus</span>
         </Link>
