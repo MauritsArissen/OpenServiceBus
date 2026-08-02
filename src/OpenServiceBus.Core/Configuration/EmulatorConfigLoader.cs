@@ -203,12 +203,26 @@ public static class EmulatorConfigLoader
                 return null;
         }
 
+        SqlRuleAction? action = null;
+        if (!string.IsNullOrWhiteSpace(props.Action?.SqlExpression))
+        {
+            try
+            {
+                action = new SqlRuleAction(props.Action.SqlExpression);
+            }
+            catch (FormatException ex)
+            {
+                warnings.Add($"{label}: invalid Action.SqlExpression - {ex.Message} - skipping the action.");
+            }
+        }
+
         return new RuleDescriptor
         {
             TopicName = topicName,
             SubscriptionName = subscriptionName,
             Name = r.Name,
             Filter = filter,
+            Action = action,
         };
     }
 

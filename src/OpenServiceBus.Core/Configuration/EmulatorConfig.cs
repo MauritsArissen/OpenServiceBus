@@ -155,6 +155,9 @@ public sealed class RuleProperties
 
     [JsonPropertyName("CorrelationFilter")]
     public CorrelationFilterConfig? CorrelationFilter { get; set; }
+
+    [JsonPropertyName("Action")]
+    public SqlFilterConfig? Action { get; set; }
 }
 
 public sealed class SqlFilterConfig

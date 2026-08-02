@@ -179,13 +179,14 @@ public static class EntityDescriptionCodec
         {
             if (element.Name.LocalName == "DefaultRuleDescription")
             {
-                var (filter, ruleName) = ParseRuleBody(element);
+                var (filter, action, ruleName) = ParseRuleBody(element);
                 defaultRule = new RuleDescriptor
                 {
                     TopicName = topicName,
                     SubscriptionName = subscriptionName,
                     Name = ruleName ?? "$Default",
                     Filter = filter,
+                    Action = action,
                 };
                 continue;
             }
@@ -211,23 +212,30 @@ public static class EntityDescriptionCodec
 
     public static XElement RuleDescription(RuleDescriptor rule, DateTimeOffset createdAt)
     {
+        var actionElement = rule.Action is null
+            ? new XElement(Sb + "Action", new XAttribute(AtomXml.Xsi + "type", "EmptyRuleAction"))
+            : new XElement(Sb + "Action",
+                new XAttribute(AtomXml.Xsi + "type", "SqlRuleAction"),
+                new XElement(Sb + "SqlExpression", rule.Action.Expression),
+                new XElement(Sb + "CompatibilityLevel", 20));
         return new XElement(Sb + "RuleDescription",
             new XAttribute(XNamespace.Xmlns + "i", AtomXml.Xsi),
             FilterElement(rule.Filter),
-            new XElement(Sb + "Action", new XAttribute(AtomXml.Xsi + "type", "EmptyRuleAction")),
+            actionElement,
             new XElement(Sb + "CreatedAt", AtomXml.Timestamp(createdAt)),
             new XElement(Sb + "Name", rule.Name));
     }
 
     public static RuleDescriptor ParseRuleDescription(string topicName, string subscriptionName, string ruleName, XElement description)
     {
-        var (filter, _) = ParseRuleBody(description);
+        var (filter, action, _) = ParseRuleBody(description);
         return new RuleDescriptor
         {
             TopicName = topicName,
             SubscriptionName = subscriptionName,
             Name = ruleName,
             Filter = filter,
+            Action = action,
         };
     }
 
@@ -357,12 +365,31 @@ public static class EntityDescriptionCodec
             valueElement);
     }
 
-    /// <summary>Parse a Filter (+ optional Name) from a RuleDescription or DefaultRuleDescription body.</summary>
-    private static (RuleFilter Filter, string? Name) ParseRuleBody(XElement ruleElement)
+    /// <summary>Parse a Filter (+ optional Action and Name) from a RuleDescription or DefaultRuleDescription body.</summary>
+    private static (RuleFilter Filter, SqlRuleAction? Action, string? Name) ParseRuleBody(XElement ruleElement)
     {
         var name = ruleElement.Elements().FirstOrDefault(e => e.Name.LocalName == "Name")?.Value;
         var filterElement = ruleElement.Elements().FirstOrDefault(e => e.Name.LocalName == "Filter");
-        return (ParseFilter(filterElement), name);
+
+        SqlRuleAction? action = null;
+        var actionElement = ruleElement.Elements().FirstOrDefault(e => e.Name.LocalName == "Action");
+        if (actionElement is not null)
+        {
+            var typeValue = actionElement.Attribute(AtomXml.Xsi + "type")?.Value ?? "EmptyRuleAction";
+            var colon = typeValue.IndexOf(':');
+            var actionType = colon >= 0 ? typeValue[(colon + 1)..] : typeValue;
+            if (actionType == "SqlRuleAction")
+            {
+                var expression = actionElement.Elements().FirstOrDefault(e => e.Name.LocalName == "SqlExpression")?.Value;
+                if (string.IsNullOrWhiteSpace(expression))
+                {
+                    throw new FormatException("SqlRuleAction requires a SqlExpression element.");
+                }
+                action = new SqlRuleAction(expression);
+            }
+        }
+
+        return (ParseFilter(filterElement), action, name);
     }
 
     private static RuleFilter ParseFilter(XElement? filterElement)

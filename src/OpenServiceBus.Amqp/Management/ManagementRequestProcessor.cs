@@ -488,9 +488,10 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         }
 
         RuleFilter filter;
+        SqlRuleAction? action;
         try
         {
-            filter = RuleWireCodec.DecodeFilter(descObj!);
+            (filter, action) = RuleWireCodec.DecodeRule(descObj!);
         }
         catch (ArgumentException ex)
         {
@@ -498,7 +499,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         }
         catch (FormatException ex)
         {
-            // SqlFilter parse errors surface here.
+            // SqlFilter / SqlRuleAction parse errors surface here.
             return BuildResponse(request, 400, "BadRequest: " + ex.Message);
         }
 
@@ -514,6 +515,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
                 SubscriptionName = _subscriptionName!,
                 Name = ruleName,
                 Filter = filter,
+                Action = action,
             }).GetAwaiter().GetResult();
         }
         catch (InvalidOperationException ex)
@@ -557,7 +559,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
             entries.Add(new Map
             {
                 [RuleNameBodyKey] = rule.Name,
-                [RuleDescriptionBodyKey] = RuleWireCodec.EncodeRuleDescription(rule.Name, rule.Filter),
+                [RuleDescriptionBodyKey] = RuleWireCodec.EncodeRuleDescription(rule.Name, rule.Filter, rule.Action),
             });
         }
 

@@ -1,4 +1,4 @@
-# Live demo — demo.openservicebus.net
+# Live demo - demo.openservicebus.net
 
 A hosted, always-on Explorer wired to a self-resetting OpenServiceBus instance. The
 connection is locked, and the environment wipes + reseeds every 30 minutes.
@@ -7,22 +7,22 @@ connection is locked, and the environment wipes + reseeds every 30 minutes.
 
 `docker-compose.yml` brings up two containers:
 
-- **openservicebus** — the published `mauritsarissen/openservicebus:latest` image (broker +
+- **openservicebus** - the published `mauritsarissen/openservicebus:latest` image (broker +
   Explorer UI). Runs in **demo mode** (`OSB_EXPLORER_DEMO=true`): the Explorer's connection
   inputs are grayed out ("Not changeable in the live demo") and a reset countdown shows in
   the top bar. Only the Explorer port (5400) is exposed, on loopback, for nginx.
-- **seeder** — `mauritsarissen/openservicebus-demo-seeder:latest`. Creates the demo topology
+- **seeder** - `mauritsarissen/openservicebus-demo-seeder:latest`. Creates the demo topology
   (2 queues + 1 topic with 3 subscriptions, two SQL-filtered), drives fluctuating load that
   never exceeds ~450 active messages (sending, completing, dead-lettering, DLQ cleanup,
   deferring, abandoning), and wipes + recreates everything on each 30-minute boundary.
 
-The reset cadence (`*_RESET_INTERVAL_SECONDS`) is shared by both — they align to wall-clock
+The reset cadence (`*_RESET_INTERVAL_SECONDS`) is shared by both - they align to wall-clock
 boundaries (:00 / :30 UTC), so the countdown and the actual reset agree with no coordination.
 
 ## Deploy
 
 This is the **final job of `release.yml`** (`deploy-demo`), so it runs only after an actual
-version/tag release — never on an ordinary push to `main`. Once the broker image is
+version/tag release - never on an ordinary push to `main`. Once the broker image is
 published, it builds/pushes the seeder image, rsyncs this folder to
 `/opt/openservicebus-demo/` on the VPS, and runs `docker compose pull && up -d`, picking up
 the just-published `:latest`. To redeploy the demo between releases, re-run the latest
@@ -31,11 +31,11 @@ the just-published `:latest`. To redeploy the demo between releases, re-run the 
 ## One-time VPS setup (manual)
 
 The VPS already has everything installed (Docker + compose plugin, nginx, and certbot with
-its auto-renew timer active — the same stack that serves openservicebus.net). Only these
+its auto-renew timer active - the same stack that serves openservicebus.net). Only these
 one-time steps remain; after them everything stays current automatically.
 
 1. **DNS** (Cloudflare): a **proxied** (orange-cloud) record `demo.openservicebus.net` → the
-   VPS origin IP. Keeping it proxied is what hides the origin IP — public DNS returns
+   VPS origin IP. Keeping it proxied is what hides the origin IP - public DNS returns
    Cloudflare's addresses, never the server's. Set the zone's SSL/TLS mode to
    **Full (strict)** so Cloudflare talks to the origin over the Let's Encrypt cert below.
 2. **First deploy**: cut a release (so `openservicebus:latest` includes demo mode). The

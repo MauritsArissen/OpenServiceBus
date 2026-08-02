@@ -9,7 +9,10 @@ namespace OpenServiceBus.Core.Filters.Sql;
 ///   and-expr         := unary-expr ( AND unary-expr )*
 ///   unary-expr       := NOT unary-expr | predicate
 ///   predicate        := comparison ( IS [NOT] NULL | [NOT] LIKE string | [NOT] IN '(' list ')' )?
-///   comparison       := primary ( ( '=' | '!=' | '&lt;&gt;' | '&lt;' | '&lt;=' | '&gt;' | '&gt;=' ) primary )?
+///   comparison       := additive ( ( '=' | '!=' | '&lt;&gt;' | '&lt;' | '&lt;=' | '&gt;' | '&gt;=' ) additive )?
+///   additive         := multiplicative ( ( '+' | '-' ) multiplicative )*
+///   multiplicative   := unary-arith ( ( '*' | '/' | '%' ) unary-arith )*
+///   unary-arith      := '-' unary-arith | primary
 ///   primary          := literal | property-ref | '(' expression ')' | EXISTS '(' identifier ')' | NOT EXISTS '(' identifier ')'
 ///   property-ref     := ( identifier '.' )? identifier
 /// </summary>
@@ -21,6 +24,15 @@ internal sealed class SqlParser
     public SqlParser(string source)
     {
         _tokens = new SqlLexer(source).Tokenize();
+    }
+
+    /// <summary>
+    /// Parse over a pre-lexed token slice (must end with an <see cref="SqlTokenKind.EndOfInput"/>
+    /// token). Used by <see cref="SqlActionParser"/> to parse the value side of a SET statement.
+    /// </summary>
+    internal SqlParser(List<SqlToken> tokens)
+    {
+        _tokens = tokens;
     }
 
     public SqlExpressionNode ParseExpression()
@@ -106,7 +118,7 @@ internal sealed class SqlParser
             var values = new List<SqlExpressionNode>();
             while (Current.Kind != SqlTokenKind.RightParen)
             {
-                values.Add(ParsePrimary());
+                values.Add(ParseAdditive());
                 if (!Match(SqlTokenKind.Comma)) break;
             }
             Expect(SqlTokenKind.RightParen, "Expected ')' to close IN list.");
@@ -125,13 +137,66 @@ internal sealed class SqlParser
 
     private SqlExpressionNode ParseComparison()
     {
-        var left = ParsePrimary();
+        var left = ParseAdditive();
         if (TryConsumeComparison(out var op))
         {
-            var right = ParsePrimary();
+            var right = ParseAdditive();
             return new SqlComparisonNode(op, left, right);
         }
         return left;
+    }
+
+    private SqlExpressionNode ParseAdditive()
+    {
+        var left = ParseMultiplicative();
+        while (true)
+        {
+            if (Match(SqlTokenKind.Plus))
+            {
+                left = new SqlArithmeticNode(SqlArithmeticOp.Add, left, ParseMultiplicative());
+            }
+            else if (Match(SqlTokenKind.Minus))
+            {
+                left = new SqlArithmeticNode(SqlArithmeticOp.Subtract, left, ParseMultiplicative());
+            }
+            else
+            {
+                return left;
+            }
+        }
+    }
+
+    private SqlExpressionNode ParseMultiplicative()
+    {
+        var left = ParseUnaryArithmetic();
+        while (true)
+        {
+            if (Match(SqlTokenKind.Star))
+            {
+                left = new SqlArithmeticNode(SqlArithmeticOp.Multiply, left, ParseUnaryArithmetic());
+            }
+            else if (Match(SqlTokenKind.Slash))
+            {
+                left = new SqlArithmeticNode(SqlArithmeticOp.Divide, left, ParseUnaryArithmetic());
+            }
+            else if (Match(SqlTokenKind.Percent))
+            {
+                left = new SqlArithmeticNode(SqlArithmeticOp.Modulo, left, ParseUnaryArithmetic());
+            }
+            else
+            {
+                return left;
+            }
+        }
+    }
+
+    private SqlExpressionNode ParseUnaryArithmetic()
+    {
+        if (Match(SqlTokenKind.Minus))
+        {
+            return new SqlNegateNode(ParseUnaryArithmetic());
+        }
+        return ParsePrimary();
     }
 
     private SqlExpressionNode ParsePrimary()

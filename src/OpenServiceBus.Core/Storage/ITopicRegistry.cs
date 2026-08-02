@@ -45,6 +45,14 @@ public interface ITopicRegistry
     /// </summary>
     IReadOnlyList<string> EvaluateSubscribers(string topicName, MessageFilterContext message);
 
+    /// <summary>
+    /// Like <see cref="EvaluateSubscribers"/> but returns the matched subscription
+    /// descriptors together with the SQL action of the matching rule (first match in rule
+    /// name order when several rules match), so the fan-out can mutate that subscription's
+    /// copy. This is what the router uses.
+    /// </summary>
+    IReadOnlyList<SubscriberMatch> EvaluateSubscriberMatches(string topicName, MessageFilterContext message);
+
     event EventHandler<TopicDescriptor> TopicCreated;
     event EventHandler<TopicDescriptor> TopicDeleted;
     event EventHandler<SubscriptionDescriptor> SubscriptionCreated;
@@ -53,3 +61,9 @@ public interface ITopicRegistry
     event EventHandler<SubscriptionDescriptor> SubscriptionUpdated;
     event EventHandler<SubscriptionDescriptor> SubscriptionDeleted;
 }
+
+/// <summary>
+/// One subscription that matched a published message, plus the SQL action (if any) of the
+/// rule that matched it - the unit the router fans out on.
+/// </summary>
+public sealed record SubscriberMatch(SubscriptionDescriptor Subscription, SqlRuleAction? Action);
