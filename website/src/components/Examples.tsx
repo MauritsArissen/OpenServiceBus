@@ -590,7 +590,7 @@ export default function Examples() {
             <span className="h-2.5 w-2.5 rounded-full bg-red-500/70 shrink-0" />
             <span className="h-2.5 w-2.5 rounded-full bg-amber-500/70 shrink-0" />
             <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/70 shrink-0" />
-            <span className="ml-2 text-xs text-neutral-500 font-mono truncate">{variant.language}</span>
+            <span className="ml-2 text-xs text-neutral-400 font-mono truncate">{variant.language}</span>
           </div>
           <div className="flex items-center gap-2 min-w-0 justify-between sm:justify-end">
             {active.variants.length > 1 && (
@@ -671,7 +671,7 @@ function highlight(line: string) {
   return (
     <>
       {tokens}
-      {commentPart && <span className="text-neutral-500">{commentPart}</span>}
+      {commentPart && <span className="text-neutral-400">{commentPart}</span>}
     </>
   );
 }

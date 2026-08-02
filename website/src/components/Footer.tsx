@@ -1,7 +1,7 @@
 export default function Footer() {
   return (
     <footer className="border-t border-neutral-900 min-w-0">
-      <div className="mx-auto max-w-5xl px-4 sm:px-6 py-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-sm text-neutral-500">
+      <div className="mx-auto max-w-5xl px-4 sm:px-6 py-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-sm text-neutral-400">
         <div>
           © {new Date().getFullYear()} OpenServiceBus · Released under the MIT license
         </div>

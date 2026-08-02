@@ -113,7 +113,7 @@ export default function Comparison() {
         </table>
       </div>
 
-      <p className="mt-4 text-xs text-neutral-500">
+      <p className="mt-4 text-xs text-neutral-400">
         Comparison reflects feature coverage as of the latest release. "Partial"
         means the feature is wired but lags the official emulator in a
         documented way - see the project README for specifics.
@@ -141,7 +141,7 @@ function Cell({ value }: { value: string | boolean | "partial" }) {
   }
   if (value === false) {
     return (
-      <span className="inline-flex items-center gap-1.5 text-neutral-500">
+      <span className="inline-flex items-center gap-1.5 text-neutral-400">
         <svg
           viewBox="0 0 24 24"
           className="h-4 w-4"

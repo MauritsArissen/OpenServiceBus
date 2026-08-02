@@ -22,7 +22,7 @@ export default function Quickstart() {
             <span className="h-2.5 w-2.5 rounded-full bg-red-500/70 shrink-0" />
             <span className="h-2.5 w-2.5 rounded-full bg-amber-500/70 shrink-0" />
             <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/70 shrink-0" />
-            <span className="ml-2 text-xs text-neutral-500 font-mono truncate">terminal</span>
+            <span className="ml-2 text-xs text-neutral-400 font-mono truncate">terminal</span>
           </div>
           <CopyButton text={DOCKER_CMD} />
         </div>
@@ -54,7 +54,7 @@ export default function Quickstart() {
 function EndpointCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3 min-w-0">
-      <div className="text-[11px] uppercase tracking-wide text-neutral-500 font-semibold">{label}</div>
+      <div className="text-[11px] uppercase tracking-wide text-neutral-400 font-semibold">{label}</div>
       <div className="mt-1 font-mono text-sm text-neutral-200 break-all">{value}</div>
     </div>
   );

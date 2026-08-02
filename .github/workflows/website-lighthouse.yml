@@ -1,0 +1,44 @@
+name: Website Lighthouse
+
+# Gates every website change on Google Lighthouse: the built site is audited on both
+# routes (/ and /examples, desktop preset, 3 runs with median-run assertions) and the
+# job FAILS if any category - performance, accessibility, best practices, SEO - scores
+# below 99. Thresholds and audited URLs live in website/lighthouserc.json. Reports are
+# uploaded to Lighthouse's temporary public storage; links appear in the job log.
+
+on:
+  pull_request:
+    paths:
+      - "website/**"
+      - ".github/workflows/website-lighthouse.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lighthouse:
+    name: Lighthouse (all categories >= 99)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build
+        working-directory: website
+        run: npm run build
+
+      - name: Lighthouse audit
+        working-directory: website
+        run: npx --yes @lhci/cli@0.15.x autorun --config=lighthouserc.json
