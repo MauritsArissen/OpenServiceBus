@@ -263,22 +263,27 @@ public sealed class TopicManager : ITopicRegistry
         return Task.FromResult(snapshot);
     }
 
-    public IReadOnlyList<string> EvaluateSubscribers(string topicName, MessageFilterContext message)
+    public IReadOnlyList<string> EvaluateSubscribers(string topicName, MessageFilterContext message) =>
+        EvaluateSubscriberMatches(topicName, message).Select(m => m.Subscription.BackingQueueName).ToArray();
+
+    public IReadOnlyList<SubscriberMatch> EvaluateSubscriberMatches(string topicName, MessageFilterContext message)
     {
-        if (!_topics.ContainsKey(topicName)) return Array.Empty<string>();
+        if (!_topics.ContainsKey(topicName)) return Array.Empty<SubscriberMatch>();
 
         var prefix = $"{topicName}/";
-        var matched = new List<string>();
+        var matched = new List<SubscriberMatch>();
         foreach (var (key, sub) in _subscriptions)
         {
             if (!key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
             if (!_rules.TryGetValue(key, out var rules) || rules.IsEmpty) continue;
 
-            foreach (var rule in rules.Values)
+            // Rule name order keeps "which rule's action applies" deterministic when
+            // several rules match (the dictionary itself has no stable order).
+            foreach (var rule in rules.Values.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
             {
                 if (rule.Filter.Matches(message))
                 {
-                    matched.Add(sub.BackingQueueName);
+                    matched.Add(new SubscriberMatch(sub, rule.Action));
                     break;
                 }
             }

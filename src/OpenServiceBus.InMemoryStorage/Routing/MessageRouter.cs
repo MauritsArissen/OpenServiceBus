@@ -17,17 +17,20 @@ public sealed class MessageRouter : IMessageRouter
     private readonly ITopicRegistry? _topics;
     private readonly IMessageStore _store;
     private readonly ILogger<MessageRouter> _logger;
+    private readonly IRuleActionApplier? _actionApplier;
 
     public MessageRouter(
         IQueueRegistry queues,
         IMessageStore store,
         ILogger<MessageRouter> logger,
-        ITopicRegistry? topics = null)
+        ITopicRegistry? topics = null,
+        IRuleActionApplier? actionApplier = null)
     {
         _queues = queues;
         _topics = topics;
         _store = store;
         _logger = logger;
+        _actionApplier = actionApplier;
     }
 
     public async Task<IReadOnlyList<string>> RouteAsync(
@@ -88,16 +91,28 @@ public sealed class MessageRouter : IMessageRouter
                     return;
                 }
 
-                var subs = await _topics.ListSubscriptionsAsync(topic.Name, cancellationToken).ConfigureAwait(false);
-                var matchedNames = _topics.EvaluateSubscribers(topic.Name, filterContext);
-                var matched = subs.Where(s => matchedNames.Contains(s.BackingQueueName, StringComparer.OrdinalIgnoreCase)).ToArray();
+                var matched = _topics.EvaluateSubscriberMatches(topic.Name, filterContext);
 
-                foreach (var sub in matched)
+                foreach (var (sub, action) in matched)
                 {
+                    var subEncoded = encoded;
+                    if (action is not null && _actionApplier is not null)
+                    {
+                        try
+                        {
+                            subEncoded = _actionApplier.Apply(encoded, action);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex,
+                                "SQL rule action failed on '{Subscription}' - delivering the copy unmodified. Action: {Action}",
+                                sub.BackingQueueName, action.Expression);
+                        }
+                    }
+
                     if (!string.IsNullOrEmpty(sub.ForwardTo))
                     {
-                        // Subscription auto-forward: skip its backing queue, route to the forward target.
-                        await RouteInternalAsync(sub.ForwardTo, encoded, expiresAt, scheduledFor,
+                        await RouteInternalAsync(sub.ForwardTo, subEncoded, expiresAt, scheduledFor,
                             sessionId, messageId, dedupWindow, filterContext, deliveryCount,
                             depth + 1, landed, cancellationToken).ConfigureAwait(false);
                         continue;
@@ -108,7 +123,7 @@ public sealed class MessageRouter : IMessageRouter
                     {
                         var dlq = sub.BackingQueueName + "/$DeadLetterQueue";
                         await _store.EnqueueAsync(
-                            dlq, encoded, expiresAt, scheduledFor,
+                            dlq, subEncoded, expiresAt, scheduledFor,
                             sessionId: null, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
                         landed.Add(dlq);
                         _logger.LogWarning(
@@ -118,7 +133,7 @@ public sealed class MessageRouter : IMessageRouter
                     }
 
                     await _store.EnqueueAsync(
-                        sub.BackingQueueName, encoded, expiresAt, scheduledFor,
+                        sub.BackingQueueName, subEncoded, expiresAt, scheduledFor,
                         subSessionId, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
                     landed.Add(sub.BackingQueueName);
                 }

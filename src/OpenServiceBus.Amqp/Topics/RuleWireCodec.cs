@@ -49,12 +49,19 @@ internal static class RuleWireCodec
     // on the ulong code mapping (which differs across SDK versions).
     private static readonly Symbol RuleDescriptionDescriptor = "com.microsoft:rule-description:list";
     private static readonly Symbol EmptyRuleActionDescriptor = "com.microsoft:empty-rule-action:list";
+    private static readonly Symbol SqlRuleActionDescriptor = "com.microsoft:sql-rule-action:list";
     private static readonly Symbol SqlFilterDescriptor = "com.microsoft:sql-filter:list";
     private static readonly Symbol TrueFilterDescriptor = "com.microsoft:true-filter:list";
     private static readonly Symbol FalseFilterDescriptor = "com.microsoft:false-filter:list";
     private static readonly Symbol CorrelationFilterDescriptor = "com.microsoft:correlation-filter:list";
 
-    public static RuleFilter DecodeFilter(object descriptionObj)
+    public static RuleFilter DecodeFilter(object descriptionObj) => DecodeRule(descriptionObj).Filter;
+
+    /// <summary>
+    /// Decode a <c>rule-description</c> map into the filter plus the optional SQL rule
+    /// action (<c>sql-rule-action</c> key, carrying an <c>expression</c>).
+    /// </summary>
+    public static (RuleFilter Filter, SqlRuleAction? Action) DecodeRule(object descriptionObj)
     {
         if (descriptionObj is DescribedValue dv)
         {
@@ -64,7 +71,18 @@ internal static class RuleWireCodec
         {
             throw new ArgumentException($"rule-description must be a Map (was {descriptionObj?.GetType().FullName}: {descriptionObj}).");
         }
-        return DecodeFilterFromMap(ruleDescription);
+
+        SqlRuleAction? action = null;
+        if (ruleDescription.TryGetValue(SqlRuleActionKey, out var actionObj) && actionObj is Map actionMap)
+        {
+            var actionExpression = actionMap.TryGetValue(ExpressionKey, out var ae) ? ae as string : null;
+            if (!string.IsNullOrWhiteSpace(actionExpression))
+            {
+                action = new SqlRuleAction(actionExpression);
+            }
+        }
+
+        return (DecodeFilterFromMap(ruleDescription), action);
     }
 
     /// <summary>
@@ -136,13 +154,13 @@ internal static class RuleWireCodec
     /// rule-description descriptor code, whose value is a positional list of
     /// <c>[filter, action, name]</c> - each entry itself a described-list value.
     /// </summary>
-    public static DescribedValue EncodeRuleDescription(string ruleName, RuleFilter filter) =>
+    public static DescribedValue EncodeRuleDescription(string ruleName, RuleFilter filter, SqlRuleAction? action = null) =>
         new DescribedValue(
             RuleDescriptionDescriptor,
             new List
             {
                 EncodeFilter(filter),
-                EncodeEmptyAction(),
+                action is null ? EncodeEmptyAction() : EncodeSqlAction(action),
                 ruleName,
             });
 
@@ -171,6 +189,9 @@ internal static class RuleWireCodec
 
     private static DescribedValue EncodeEmptyAction() =>
         new DescribedValue(EmptyRuleActionDescriptor, new List());
+
+    private static DescribedValue EncodeSqlAction(SqlRuleAction action) =>
+        new DescribedValue(SqlRuleActionDescriptor, new List { action.Expression, DefaultCompatibilityLevel });
 
     private static Map EncodeCorrelationProps(IDictionary<string, object?> properties)
     {

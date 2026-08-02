@@ -77,18 +77,56 @@ Supports:
 | ---------------- | ---------------------------------------------------------------------------- |
 | Comparisons      | `=` `!=` `<` `>` `<=` `>=`                                                   |
 | Boolean          | `AND` `OR` `NOT`                                                             |
+| Arithmetic       | `+` `-` `*` `/` `%`, unary minus; `+` doubles as string concatenation        |
 | Membership       | `IN (a, b, c)` / `NOT IN (...)`                                              |
 | Pattern          | `LIKE 'foo%'`, `LIKE 'a_c'`, `NOT LIKE ...`                                  |
 | Existence        | `IS NULL`, `IS NOT NULL`, `EXISTS(prop)` / `NOT EXISTS(prop)`                |
 | Property scoping | `sys.MessageId`, `user.region`, or bare `region` (defaults to user-property) |
 | Functions        | (none in v1 - keep it predictable)                                           |
 
-Not supported (rejected or unavailable): arithmetic and string concatenation, `BETWEEN`,
-the `ESCAPE` clause on `LIKE`, functions (`newid()`, `UPPER`, ...), parameterized filters,
-and rule **actions** (`SET x = y` is accepted on the wire but not evaluated).
+Not supported (rejected or unavailable): `BETWEEN`, the `ESCAPE` clause on `LIKE`,
+functions (`newid()`, `UPPER`, ...), and parameterized filters.
 
 Property scoping note: `sys.*` refers to AMQP system properties (MessageId, CorrelationId,
 Subject, To, ReplyTo, etc.); `user.*` and unscoped names look up `ApplicationProperties`.
+
+## SQL rule actions
+
+A rule can carry an **action** alongside its filter: a semicolon-separated list of
+`SET`/`REMOVE` statements that mutates the matched subscription's copy of the message
+before it lands - other subscriptions are unaffected. Works through the SDK's
+`ServiceBusRuleManager`, `ServiceBusAdministrationClient`, and `config.json`:
+
+```csharp
+await ruleManager.CreateRuleAsync(new CreateRuleOptions("tag", new SqlRuleFilter("priority > 5"))
+{
+    Action = new SqlRuleAction("SET sys.Label = 'high'; SET counter = counter + 1; REMOVE debug"),
+});
+```
+
+Semantics:
+
+- Statements apply **sequentially**; later statements see the results of earlier ones
+  (`SET a = 1; SET b = a + 1` yields `b = 2`).
+- Value expressions use the full filter grammar above, including arithmetic and string
+  concatenation, evaluated against the message's current properties.
+- `SET sys.X` may target the writable system properties: `Label`/`Subject`,
+  `CorrelationId`, `To`, `ReplyTo`, `ReplyToSessionId`, `ContentType`. Anything else
+  (`sys.MessageId`, `sys.SessionId`, ...) is rejected at rule-creation time, as are
+  malformed actions. `REMOVE` applies to application properties only; use
+  `SET sys.X = NULL` to clear a system property.
+- When several rules on one subscription match the same message, the first matching rule
+  in name order provides the action (one copy is delivered either way).
+- A runtime evaluation failure (e.g. arithmetic on a non-numeric property) delivers the
+  copy **unmodified** rather than losing it; the broker logs a warning.
+
+In `config.json`, add an `Action` next to the filter payload:
+
+```json
+{ "Name": "tag", "Properties": { "FilterType": "Sql",
+  "SqlFilter": { "SqlExpression": "priority > 5" },
+  "Action": { "SqlExpression": "SET sys.Label = 'high'" } } }
+```
 
 ## Sending to a topic
 

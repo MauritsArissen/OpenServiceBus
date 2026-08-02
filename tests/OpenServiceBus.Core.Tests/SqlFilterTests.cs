@@ -184,4 +184,28 @@ public class SqlFilterTests
             subject: "order-created",
             props: new() { ["region"] = "eu-west", ["priority"] = 3 })).ShouldBeFalse();
     }
+
+    [Theory]
+    [InlineData("priority + 1 > 5", 5, true)]
+    [InlineData("priority + 1 > 5", 4, false)]
+    [InlineData("priority - 1 >= 4", 5, true)]
+    [InlineData("priority * 2 = 10", 5, true)]
+    [InlineData("priority / 2 = 2.5", 5, true)]
+    [InlineData("priority % 2 = 1", 5, true)]
+    [InlineData("-priority < 0", 5, true)]
+    [InlineData("priority > -1", 5, true)]
+    public void Matches_ArithmeticExpressions_Evaluate(string expression, int priority, bool expected)
+    {
+        var filter = new SqlFilter(expression);
+
+        filter.Matches(Message(props: new() { ["priority"] = priority })).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void Matches_ArithmeticOnMissingProperty_PropagatesNullToFalse()
+    {
+        var filter = new SqlFilter("missing + 1 > 0");
+
+        filter.Matches(Message()).ShouldBeFalse();
+    }
 }

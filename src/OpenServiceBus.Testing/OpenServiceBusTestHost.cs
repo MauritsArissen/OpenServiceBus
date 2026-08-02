@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using OpenServiceBus.Amqp.Diagnostics;
 using OpenServiceBus.Amqp.Hosting;
 using OpenServiceBus.Amqp.Lifecycle;
+using OpenServiceBus.Amqp.Topics;
 using OpenServiceBus.Amqp.WebSockets;
 using OpenServiceBus.Core.Entities;
 using OpenServiceBus.Core.Storage;
@@ -145,7 +146,8 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
             : new InMemoryMessageStore(opts.TimeProvider);
         var queues = new QueueManager(storeAsIface);
         var topics = new TopicManager(queues);
-        var router = new MessageRouter(queues, storeAsIface, NullLogger<MessageRouter>.Instance, topics);
+        var router = new MessageRouter(queues, storeAsIface, NullLogger<MessageRouter>.Instance, topics,
+            new AmqpRuleActionApplier(opts.TimeProvider));
         var transactions = new TransactionManager(NullLogger<TransactionManager>.Instance);
 
         var listener = new AmqpListenerHost(

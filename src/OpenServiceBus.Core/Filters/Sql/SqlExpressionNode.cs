@@ -58,6 +58,20 @@ internal sealed class SqlNotNode(SqlExpressionNode operand) : SqlExpressionNode
 
 internal enum SqlComparisonOp { Eq, NotEq, Lt, LtEq, Gt, GtEq }
 
+internal enum SqlArithmeticOp { Add, Subtract, Multiply, Divide, Modulo }
+
+internal sealed class SqlArithmeticNode(SqlArithmeticOp op, SqlExpressionNode left, SqlExpressionNode right) : SqlExpressionNode
+{
+    public override object? Evaluate(MessageFilterContext message) =>
+        SqlEvaluator.Arithmetic(op, left.Evaluate(message), right.Evaluate(message));
+}
+
+internal sealed class SqlNegateNode(SqlExpressionNode operand) : SqlExpressionNode
+{
+    public override object? Evaluate(MessageFilterContext message) =>
+        SqlEvaluator.Negate(operand.Evaluate(message));
+}
+
 internal sealed class SqlComparisonNode(SqlComparisonOp op, SqlExpressionNode left, SqlExpressionNode right) : SqlExpressionNode
 {
     public override bool ProducesBoolean => true;

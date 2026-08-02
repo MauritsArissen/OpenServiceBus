@@ -76,8 +76,9 @@ Properties the broker enforces round-trip faithfully: `LockDuration`, `MaxDelive
 Properties the broker does not (yet) enforce are **accepted and returned with Azure's
 defaults** so SDK parsers and IaC-style "ensure entity exists" code keep working:
 `MaxSizeInMegabytes`, `AutoDeleteOnIdle`, `EnableBatchedOperations`, `EnablePartitioning`,
-`Status` (always `Active`), and authorization rules. SQL rule **actions** (`SET`/`REMOVE`)
-are accepted on the wire but not evaluated - matching the AMQP rule-management path.
+`Status` (always `Active`), and authorization rules. SQL rule **actions** round-trip and
+are evaluated during fan-out - see
+[Topics and Subscriptions](Topics-and-Subscriptions.md#sql-rule-actions).
 
 ## Authentication
 

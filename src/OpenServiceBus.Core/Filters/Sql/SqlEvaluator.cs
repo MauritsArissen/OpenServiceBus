@@ -81,6 +81,69 @@ internal static class SqlEvaluator
         return false;
     }
 
+    /// <summary>
+    /// Arithmetic with SQL NULL propagation. Integers stay integral (long) when both sides
+    /// are integral except for division, which follows Service Bus and produces a double.
+    /// <c>+</c> doubles as string concatenation when either operand is a string.
+    /// </summary>
+    public static object? Arithmetic(SqlArithmeticOp op, object? left, object? right)
+    {
+        if (left is null || right is null) return null;
+        var l = Normalize(left);
+        var r = Normalize(right);
+
+        if (op == SqlArithmeticOp.Add && (l is string || r is string))
+        {
+            return Convert.ToString(l, CultureInfo.InvariantCulture) + Convert.ToString(r, CultureInfo.InvariantCulture);
+        }
+
+        if (l is long li && r is long ri)
+        {
+            return op switch
+            {
+                SqlArithmeticOp.Add => li + ri,
+                SqlArithmeticOp.Subtract => li - ri,
+                SqlArithmeticOp.Multiply => li * ri,
+                SqlArithmeticOp.Divide => ri == 0
+                    ? throw new InvalidOperationException("Division by zero in SQL expression.")
+                    : (double)li / ri,
+                SqlArithmeticOp.Modulo => ri == 0
+                    ? throw new InvalidOperationException("Modulo by zero in SQL expression.")
+                    : li % ri,
+                _ => (object?)null,
+            };
+        }
+
+        if (l is not (long or double) || r is not (long or double))
+        {
+            throw new InvalidOperationException(
+                $"Arithmetic requires numeric operands; got {l.GetType().Name} and {r.GetType().Name}.");
+        }
+
+        var ld = l is long ll ? ll : (double)l;
+        var rd = r is long rl ? rl : (double)r;
+        return op switch
+        {
+            SqlArithmeticOp.Add => ld + rd,
+            SqlArithmeticOp.Subtract => ld - rd,
+            SqlArithmeticOp.Multiply => ld * rd,
+            SqlArithmeticOp.Divide => ld / rd,
+            SqlArithmeticOp.Modulo => ld % rd,
+            _ => (object?)null,
+        };
+    }
+
+    public static object? Negate(object? value)
+    {
+        if (value is null) return null;
+        return Normalize(value) switch
+        {
+            long l => -l,
+            double d => -d,
+            var other => throw new InvalidOperationException($"Unary minus applied to non-numeric value ({other.GetType().Name})."),
+        };
+    }
+
     /// <summary>Number unification: ints widen to long, decimals to double, so cross-type compare works.</summary>
     private static object Normalize(object value) => value switch
     {

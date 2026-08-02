@@ -12,6 +12,12 @@ internal enum SqlTokenKind
     RightParen,
     Comma,
     Dot,
+    Semicolon,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
     Eq,
     NotEq,
     Lt,
@@ -79,6 +85,24 @@ internal sealed class SqlLexer
             case '.':
                 _index++;
                 return new SqlToken(SqlTokenKind.Dot, ".", null, start);
+            case ';':
+                _index++;
+                return new SqlToken(SqlTokenKind.Semicolon, ";", null, start);
+            case '+':
+                _index++;
+                return new SqlToken(SqlTokenKind.Plus, "+", null, start);
+            case '-':
+                _index++;
+                return new SqlToken(SqlTokenKind.Minus, "-", null, start);
+            case '*':
+                _index++;
+                return new SqlToken(SqlTokenKind.Star, "*", null, start);
+            case '/':
+                _index++;
+                return new SqlToken(SqlTokenKind.Slash, "/", null, start);
+            case '%':
+                _index++;
+                return new SqlToken(SqlTokenKind.Percent, "%", null, start);
             case '=':
                 _index++;
                 return new SqlToken(SqlTokenKind.Eq, "=", null, start);
@@ -98,7 +122,7 @@ internal sealed class SqlLexer
                 return ScanString(start);
         }
 
-        if (char.IsDigit(ch) || (ch == '-' && _index + 1 < _source.Length && char.IsDigit(_source[_index + 1])))
+        if (char.IsDigit(ch))
         {
             return ScanNumber(start);
         }
@@ -136,7 +160,6 @@ internal sealed class SqlLexer
 
     private SqlToken ScanNumber(int start)
     {
-        if (_source[_index] == '-') _index++;
         while (_index < _source.Length && char.IsDigit(_source[_index])) _index++;
         var isReal = false;
         if (_index < _source.Length && _source[_index] == '.')
