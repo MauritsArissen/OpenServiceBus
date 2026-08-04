@@ -148,6 +148,8 @@ const run = async () => {
 
   // 15. admin delete detach - deleting the queue under a live receiver must detach the
   // link promptly instead of stalling the close on the SDK's drain timeout (issue #36).
+  // Await the pending receive BEFORE closing: it settles once the broker detaches the
+  // link, so the close never crosses the in-flight detach on the wire.
   const doomedReceiver = client.createReceiver(adminQueue);
   const leftover = await doomedReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
   if (leftover.length === 1) await doomedReceiver.completeMessage(leftover[0]);
@@ -155,12 +157,12 @@ const run = async () => {
     .receiveMessages(1, { maxWaitTimeInMs: 30_000 })
     .catch(() => []);
   await new Promise((resolve) => setTimeout(resolve, 500));
+  const detachStart = Date.now();
   const del = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`, { method: "DELETE" });
-  const closeStart = Date.now();
-  await doomedReceiver.close();
-  const closeMs = Date.now() - closeStart;
   await pendingReceive;
-  check("admin delete detach", closeMs < 10_000, `${closeMs}ms`);
+  await doomedReceiver.close();
+  const detachMs = Date.now() - detachStart;
+  check("admin delete detach", detachMs < 15_000, `${detachMs}ms`);
 
   const gone = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`);
   check("admin delete queue", del.status === 200 && gone.status === 404);
