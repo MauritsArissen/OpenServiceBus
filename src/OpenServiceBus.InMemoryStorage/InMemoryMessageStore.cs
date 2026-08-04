@@ -215,6 +215,14 @@ public sealed class InMemoryMessageStore : IMessageStore
         return Task.FromResult((long)state.Messages.Count);
     }
 
+    public long GetSizeInBytes(string queueName)
+    {
+        if (!_queues.TryGetValue(queueName, out var state)) return 0;
+        long total = 0;
+        foreach (var message in state.Messages.Values) total += message.EncodedMessage.Length;
+        return total;
+    }
+
     public (long Enqueued, long Completed) LifetimeCounters(string queueName)
     {
         if (!_queues.TryGetValue(queueName, out var state)) return (0, 0);

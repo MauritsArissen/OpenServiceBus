@@ -2,7 +2,7 @@
 //
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-//   -> topic session receive -> admin create/get/roundtrip/status gate/delete (ATOM management API)
+//   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete (ATOM management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -84,7 +84,7 @@ const run = async () => {
   const queueXml =
     '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">' +
     '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
-    "<MaxDeliveryCount>7</MaxDeliveryCount><AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle></QueueDescription></content></entry>";
+    "<MaxDeliveryCount>7</MaxDeliveryCount><AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle><MaxSizeInMegabytes>2048</MaxSizeInMegabytes></QueueDescription></content></entry>";
 
   const put = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`, {
     method: "PUT",
@@ -95,7 +95,7 @@ const run = async () => {
 
   const got = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`);
   const gotBody = await got.text();
-  check("admin get queue", got.status === 200 && gotBody.includes("<MaxDeliveryCount>7</MaxDeliveryCount>") && gotBody.includes("<AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle>"));
+  check("admin get queue", got.status === 200 && gotBody.includes("<MaxDeliveryCount>7</MaxDeliveryCount>") && gotBody.includes("<AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle>") && gotBody.includes("<MaxSizeInMegabytes>2048</MaxSizeInMegabytes>"));
 
   // The admin-created queue must be immediately usable on the data plane.
   const adminSender = client.createSender(adminQueue);
@@ -109,7 +109,19 @@ const run = async () => {
   if (aMsgs.length === 1) await adminReceiver.completeMessage(aMsgs[0]);
   await adminReceiver.close();
 
-  // 13. admin status gate - SendDisabled rejects sends, Active restores them (issue #22).
+  // 13. admin size limit - a 300 KB message must be rejected against the default
+  // 256 KB limit the sender link advertises (issue #24).
+  let oversizeBlocked = false;
+  try {
+    await client
+      .createSender(adminQueue)
+      .sendMessages({ body: new Uint8Array(300 * 1024), messageId: `oversize-${stamp}` });
+  } catch {
+    oversizeBlocked = true;
+  }
+  check("admin size limit", oversizeBlocked);
+
+  // 14. admin status gate - SendDisabled rejects sends, Active restores them (issue #22).
   const statusXml = (status) =>
     '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">' +
     '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +

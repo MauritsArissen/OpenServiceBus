@@ -118,6 +118,19 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    public long GetSizeInBytes(string queueName)
+    {
+        _gate.Wait();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT COALESCE(SUM(LENGTH(encoded_message)), 0) FROM messages WHERE queue_name = $name";
+            cmd.Parameters.AddWithValue("$name", queueName);
+            return Convert.ToInt64(cmd.ExecuteScalar());
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task SaveQueueDescriptorAsync(string queueName, string descriptorJson, CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);

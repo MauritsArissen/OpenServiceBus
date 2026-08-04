@@ -5,4 +5,10 @@ public static class ServiceBusErrors
 {
     /// <summary>Maps to <c>ServiceBusFailureReason.MessagingEntityDisabled</c> in the SDKs.</summary>
     public const string EntityDisabled = "com.microsoft:entity-disabled";
+
+    /// <summary>Maps to <c>ServiceBusFailureReason.MessageSizeExceeded</c> in the SDKs.</summary>
+    public const string MessageSizeExceeded = "amqp:link:message-size-exceeded";
+
+    /// <summary>Maps to <c>ServiceBusFailureReason.QuotaExceeded</c> in the SDKs.</summary>
+    public const string QuotaExceeded = "amqp:resource-limit-exceeded";
 }

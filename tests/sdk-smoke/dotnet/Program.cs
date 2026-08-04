@@ -2,7 +2,7 @@
 //
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-//   -> topic session receive -> admin create/get/roundtrip/status gate/delete (ATOM management API)
+//   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete (ATOM management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -86,11 +86,11 @@ try
     var adminQueue = $"smoke-admin-dotnet-{stamp}";
     var admin = new ServiceBusAdministrationClient(conn);
 
-    var created = (await admin.CreateQueueAsync(new CreateQueueOptions(adminQueue) { MaxDeliveryCount = 7, AutoDeleteOnIdle = TimeSpan.FromMinutes(10) })).Value;
+    var created = (await admin.CreateQueueAsync(new CreateQueueOptions(adminQueue) { MaxDeliveryCount = 7, AutoDeleteOnIdle = TimeSpan.FromMinutes(10), MaxSizeInMegabytes = 2048 })).Value;
     Check("admin create queue", created.Name == adminQueue);
 
     QueueProperties fetched = await admin.GetQueueAsync(adminQueue);
-    Check("admin get queue", fetched.MaxDeliveryCount == 7 && fetched.AutoDeleteOnIdle == TimeSpan.FromMinutes(10));
+    Check("admin get queue", fetched.MaxDeliveryCount == 7 && fetched.AutoDeleteOnIdle == TimeSpan.FromMinutes(10) && fetched.MaxSizeInMegabytes == 2048);
 
     // The admin-created queue must be immediately usable on the data plane.
     var adminSender = client.CreateSender(adminQueue);
@@ -102,7 +102,20 @@ try
     if (adminMsg is not null) await adminReceiver.CompleteMessageAsync(adminMsg);
     await adminReceiver.CloseAsync();
 
-    // 13. admin status gate - SendDisabled rejects sends with MessagingEntityDisabled,
+    // 13. admin size limit - a 300 KB message must be rejected against the default
+    // 256 KB limit the sender link advertises (issue #24).
+    var oversizeBlocked = false;
+    try
+    {
+        await client.CreateSender(adminQueue).SendMessageAsync(new ServiceBusMessage(new byte[300 * 1024]));
+    }
+    catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.MessageSizeExceeded)
+    {
+        oversizeBlocked = true;
+    }
+    Check("admin size limit", oversizeBlocked);
+
+    // 14. admin status gate - SendDisabled rejects sends with MessagingEntityDisabled,
     // flipping back to Active restores them (issue #22).
     QueueProperties gate = await admin.GetQueueAsync(adminQueue);
     gate.Status = EntityStatus.SendDisabled;

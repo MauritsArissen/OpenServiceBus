@@ -73,12 +73,35 @@ public sealed class QueueSenderProcessor : IMessageProcessor
             {
                 messageContext.Complete(new Error(new Symbol(Routing.ServiceBusErrors.EntityDisabled))
                 {
+                    Info = new Fields(),
                     Description = $"Entity '{_queueName}' is {currentStatus} and does not accept messages.",
                 });
                 return;
             }
 
             var msg = messageContext.Message;
+
+            var current = _registry?.GetAsync(_queueName).GetAwaiter().GetResult() ?? _descriptor;
+            var payloadBytes = PayloadSize(msg);
+            if (payloadBytes > current.MaxMessageSizeInKilobytes * 1024)
+            {
+                messageContext.Complete(new Error(new Symbol(Routing.ServiceBusErrors.MessageSizeExceeded))
+                {
+                    Info = new Fields(),
+                    Description = $"Message of {payloadBytes} bytes exceeds the limit of {current.MaxMessageSizeInKilobytes} KB on '{_queueName}'.",
+                });
+                return;
+            }
+            var usage = _store.GetSizeInBytes(_queueName) + _store.GetSizeInBytes(_queueName + EntityNames.DeadLetterSuffix);
+            if (usage + payloadBytes > current.MaxSizeInMegabytes * 1024 * 1024)
+            {
+                messageContext.Complete(new Error(new Symbol(Routing.ServiceBusErrors.QuotaExceeded))
+                {
+                    Info = new Fields(),
+                    Description = $"Entity '{_queueName}' has reached its {current.MaxSizeInMegabytes} MB quota.",
+                });
+                return;
+            }
 
             // Batched envelope from SendMessagesAsync / ServiceBusMessageBatch - split into N individual
             // enqueues so each inner message gets its own sequence number and lifecycle.
@@ -356,6 +379,11 @@ public sealed class QueueSenderProcessor : IMessageProcessor
         if (a is null) return b;
         if (b is null) return a;
         return a < b ? a : b;
+    }
+
+    private static long PayloadSize(Message message)
+    {
+        return message.Encode().Length;
     }
 
     private static byte[] CopyEncoded(Message message)

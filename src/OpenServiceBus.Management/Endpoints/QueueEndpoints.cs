@@ -95,7 +95,9 @@ public static class QueueEndpoints
         && string.Equals(existing.ForwardTo, requested.ForwardTo, StringComparison.Ordinal)
         && string.Equals(existing.ForwardDeadLetteredMessagesTo, requested.ForwardDeadLetteredMessagesTo, StringComparison.Ordinal)
         && existing.Status == requested.Status
-        && existing.AutoDeleteOnIdle == requested.AutoDeleteOnIdle;
+        && existing.AutoDeleteOnIdle == requested.AutoDeleteOnIdle
+        && existing.MaxSizeInMegabytes == requested.MaxSizeInMegabytes
+        && existing.MaxMessageSizeInKilobytes == requested.MaxMessageSizeInKilobytes;
 }
 
 public sealed record CreateQueueRequest
@@ -111,6 +113,8 @@ public sealed record CreateQueueRequest
     public string? ForwardDeadLetteredMessagesTo { get; init; }
     public EntityStatus Status { get; init; } = EntityStatus.Active;
     public TimeSpan? AutoDeleteOnIdle { get; init; }
+    public long MaxSizeInMegabytes { get; init; } = 1024;
+    public long MaxMessageSizeInKilobytes { get; init; } = 256;
 
     public QueueDescriptor ToDescriptor(string name) => new()
     {
@@ -126,6 +130,8 @@ public sealed record CreateQueueRequest
         ForwardDeadLetteredMessagesTo = ForwardDeadLetteredMessagesTo,
         Status = Status,
         AutoDeleteOnIdle = AutoDeleteOnIdle,
+        MaxSizeInMegabytes = MaxSizeInMegabytes,
+        MaxMessageSizeInKilobytes = MaxMessageSizeInKilobytes,
     };
 }
 
@@ -142,6 +148,8 @@ public sealed record QueueResponse(
     string? ForwardDeadLetteredMessagesTo,
     EntityStatus Status,
     TimeSpan? AutoDeleteOnIdle,
+    long MaxSizeInMegabytes,
+    long MaxMessageSizeInKilobytes,
     long? ActiveMessageCount,
     long? EnqueuedCount = null,
     long? CompletedCount = null)
@@ -159,6 +167,8 @@ public sealed record QueueResponse(
         d.ForwardDeadLetteredMessagesTo,
         d.Status,
         d.AutoDeleteOnIdle,
+        d.MaxSizeInMegabytes,
+        d.MaxMessageSizeInKilobytes,
         count,
         enqueued,
         completed);

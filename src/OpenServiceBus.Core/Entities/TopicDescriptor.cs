@@ -24,6 +24,15 @@ public sealed record TopicDescriptor
     /// </summary>
     public TimeSpan? AutoDeleteOnIdle { get; init; }
 
+    /// <summary>See <see cref="QueueDescriptor.MaxMessageSizeInKilobytes"/>; applies to publishes.</summary>
+    public long MaxMessageSizeInKilobytes { get; init; } = 256;
+
+    /// <summary>
+    /// Topic size quota, in megabytes, covering all subscription backing queues and their
+    /// dead-letter queues. Default mirrors standard tier (1 GB).
+    /// </summary>
+    public long MaxSizeInMegabytes { get; init; } = 1024;
+
     /// <summary>Operational status. Enforced on the publish path.</summary>
     public EntityStatus Status { get; init; } = EntityStatus.Active;
 

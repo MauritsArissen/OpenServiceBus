@@ -222,6 +222,8 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         }
 
         _activity?.Touch(backingQueue);
+        var parentTopic = _topics.GetTopicAsync(entityAddress.Entity).GetAwaiter().GetResult();
+        attachContext.Attach.MaxMessageSize = (ulong)((parentTopic?.MaxMessageSizeInKilobytes ?? descriptor.MaxMessageSizeInKilobytes) * 1024);
         if (entityAddress.SubResource == EntitySubResource.Main)
         {
             if (!sub.Status.AcceptsReceives())
@@ -255,6 +257,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
             return;
         }
         _activity?.Touch(topic.Name);
+        attachContext.Attach.MaxMessageSize = (ulong)(topic.MaxMessageSizeInKilobytes * 1024);
 
         var processor = new TopicSenderProcessor(
             topic,
@@ -288,6 +291,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
                     $"Entity '{descriptor.Name}' is {descriptor.Status} and does not accept messages.");
                 return;
             }
+            attachContext.Attach.MaxMessageSize = (ulong)(descriptor.MaxMessageSizeInKilobytes * 1024);
             var processor = new QueueSenderProcessor(
                 descriptor.Name,
                 descriptor,
@@ -309,6 +313,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
                     $"Entity '{descriptor.Name}' is {descriptor.Status} and does not accept receivers.");
                 return;
             }
+            attachContext.Attach.MaxMessageSize = (ulong)(descriptor.MaxMessageSizeInKilobytes * 1024);
             // Receivers carrying a session filter get an exclusive session-locked source.
             var sessionFilter = SessionFilter.TryReadFromAttach(attachContext.Attach);
             if (sessionFilter.IsSet)

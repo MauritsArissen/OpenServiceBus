@@ -24,7 +24,7 @@ import java.util.regex.Pattern;
  *
  * Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
- *   -> topic session receive -> admin create/get/roundtrip/status gate/delete (ATOM management API)
+ *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete (ATOM management API)
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -158,7 +158,7 @@ public final class Smoke {
             String queueXml =
                 "<entry xmlns=\"http://www.w3.org/2005/Atom\"><content type=\"application/xml\">"
                 + "<QueueDescription xmlns=\"http://schemas.microsoft.com/netservices/2010/10/servicebus/connect\">"
-                + "<MaxDeliveryCount>7</MaxDeliveryCount><AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle></QueueDescription></content></entry>";
+                + "<MaxDeliveryCount>7</MaxDeliveryCount><AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle><MaxSizeInMegabytes>2048</MaxSizeInMegabytes></QueueDescription></content></entry>";
             HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
             URI queueUri = URI.create(base + "/" + adminQueue + "?api-version=2021-05");
 
@@ -173,7 +173,7 @@ public final class Smoke {
 
             HttpResponse<String> got = http.send(
                 HttpRequest.newBuilder(queueUri).GET().build(), HttpResponse.BodyHandlers.ofString());
-            results.add(got.statusCode() == 200 && got.body().contains("<MaxDeliveryCount>7</MaxDeliveryCount>") && got.body().contains("<AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle>")
+            results.add(got.statusCode() == 200 && got.body().contains("<MaxDeliveryCount>7</MaxDeliveryCount>") && got.body().contains("<AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle>") && got.body().contains("<MaxSizeInMegabytes>2048</MaxSizeInMegabytes>")
                 ? "PASS admin get queue"
                 : "FAIL admin get queue: status " + got.statusCode());
 
@@ -193,7 +193,19 @@ public final class Smoke {
             }
             results.add(roundTripped ? "PASS admin roundtrip" : "FAIL admin roundtrip: no message within 10s");
 
-            // 13. admin status gate - SendDisabled rejects sends, Active restores them (issue #22).
+            // 13. admin size limit - a 300 KB message must be rejected against the default
+            // 256 KB limit the sender link advertises (issue #24).
+            boolean oversizeBlocked = false;
+            try (ServiceBusSenderClient oversizeSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(adminQueue).buildClient()) {
+                oversizeSender.sendMessage(new ServiceBusMessage(new byte[300 * 1024]));
+            } catch (Exception e) {
+                oversizeBlocked = true;
+            }
+            results.add(oversizeBlocked ? "PASS admin size limit" : "FAIL admin size limit: 300 KB send succeeded");
+
+            // 14. admin status gate - SendDisabled rejects sends, Active restores them (issue #22).
             String statusXmlTemplate =
                 "<entry xmlns=\"http://www.w3.org/2005/Atom\"><content type=\"application/xml\">"
                 + "<QueueDescription xmlns=\"http://schemas.microsoft.com/netservices/2010/10/servicebus/connect\">"

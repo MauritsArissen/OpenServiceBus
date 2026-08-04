@@ -86,6 +86,8 @@ and logs an informational message. Parse errors are logged but do **not** stop t
 | `ForwardTo`                           | string            | -           | Auto-forward target (queue or topic) - see [Auto-Forwarding](Auto-Forwarding) |
 | `Status`                              | string            | `Active`    | `Active`/`Disabled`/`SendDisabled`/`ReceiveDisabled` - see [Entity Status](Entity-Status) |
 | `AutoDeleteOnIdle`                    | ISO-8601 duration | -           | Delete after this long idle (min `PT5M`) - see [Auto-Delete On Idle](Auto-Delete-On-Idle) |
+| `MaxSizeInMegabytes`                  | int               | `1024`      | Entity size quota - see [Size Limits](Size-Limits)                            |
+| `MaxMessageSizeInKilobytes`           | int               | `256`       | Largest accepted message - see [Size Limits](Size-Limits)                     |
 | `ForwardDeadLetteredMessagesTo`       | string            | -           | DLQ-forward target                                                            |
 
 Topics + subscriptions in `config.json` are accepted in the same shape as the Microsoft

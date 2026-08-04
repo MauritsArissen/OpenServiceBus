@@ -37,7 +37,7 @@ public static class EntityDescriptionCodec
         return new XElement(Sb + "QueueDescription",
             new XAttribute(XNamespace.Xmlns + "i", AtomXml.Xsi),
             new XElement(Sb + "LockDuration", AtomXml.Duration(queue.LockDuration)),
-            new XElement(Sb + "MaxSizeInMegabytes", 1024),
+            new XElement(Sb + "MaxSizeInMegabytes", queue.MaxSizeInMegabytes),
             new XElement(Sb + "RequiresDuplicateDetection", queue.RequiresDuplicateDetection),
             new XElement(Sb + "RequiresSession", queue.RequiresSession),
             new XElement(Sb + "DefaultMessageTimeToLive", AtomXml.DurationOrUnlimited(queue.DefaultMessageTimeToLive)),
@@ -63,7 +63,7 @@ public static class EntityDescriptionCodec
             new XElement(Sb + "EntityAvailabilityStatus", "Available"),
             new XElement(Sb + "EnableExpress", false),
             ForwardElement("ForwardDeadLetteredMessagesTo", queue.ForwardDeadLetteredMessagesTo),
-            new XElement(Sb + "MaxMessageSizeInKilobytes", 256));
+            new XElement(Sb + "MaxMessageSizeInKilobytes", queue.MaxMessageSizeInKilobytes));
     }
 
     public static QueueDescriptor ParseQueueDescription(string name, XElement description)
@@ -86,6 +86,8 @@ public static class EntityDescriptionCodec
                 "UserMetadata" => queue with { UserMetadata = value },
                 "Status" => queue with { Status = EntityStatusExtensions.Parse(value) },
                 "AutoDeleteOnIdle" => queue with { AutoDeleteOnIdle = AtomXml.ParseOptionalDuration(value) },
+                "MaxSizeInMegabytes" => queue with { MaxSizeInMegabytes = XmlConvert.ToInt64(value) },
+                "MaxMessageSizeInKilobytes" => queue with { MaxMessageSizeInKilobytes = XmlConvert.ToInt64(value) },
                 _ => queue, // Accepted-but-ignored (MaxSizeInMegabytes, Status, AutoDeleteOnIdle, …).
             };
         }
@@ -100,7 +102,7 @@ public static class EntityDescriptionCodec
         return new XElement(Sb + "TopicDescription",
             new XAttribute(XNamespace.Xmlns + "i", AtomXml.Xsi),
             new XElement(Sb + "DefaultMessageTimeToLive", AtomXml.DurationOrUnlimited(topic.DefaultMessageTimeToLive)),
-            new XElement(Sb + "MaxSizeInMegabytes", 1024),
+            new XElement(Sb + "MaxSizeInMegabytes", topic.MaxSizeInMegabytes),
             new XElement(Sb + "RequiresDuplicateDetection", false),
             new XElement(Sb + "DuplicateDetectionHistoryTimeWindow", AtomXml.Duration(TimeSpan.FromMinutes(10))),
             new XElement(Sb + "EnableBatchedOperations", true),
@@ -120,7 +122,7 @@ public static class EntityDescriptionCodec
             new XElement(Sb + "EnablePartitioning", false),
             new XElement(Sb + "EntityAvailabilityStatus", "Available"),
             new XElement(Sb + "EnableExpress", false),
-            new XElement(Sb + "MaxMessageSizeInKilobytes", 256));
+            new XElement(Sb + "MaxMessageSizeInKilobytes", topic.MaxMessageSizeInKilobytes));
     }
 
     public static TopicDescriptor ParseTopicDescription(string name, XElement description)
@@ -135,6 +137,8 @@ public static class EntityDescriptionCodec
                 "UserMetadata" => topic with { UserMetadata = value },
                 "Status" => topic with { Status = EntityStatusExtensions.Parse(value) },
                 "AutoDeleteOnIdle" => topic with { AutoDeleteOnIdle = AtomXml.ParseOptionalDuration(value) },
+                "MaxSizeInMegabytes" => topic with { MaxSizeInMegabytes = XmlConvert.ToInt64(value) },
+                "MaxMessageSizeInKilobytes" => topic with { MaxMessageSizeInKilobytes = XmlConvert.ToInt64(value) },
                 _ => topic,
             };
         }
