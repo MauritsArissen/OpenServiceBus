@@ -51,6 +51,7 @@ public sealed class QueueReceiverSource : IMessageSource
     private readonly ILogger<QueueReceiverSource> _logger;
     private readonly bool _isDlq;
     private readonly IQueueRegistry? _registry;
+    private readonly EntityActivityTracker? _activity;
 
     public QueueReceiverSource(
         string entityName,
@@ -60,8 +61,10 @@ public sealed class QueueReceiverSource : IMessageSource
         ITransactionManager transactions,
         TimeProvider timeProvider,
         ILogger<QueueReceiverSource> logger,
-        IQueueRegistry? registry = null)
+        IQueueRegistry? registry = null,
+        EntityActivityTracker? activityTracker = null)
     {
+        _activity = activityTracker;
         _entityName = entityName;
         _descriptor = descriptor;
         _store = store;
@@ -116,6 +119,8 @@ public sealed class QueueReceiverSource : IMessageSource
 
             // Messages that crossed their TTL deadline while waiting in the queue get
             // dropped (or moved to DLQ when DeadLetteringOnMessageExpiration is set on the queue).
+            _activity?.Touch(_entityName);
+
             if (locked.Message.IsExpired(_timeProvider.GetUtcNow()))
             {
                 await HandleExpiredOnDequeueAsync(locked.LockToken).ConfigureAwait(false);

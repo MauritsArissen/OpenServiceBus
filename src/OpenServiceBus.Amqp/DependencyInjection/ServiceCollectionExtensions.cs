@@ -28,9 +28,11 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IRuleActionApplier, AmqpRuleActionApplier>();
+        services.TryAddSingleton<Core.Storage.EntityActivityTracker>();
         services.TryAddSingleton<AmqpListenerHost>();
         services.AddHostedService(sp => sp.GetRequiredService<AmqpListenerHost>());
         services.AddHostedService<TtlExpirationService>();
+        services.AddHostedService<IdleEntityReaper>();
         services.AddHostedService<ScheduledMessageActivator>();
         services.AddHostedService<DiagnosticsHostedService>();
 

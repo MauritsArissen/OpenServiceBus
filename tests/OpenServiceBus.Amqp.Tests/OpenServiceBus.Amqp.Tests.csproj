@@ -21,6 +21,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenServiceBus.Amqp\OpenServiceBus.Amqp.csproj" />
+    <ProjectReference Include="..\..\src\OpenServiceBus.InMemoryStorage\OpenServiceBus.InMemoryStorage.csproj" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
   </ItemGroup>
 
 </Project>

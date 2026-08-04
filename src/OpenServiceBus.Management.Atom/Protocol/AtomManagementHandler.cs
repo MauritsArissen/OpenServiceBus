@@ -123,7 +123,7 @@ public sealed class AtomManagementHandler
 
             return await HandleEntityAsync(request, string.Join('/', segments), cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is XmlException or FormatException or OverflowException or ArgumentException)
+        catch (Exception ex) when (ex is XmlException or FormatException or OverflowException or ArgumentException or InvalidOperationException)
         {
             return Error(400, $"Malformed request: {ex.Message}");
         }

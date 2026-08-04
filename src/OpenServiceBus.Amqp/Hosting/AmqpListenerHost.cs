@@ -33,6 +33,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
     private readonly RequestNodeRegistry _requestNodes = new();
     private readonly ResponsePairTable _responsePairs = new();
     private readonly ConnectionAuthRegistry _connectionAuth = new();
+    private readonly EntityActivityTracker? _activity;
 
     public AmqpListenerHost(
         IOptions<AmqpListenerOptions> options,
@@ -42,8 +43,10 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
         ITransactionManager transactions,
         TimeProvider timeProvider,
         ILoggerFactory loggerFactory,
-        ITopicRegistry? topicRegistry = null)
+        ITopicRegistry? topicRegistry = null,
+        EntityActivityTracker? activityTracker = null)
     {
+        _activity = activityTracker;
         _options = options.Value;
         _queueRegistry = queueRegistry;
         _topicRegistry = topicRegistry;
@@ -84,7 +87,7 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
         host.RegisterMessageProcessor(CoordinatorProcessor.Address,
             new CoordinatorProcessor(_transactions, _loggerFactory.CreateLogger<CoordinatorProcessor>()));
 
-        var linkProcessor = new EntityLinkProcessor(_queueRegistry, _messageStore, _router, _transactions, Options.Create(_options), _timeProvider, _loggerFactory, _requestNodes, _responsePairs, _connectionAuth, _topicRegistry);
+        var linkProcessor = new EntityLinkProcessor(_queueRegistry, _messageStore, _router, _transactions, Options.Create(_options), _timeProvider, _loggerFactory, _requestNodes, _responsePairs, _connectionAuth, _topicRegistry, _activity);
         host.RegisterLinkProcessor(linkProcessor);
 
         host.Open();
@@ -190,7 +193,8 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
             _messageStore,
             _router,
             _timeProvider,
-            _loggerFactory.CreateLogger<ManagementRequestProcessor>());
+            _loggerFactory.CreateLogger<ManagementRequestProcessor>(),
+            _activity);
 
         _requestNodes.Register(descriptor.Name + "/$management", processor);
         _logger.LogDebug("Registered $management endpoint for queue {Queue}", descriptor.Name);
@@ -234,7 +238,8 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
             _loggerFactory.CreateLogger<ManagementRequestProcessor>(),
             _topicRegistry,
             descriptor.TopicName,
-            descriptor.Name);
+            descriptor.Name,
+            _activity);
 
         _requestNodes.Register(descriptor.BackingQueueName + "/$management", processor);
         _logger.LogDebug("Registered $management endpoint for subscription {Sub}", descriptor.BackingQueueName);

@@ -51,6 +51,7 @@ public sealed class QueueManager : IQueueRegistry
     {
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
+        EntityValidation.EnsureAutoDeleteOnIdle(descriptor.AutoDeleteOnIdle, descriptor.Name);
 
         // Reject obviously broken auto-forward configs. We only do the cheap self-equality
         // check at creation; target-exists is checked lazily by the router at runtime - that lets
@@ -95,6 +96,7 @@ public sealed class QueueManager : IQueueRegistry
     {
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
+        EntityValidation.EnsureAutoDeleteOnIdle(descriptor.AutoDeleteOnIdle, descriptor.Name);
 
         if (!string.IsNullOrEmpty(descriptor.ForwardTo) && string.Equals(descriptor.ForwardTo, descriptor.Name, StringComparison.OrdinalIgnoreCase))
         {

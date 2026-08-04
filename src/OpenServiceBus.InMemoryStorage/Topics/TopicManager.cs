@@ -43,6 +43,7 @@ public sealed class TopicManager : ITopicRegistry
     {
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
+        EntityValidation.EnsureAutoDeleteOnIdle(descriptor.AutoDeleteOnIdle, descriptor.Name);
         var stored = _topics.GetOrAdd(descriptor.Name, descriptor);
         if (ReferenceEquals(stored, descriptor))
         {
@@ -55,6 +56,7 @@ public sealed class TopicManager : ITopicRegistry
     {
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
+        EntityValidation.EnsureAutoDeleteOnIdle(descriptor.AutoDeleteOnIdle, descriptor.Name);
 
         while (true)
         {
@@ -106,6 +108,7 @@ public sealed class TopicManager : ITopicRegistry
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.TopicName);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
+        EntityValidation.EnsureAutoDeleteOnIdle(descriptor.AutoDeleteOnIdle, $"{descriptor.TopicName}/{descriptor.Name}");
         if (!_topics.ContainsKey(descriptor.TopicName))
         {
             throw new InvalidOperationException($"Cannot create subscription '{descriptor.Name}' - topic '{descriptor.TopicName}' does not exist.");
@@ -168,6 +171,7 @@ public sealed class TopicManager : ITopicRegistry
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.TopicName);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
+        EntityValidation.EnsureAutoDeleteOnIdle(descriptor.AutoDeleteOnIdle, $"{descriptor.TopicName}/{descriptor.Name}");
 
         var key = SubKey(descriptor.TopicName, descriptor.Name);
         while (true)

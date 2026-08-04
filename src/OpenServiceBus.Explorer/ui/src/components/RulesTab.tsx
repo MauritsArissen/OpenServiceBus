@@ -73,6 +73,12 @@ export function RulesTab({ topic, sub }: { topic: string; sub: string }) {
                 </div>
               </div>
               <RuleBody rule={r} />
+              {r.sqlActionExpression && (
+                <div className="mt-2 rounded-md bg-muted/60 p-2.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Action</span>
+                  <pre className="mt-1 overflow-x-auto font-mono text-xs">{r.sqlActionExpression}</pre>
+                </div>
+              )}
             </CardContent>
           </Card>
         ))

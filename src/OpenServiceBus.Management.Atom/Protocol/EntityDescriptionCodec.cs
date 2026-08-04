@@ -58,7 +58,7 @@ public static class EntityDescriptionCodec
             new XElement(Sb + "AccessedAt", AtomXml.Timestamp(updated)),
             new XElement(Sb + "SupportOrdering", true),
             CountDetailsElement(runtime),
-            new XElement(Sb + "AutoDeleteOnIdle", AtomXml.DurationOrUnlimited(null)),
+            new XElement(Sb + "AutoDeleteOnIdle", AtomXml.DurationOrUnlimited(queue.AutoDeleteOnIdle)),
             new XElement(Sb + "EnablePartitioning", false),
             new XElement(Sb + "EntityAvailabilityStatus", "Available"),
             new XElement(Sb + "EnableExpress", false),
@@ -85,6 +85,7 @@ public static class EntityDescriptionCodec
                 "ForwardDeadLetteredMessagesTo" => queue with { ForwardDeadLetteredMessagesTo = NormalizeForwardTarget(value) },
                 "UserMetadata" => queue with { UserMetadata = value },
                 "Status" => queue with { Status = EntityStatusExtensions.Parse(value) },
+                "AutoDeleteOnIdle" => queue with { AutoDeleteOnIdle = AtomXml.ParseOptionalDuration(value) },
                 _ => queue, // Accepted-but-ignored (MaxSizeInMegabytes, Status, AutoDeleteOnIdle, …).
             };
         }
@@ -115,7 +116,7 @@ public static class EntityDescriptionCodec
             new XElement(Sb + "SupportOrdering", true),
             CountDetailsElement(default),
             new XElement(Sb + "SubscriptionCount", subscriptionCount),
-            new XElement(Sb + "AutoDeleteOnIdle", AtomXml.DurationOrUnlimited(null)),
+            new XElement(Sb + "AutoDeleteOnIdle", AtomXml.DurationOrUnlimited(topic.AutoDeleteOnIdle)),
             new XElement(Sb + "EnablePartitioning", false),
             new XElement(Sb + "EntityAvailabilityStatus", "Available"),
             new XElement(Sb + "EnableExpress", false),
@@ -133,6 +134,7 @@ public static class EntityDescriptionCodec
                 "DefaultMessageTimeToLive" => topic with { DefaultMessageTimeToLive = AtomXml.ParseOptionalDuration(value) },
                 "UserMetadata" => topic with { UserMetadata = value },
                 "Status" => topic with { Status = EntityStatusExtensions.Parse(value) },
+                "AutoDeleteOnIdle" => topic with { AutoDeleteOnIdle = AtomXml.ParseOptionalDuration(value) },
                 _ => topic,
             };
         }
@@ -161,7 +163,7 @@ public static class EntityDescriptionCodec
             new XElement(Sb + "UpdatedAt", AtomXml.Timestamp(updated)),
             new XElement(Sb + "AccessedAt", AtomXml.Timestamp(updated)),
             CountDetailsElement(runtime),
-            new XElement(Sb + "AutoDeleteOnIdle", AtomXml.DurationOrUnlimited(null)),
+            new XElement(Sb + "AutoDeleteOnIdle", AtomXml.DurationOrUnlimited(subscription.AutoDeleteOnIdle)),
             new XElement(Sb + "EntityAvailabilityStatus", "Available"),
             ForwardElement("ForwardDeadLetteredMessagesTo", subscription.ForwardDeadLetteredMessagesTo));
     }
@@ -205,6 +207,7 @@ public static class EntityDescriptionCodec
                 "ForwardDeadLetteredMessagesTo" => subscription with { ForwardDeadLetteredMessagesTo = NormalizeForwardTarget(value) },
                 "UserMetadata" => subscription with { UserMetadata = value },
                 "Status" => subscription with { Status = EntityStatusExtensions.Parse(value) },
+                "AutoDeleteOnIdle" => subscription with { AutoDeleteOnIdle = AtomXml.ParseOptionalDuration(value) },
                 _ => subscription,
             };
         }

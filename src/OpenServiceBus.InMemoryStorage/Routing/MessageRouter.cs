@@ -18,19 +18,22 @@ public sealed class MessageRouter : IMessageRouter
     private readonly IMessageStore _store;
     private readonly ILogger<MessageRouter> _logger;
     private readonly IRuleActionApplier? _actionApplier;
+    private readonly EntityActivityTracker? _activity;
 
     public MessageRouter(
         IQueueRegistry queues,
         IMessageStore store,
         ILogger<MessageRouter> logger,
         ITopicRegistry? topics = null,
-        IRuleActionApplier? actionApplier = null)
+        IRuleActionApplier? actionApplier = null,
+        EntityActivityTracker? activityTracker = null)
     {
         _queues = queues;
         _topics = topics;
         _store = store;
         _logger = logger;
         _actionApplier = actionApplier;
+        _activity = activityTracker;
     }
 
     public async Task<IReadOnlyList<string>> RouteAsync(
@@ -144,6 +147,7 @@ public sealed class MessageRouter : IMessageRouter
                         sub.BackingQueueName, subEncoded, expiresAt, scheduledFor,
                         subSessionId, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
                     landed.Add(sub.BackingQueueName);
+                    _activity?.Touch(sub.BackingQueueName);
                 }
                 return;
             }
@@ -169,5 +173,6 @@ public sealed class MessageRouter : IMessageRouter
             queue.Name, encoded, expiresAt, scheduledFor,
             sessionId, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
         landed.Add(queue.Name);
+        _activity?.Touch(queue.Name);
     }
 }

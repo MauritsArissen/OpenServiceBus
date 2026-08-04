@@ -6,6 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { explorerApi } from "@/lib/api";
 import { humanTime, type Selected } from "@/lib/format";
@@ -101,6 +102,8 @@ export function EntityView() {
                   </h1>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     <Badge variant="secondary" className="capitalize">{sel.kind}</Badge>
+                    {d?.status && d.status !== "Active" && <Badge variant="warning">{d.status}</Badge>}
+                    {d?.autoDeleteOnIdle && <Badge variant="outline">Auto-delete {humanTime(d.autoDeleteOnIdle)} idle</Badge>}
                     {d?.requiresSession && <Badge variant="success">Sessions</Badge>}
                     {d?.requiresDuplicateDetection && <Badge variant="success">Dedup</Badge>}
                     {d?.deadLetteringOnMessageExpiration && <Badge variant="warning">DLQ on TTL</Badge>}
@@ -110,14 +113,40 @@ export function EntityView() {
                     )}
                   </div>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0 text-muted-foreground hover:border-destructive/40 hover:text-destructive"
-                  onClick={handleDelete}
-                >
-                  <Trash2Icon /> Delete
-                </Button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Select
+                    value={d?.status ?? "Active"}
+                    onValueChange={(status) => {
+                      void (async () => {
+                        try {
+                          await explorerApi.setStatus(store.conn, sel.kind, sel.name, sel.sub ?? null, status);
+                          toast.success(`Status set to ${status}`);
+                          await store.refresh();
+                        } catch (e) {
+                          toast.error("Status change failed: " + (e as Error).message);
+                        }
+                      })();
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-[150px] text-xs" aria-label="Entity status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Active">Active</SelectItem>
+                      <SelectItem value="SendDisabled">SendDisabled</SelectItem>
+                      <SelectItem value="ReceiveDisabled">ReceiveDisabled</SelectItem>
+                      <SelectItem value="Disabled">Disabled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 text-muted-foreground hover:border-destructive/40 hover:text-destructive"
+                    onClick={handleDelete}
+                  >
+                    <Trash2Icon /> Delete
+                  </Button>
+                </div>
               </div>
               <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
                 {sel.kind === "topic" ? (

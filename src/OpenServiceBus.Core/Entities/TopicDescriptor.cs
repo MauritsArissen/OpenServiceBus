@@ -18,6 +18,12 @@ public sealed record TopicDescriptor
     /// </summary>
     public string? UserMetadata { get; init; }
 
+    /// <summary>
+    /// Delete the entity automatically after this long without activity (sends, receives,
+    /// peeks, link attaches). Null = never. Minimum 5 minutes, validated at create/update.
+    /// </summary>
+    public TimeSpan? AutoDeleteOnIdle { get; init; }
+
     /// <summary>Operational status. Enforced on the publish path.</summary>
     public EntityStatus Status { get; init; } = EntityStatus.Active;
 

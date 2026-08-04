@@ -39,6 +39,7 @@ public static class TopicEndpoints
                 Name = name,
                 DefaultMessageTimeToLive = body?.DefaultMessageTimeToLive,
                 Status = body?.Status ?? EntityStatus.Active,
+                AutoDeleteOnIdle = body?.AutoDeleteOnIdle,
             };
             // Idempotent re-declaration is fine; an attempt to change settings on an existing
             // topic is rejected rather than silently ignored (create is GetOrAdd - it returns the
@@ -47,7 +48,8 @@ public static class TopicEndpoints
             if (existing is not null)
             {
                 if (existing.DefaultMessageTimeToLive != descriptor.DefaultMessageTimeToLive
-                    || existing.Status != descriptor.Status)
+                    || existing.Status != descriptor.Status
+                    || existing.AutoDeleteOnIdle != descriptor.AutoDeleteOnIdle)
                 {
                     return Results.Conflict(new
                     {
@@ -102,6 +104,7 @@ public static class TopicEndpoints
                 ForwardTo = b.ForwardTo,
                 ForwardDeadLetteredMessagesTo = b.ForwardDeadLetteredMessagesTo,
                 Status = b.Status,
+                AutoDeleteOnIdle = b.AutoDeleteOnIdle,
             };
             // Same create-vs-update honesty as queues: re-declaring identical settings is a 200,
             // trying to change them on an existing subscription is a 409 instead of a silent no-op.
@@ -188,13 +191,15 @@ public static class TopicEndpoints
         && existing.RequiresSession == requested.RequiresSession
         && string.Equals(existing.ForwardTo, requested.ForwardTo, StringComparison.Ordinal)
         && string.Equals(existing.ForwardDeadLetteredMessagesTo, requested.ForwardDeadLetteredMessagesTo, StringComparison.Ordinal)
-        && existing.Status == requested.Status;
+        && existing.Status == requested.Status
+        && existing.AutoDeleteOnIdle == requested.AutoDeleteOnIdle;
 }
 
 public sealed record CreateTopicRequest
 {
     public TimeSpan? DefaultMessageTimeToLive { get; init; }
     public EntityStatus Status { get; init; } = EntityStatus.Active;
+    public TimeSpan? AutoDeleteOnIdle { get; init; }
 }
 
 public sealed record CreateSubscriptionRequest
@@ -207,6 +212,7 @@ public sealed record CreateSubscriptionRequest
     public string? ForwardTo { get; init; }
     public string? ForwardDeadLetteredMessagesTo { get; init; }
     public EntityStatus Status { get; init; } = EntityStatus.Active;
+    public TimeSpan? AutoDeleteOnIdle { get; init; }
 }
 
 /// <summary>
@@ -270,9 +276,9 @@ public sealed record CorrelationFilterFields(
     string? ContentType,
     Dictionary<string, string?>? Properties);
 
-public sealed record TopicResponse(string Name, TimeSpan? DefaultMessageTimeToLive, EntityStatus Status)
+public sealed record TopicResponse(string Name, TimeSpan? DefaultMessageTimeToLive, EntityStatus Status, TimeSpan? AutoDeleteOnIdle)
 {
-    public static TopicResponse From(TopicDescriptor d) => new(d.Name, d.DefaultMessageTimeToLive, d.Status);
+    public static TopicResponse From(TopicDescriptor d) => new(d.Name, d.DefaultMessageTimeToLive, d.Status, d.AutoDeleteOnIdle);
 }
 
 public sealed record SubscriptionResponse(
@@ -286,6 +292,7 @@ public sealed record SubscriptionResponse(
     string? ForwardTo,
     string? ForwardDeadLetteredMessagesTo,
     EntityStatus Status,
+    TimeSpan? AutoDeleteOnIdle,
     string BackingQueueName,
     long? ActiveMessageCount)
 {
@@ -300,6 +307,7 @@ public sealed record SubscriptionResponse(
         d.ForwardTo,
         d.ForwardDeadLetteredMessagesTo,
         d.Status,
+        d.AutoDeleteOnIdle,
         d.BackingQueueName,
         count);
 }

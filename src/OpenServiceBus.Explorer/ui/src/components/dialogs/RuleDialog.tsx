@@ -15,6 +15,7 @@ export function RuleDialog({ topic, sub, edit }: { topic: string; sub: string; e
   const [name, setName] = useState(edit?.name ?? "");
   const [filterType, setFilterType] = useState((edit?.filterType ?? "sql").toLowerCase());
   const [sql, setSql] = useState(edit?.sqlExpression ?? "");
+  const [sqlAction, setSqlAction] = useState(edit?.sqlActionExpression ?? "");
   const [rcMessageId, setRcMessageId] = useState(edit?.messageId ?? "");
   const [rcCorrelationId, setRcCorrelationId] = useState(edit?.correlationId ?? "");
   const [rcSubject, setRcSubject] = useState(edit?.subject ?? "");
@@ -28,6 +29,7 @@ export function RuleDialog({ topic, sub, edit }: { topic: string; sub: string; e
     setBusy(true);
     try {
       const rule: Record<string, unknown> = { filterType };
+      if (sqlAction.trim()) rule.sqlAction = sqlAction.trim();
       if (filterType === "sql") {
         rule.sqlExpression = sql;
       } else if (filterType === "correlation") {
@@ -108,6 +110,21 @@ export function RuleDialog({ topic, sub, edit }: { topic: string; sub: string; e
               : "A FalseFilter matches nothing - useful as a placeholder before adding real rules."}
           </div>
         )}
+
+        <div className="space-y-1">
+          <Label>Action (SQL, optional)</Label>
+          <Textarea
+            rows={2}
+            value={sqlAction}
+            onChange={(e) => setSqlAction(e.target.value)}
+            placeholder="SET sys.Label = 'tagged'; SET counter = counter + 1; REMOVE debug"
+            className="font-mono text-xs"
+          />
+          <p className="text-[11px] text-muted-foreground">
+            SET/REMOVE statements applied to this subscription's copy when the rule matches.
+            Writable sys properties: Label, CorrelationId, To, ReplyTo, ReplyToSessionId, ContentType.
+          </p>
+        </div>
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={() => store.setDialog(null)}>Cancel</Button>

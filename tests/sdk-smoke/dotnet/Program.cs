@@ -86,11 +86,11 @@ try
     var adminQueue = $"smoke-admin-dotnet-{stamp}";
     var admin = new ServiceBusAdministrationClient(conn);
 
-    var created = (await admin.CreateQueueAsync(new CreateQueueOptions(adminQueue) { MaxDeliveryCount = 7 })).Value;
+    var created = (await admin.CreateQueueAsync(new CreateQueueOptions(adminQueue) { MaxDeliveryCount = 7, AutoDeleteOnIdle = TimeSpan.FromMinutes(10) })).Value;
     Check("admin create queue", created.Name == adminQueue);
 
     QueueProperties fetched = await admin.GetQueueAsync(adminQueue);
-    Check("admin get queue", fetched.MaxDeliveryCount == 7);
+    Check("admin get queue", fetched.MaxDeliveryCount == 7 && fetched.AutoDeleteOnIdle == TimeSpan.FromMinutes(10));
 
     // The admin-created queue must be immediately usable on the data plane.
     var adminSender = client.CreateSender(adminQueue);

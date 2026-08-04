@@ -39,6 +39,7 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
     private readonly AmqpListenerHost _listener;
     private readonly TtlExpirationService _ttlSweeper;
     private readonly ScheduledMessageActivator _scheduledActivator;
+    private readonly IdleEntityReaper _idleReaper;
     private readonly WebSocketBridgeService? _wsBridge;
     private readonly ProtocolFrontDoor? _frontDoor;
     private readonly AtomHttpServer? _atomServer;
@@ -48,6 +49,7 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
         AmqpListenerHost listener,
         TtlExpirationService ttlSweeper,
         ScheduledMessageActivator scheduledActivator,
+        IdleEntityReaper idleReaper,
         WebSocketBridgeService? wsBridge,
         ProtocolFrontDoor? frontDoor,
         AtomHttpServer? atomServer,
@@ -63,6 +65,7 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
         _listener = listener;
         _ttlSweeper = ttlSweeper;
         _scheduledActivator = scheduledActivator;
+        _idleReaper = idleReaper;
         _wsBridge = wsBridge;
         _frontDoor = frontDoor;
         _atomServer = atomServer;
@@ -146,8 +149,9 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
             : new InMemoryMessageStore(opts.TimeProvider);
         var queues = new QueueManager(storeAsIface);
         var topics = new TopicManager(queues);
+        var activity = new EntityActivityTracker(opts.TimeProvider);
         var router = new MessageRouter(queues, storeAsIface, NullLogger<MessageRouter>.Instance, topics,
-            new AmqpRuleActionApplier(opts.TimeProvider));
+            new AmqpRuleActionApplier(opts.TimeProvider), activity);
         var transactions = new TransactionManager(NullLogger<TransactionManager>.Instance);
 
         var listener = new AmqpListenerHost(
@@ -158,7 +162,8 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
             transactions,
             opts.TimeProvider,
             NullLoggerFactory.Instance,
-            topics);
+            topics,
+            activity);
 
         var ttlSweeper = new TtlExpirationService(
             storeAsIface,
@@ -173,6 +178,13 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
             opts.TimeProvider,
             NullLogger<ScheduledMessageActivator>.Instance);
 
+        var idleReaper = new IdleEntityReaper(
+            queues,
+            activity,
+            opts.TimeProvider,
+            NullLogger<IdleEntityReaper>.Instance,
+            topics);
+
         // Register the observable gauges for queue depth. No-op when no MeterListener
         // is attached, so this is essentially free for tests that don't care about telemetry.
         var diagnostics = new DiagnosticsHostedService(storeAsIface, queues);
@@ -180,6 +192,7 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
         await listener.StartAsync(CancellationToken.None);
         await ttlSweeper.StartAsync(CancellationToken.None);
         await scheduledActivator.StartAsync(CancellationToken.None);
+        await idleReaper.StartAsync(CancellationToken.None);
         await diagnostics.StartAsync(CancellationToken.None);
 
         // The ATOM management surface: the SDK's admin client derives its HTTP endpoint from
@@ -238,6 +251,7 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
             listener,
             ttlSweeper,
             scheduledActivator,
+            idleReaper,
             wsBridge,
             frontDoor,
             atomServer,
@@ -278,6 +292,8 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
         }
         await _scheduledActivator.StopAsync(CancellationToken.None);
         _scheduledActivator.Dispose();
+        await _idleReaper.StopAsync(CancellationToken.None);
+        _idleReaper.Dispose();
         await _ttlSweeper.StopAsync(CancellationToken.None);
         _ttlSweeper.Dispose();
         await _listener.StopAsync(CancellationToken.None);

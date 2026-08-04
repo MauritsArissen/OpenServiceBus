@@ -22,6 +22,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddOpenServiceBusInMemoryStorage(this IServiceCollection services)
     {
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<EntityActivityTracker>();
         services.TryAddSingleton<InMemoryMessageStore>();
         services.TryAddSingleton<IMessageStore>(sp => sp.GetRequiredService<InMemoryMessageStore>());
         services.TryAddSingleton<QueueManager>();
