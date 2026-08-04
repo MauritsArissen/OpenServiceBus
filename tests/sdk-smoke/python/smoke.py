@@ -2,7 +2,7 @@
 
 Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-  -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete (ATOM management API)
+  -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.
@@ -11,6 +11,7 @@ Exit code 0 = all pass; 1 = at least one failure.
 import os
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -172,9 +173,35 @@ def run() -> None:
             reopened_sender.send_messages(ServiceBusMessage("flowing again"))
         check("admin status gate", blocked)
 
-        status, _ = http("DELETE", f"{base}/{admin_queue}?api-version=2021-05")
+        # 15. admin delete detach - deleting the queue while a receive is blocked on it
+        # must detach the link promptly instead of stalling until the SDK's timeout
+        # (issue #36). The delete fires from a timer thread while the main thread waits
+        # in receive_messages.
+        doomed_receiver = client.get_queue_receiver(admin_queue)
+        leftover = doomed_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+        if leftover:
+            doomed_receiver.complete_message(leftover[0])
+
+        delete_status: "list[int]" = []
+        deleter = threading.Timer(
+            0.5, lambda: delete_status.append(http("DELETE", f"{base}/{admin_queue}?api-version=2021-05")[0])
+        )
+        deleter.start()
+        started = time.monotonic()
+        try:
+            doomed_receiver.receive_messages(max_message_count=1, max_wait_time=30)
+        except Exception:  # noqa: BLE001 - a not-found detach error is the expected shape
+            pass
+        elapsed = time.monotonic() - started
+        deleter.join()
+        try:
+            doomed_receiver.close()
+        except Exception:  # noqa: BLE001 - closing a detached receiver may re-raise
+            pass
+        check("admin delete detach", elapsed < 10, f"{elapsed:.1f}s")
+
         gone, _ = http("GET", f"{base}/{admin_queue}?api-version=2021-05")
-        check("admin delete queue", status == 200 and gone == 404)
+        check("admin delete queue", delete_status == [200] and gone == 404)
 
 
 try:

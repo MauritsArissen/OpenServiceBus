@@ -68,7 +68,13 @@ public sealed class QueueSenderProcessor : IMessageProcessor
         {
             // Status is re-resolved per transfer so a flip to (Send)Disabled applies to
             // links that attached while the entity was still active.
-            var currentStatus = (_registry?.GetAsync(_queueName).GetAwaiter().GetResult() ?? _descriptor).Status;
+            var resolved = _registry?.GetAsync(_queueName).GetAwaiter().GetResult();
+            if (_registry is not null && resolved is null)
+            {
+                CompleteEntityDeleted(messageContext);
+                return;
+            }
+            var currentStatus = (resolved ?? _descriptor).Status;
             if (!currentStatus.AcceptsSends())
             {
                 messageContext.Complete(new Error(new Symbol(Routing.ServiceBusErrors.EntityDisabled))
@@ -81,7 +87,7 @@ public sealed class QueueSenderProcessor : IMessageProcessor
 
             var msg = messageContext.Message;
 
-            var current = _registry?.GetAsync(_queueName).GetAwaiter().GetResult() ?? _descriptor;
+            var current = resolved ?? _descriptor;
             var payloadBytes = PayloadSize(msg);
             if (payloadBytes > current.MaxMessageSizeInKilobytes * 1024)
             {
@@ -242,6 +248,10 @@ public sealed class QueueSenderProcessor : IMessageProcessor
                 context.Complete();
             }
         }
+        catch (InvalidOperationException) when (EntityDeleted())
+        {
+            CompleteEntityDeleted(context);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to enqueue batched messages on queue {Queue}", _queueName);
@@ -266,6 +276,10 @@ public sealed class QueueSenderProcessor : IMessageProcessor
                 scheduledFor?.ToString("O") ?? "immediate");
             context.Complete();
         }
+        catch (InvalidOperationException) when (EntityDeleted())
+        {
+            CompleteEntityDeleted(context);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to enqueue message on queue {Queue}", _queueName);
@@ -274,6 +288,18 @@ public sealed class QueueSenderProcessor : IMessageProcessor
                 Description = ex.Message,
             });
         }
+    }
+
+    private bool EntityDeleted() =>
+        _registry is not null && _registry.GetAsync(_queueName).GetAwaiter().GetResult() is null;
+
+    private void CompleteEntityDeleted(MessageContext context)
+    {
+        context.Complete(new Error(new Symbol(ErrorCode.NotFound))
+        {
+            Info = new Fields(),
+            Description = $"The messaging entity '{_queueName}' has been deleted.",
+        });
     }
 
     /// <summary>
