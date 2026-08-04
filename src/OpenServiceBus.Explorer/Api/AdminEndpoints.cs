@@ -198,7 +198,7 @@ public static class AdminEndpoints
         api.MapPut("/status", (SetStatusRequest body, SessionManager sessions, CancellationToken ct) =>
             Guarded(async () =>
             {
-                if (!Enum.TryParse<EntityStatus>(body.Status, ignoreCase: true, out var status))
+                if (TryParseStatus(body.Status) is not { } status)
                 {
                     return Results.BadRequest(new { error = $"Unknown status '{body.Status}'." });
                 }
@@ -238,6 +238,28 @@ public static class AdminEndpoints
 
         return endpoints;
     }
+
+    /// <summary>
+    /// The SDK's <see cref="EntityStatus"/> is an extensible-enum struct, not an enum -
+    /// <c>Enum.TryParse</c> compiles against it but throws at runtime. Match against the
+    /// known states instead.
+    /// </summary>
+    internal static EntityStatus? TryParseStatus(string? value)
+    {
+        foreach (var candidate in KnownStatuses)
+        {
+            if (string.Equals(candidate.ToString(), value, StringComparison.OrdinalIgnoreCase))
+            {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static readonly EntityStatus[] KnownStatuses =
+    {
+        EntityStatus.Active, EntityStatus.SendDisabled, EntityStatus.ReceiveDisabled, EntityStatus.Disabled,
+    };
 
     private static ServiceBusAdministrationClient Admin(SessionManager sessions, string? clientConnectionString) =>
         sessions.GetOrCreate(ExplorerEndpoints.ResolveConnectionString(clientConnectionString)).Admin;
