@@ -18,3 +18,5 @@ app.MapExplorerEndpoints();
 app.MapAdminEndpoints();
 
 await app.RunAsync();
+
+public partial class Program;

@@ -19,6 +19,10 @@
     <PackageReference Include="Azure.Messaging.ServiceBus" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpenServiceBus.Explorer.Tests" />
+  </ItemGroup>
+
   <!-- Build the SPA into wwwroot before Build/Publish. Runs npm ci + npm run build.
        Guarded by BuildExplorerUi and skipped if node_modules is fresh relative to sources. -->
   <Target Name="BuildExplorerSpa" BeforeTargets="AssignTargetPaths"

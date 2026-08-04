@@ -19,5 +19,6 @@
     <Project Path="tests/OpenServiceBus.IntegrationTests/OpenServiceBus.IntegrationTests.csproj" />
     <Project Path="tests/OpenServiceBus.Testing.Tests/OpenServiceBus.Testing.Tests.csproj" />
     <Project Path="tests/OpenServiceBus.AzureFunctions.IntegrationTests/OpenServiceBus.AzureFunctions.IntegrationTests.csproj" />
+    <Project Path="tests/OpenServiceBus.Explorer.Tests/OpenServiceBus.Explorer.Tests.csproj" />
   </Folder>
 </Solution>
