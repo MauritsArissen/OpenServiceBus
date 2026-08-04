@@ -1,11 +1,15 @@
 import {
-  ClockIcon, EraserIcon, InboxIcon, LayersIcon, LockIcon, RepeatIcon, SkullIcon, Trash2Icon, WaypointsIcon,
+  CheckIcon, ClockIcon, EraserIcon, InboxIcon, LayersIcon, LockIcon, MoreVerticalIcon, RepeatIcon,
+  SkullIcon, Trash2Icon, WaypointsIcon,
   type LucideIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { explorerApi } from "@/lib/api";
@@ -18,6 +22,8 @@ import { OverviewTab } from "./OverviewTab";
 import { ReceiveTab } from "./ReceiveTab";
 import { RulesTab } from "./RulesTab";
 import { SendTab } from "./SendTab";
+
+const ENTITY_STATUSES = ["Active", "SendDisabled", "ReceiveDisabled", "Disabled"] as const;
 
 export function EntityView() {
   const store = useStore();
@@ -110,6 +116,19 @@ export function EntityView() {
     });
   };
 
+  const currentStatus = d?.status ?? "Active";
+  const setEntityStatus = (status: string) => {
+    void (async () => {
+      try {
+        await explorerApi.setStatus(store.conn, sel.kind, sel.name, sel.sub ?? null, status);
+        toast.success(`Status set to ${status}`);
+        await store.refresh();
+      } catch (e) {
+        toast.error("Status change failed: " + (e as Error).message);
+      }
+    })();
+  };
+
   return (
     <main className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-muted/30" key={address}>
       <div className="mx-auto max-w-5xl space-y-5 p-5">
@@ -139,29 +158,15 @@ export function EntityView() {
                     )}
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Select
-                    value={d?.status ?? "Active"}
-                    onValueChange={(status) => {
-                      void (async () => {
-                        try {
-                          await explorerApi.setStatus(store.conn, sel.kind, sel.name, sel.sub ?? null, status);
-                          toast.success(`Status set to ${status}`);
-                          await store.refresh();
-                        } catch (e) {
-                          toast.error("Status change failed: " + (e as Error).message);
-                        }
-                      })();
-                    }}
-                  >
+                <div className="hidden shrink-0 items-center gap-2 sm:flex">
+                  <Select value={currentStatus} onValueChange={setEntityStatus}>
                     <SelectTrigger className="h-8 w-[150px] text-xs" aria-label="Entity status">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Active">Active</SelectItem>
-                      <SelectItem value="SendDisabled">SendDisabled</SelectItem>
-                      <SelectItem value="ReceiveDisabled">ReceiveDisabled</SelectItem>
-                      <SelectItem value="Disabled">Disabled</SelectItem>
+                      {ENTITY_STATUSES.map((s) => (
+                        <SelectItem key={s} value={s}>{s}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   <Button
@@ -187,6 +192,41 @@ export function EntityView() {
                     <Trash2Icon /> Delete
                   </Button>
                 </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      className="shrink-0 sm:hidden"
+                      aria-label="Entity actions"
+                    >
+                      <MoreVerticalIcon />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuLabel>Status</DropdownMenuLabel>
+                    {ENTITY_STATUSES.map((s) => (
+                      <DropdownMenuItem key={s} onClick={() => setEntityStatus(s)}>
+                        <CheckIcon className={cn("size-4", currentStatus === s ? "opacity-100" : "opacity-0")} />
+                        {s}
+                      </DropdownMenuItem>
+                    ))}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      disabled={!store.purgeCapable}
+                      onClick={handlePurge}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <EraserIcon /> Purge
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={handleDelete}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2Icon /> Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
               <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
                 {sel.kind === "topic" ? (
