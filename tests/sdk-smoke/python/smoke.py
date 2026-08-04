@@ -2,7 +2,7 @@
 
 Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-  -> topic session receive -> admin create/get/roundtrip/status gate/delete (ATOM management API)
+  -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete (ATOM management API)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.
@@ -111,14 +111,14 @@ def run() -> None:
         queue_xml = (
             '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">'
             '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
-            "<MaxDeliveryCount>7</MaxDeliveryCount><AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle></QueueDescription></content></entry>"
+            "<MaxDeliveryCount>7</MaxDeliveryCount><AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle><MaxSizeInMegabytes>2048</MaxSizeInMegabytes></QueueDescription></content></entry>"
         )
 
         status, _ = http("PUT", f"{base}/{admin_queue}?api-version=2021-05", queue_xml.encode())
         check("admin create queue", status == 201, "" if status == 201 else f"status {status}")
 
         status, body = http("GET", f"{base}/{admin_queue}?api-version=2021-05")
-        check("admin get queue", status == 200 and "<MaxDeliveryCount>7</MaxDeliveryCount>" in body and "<AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle>" in body)
+        check("admin get queue", status == 200 and "<MaxDeliveryCount>7</MaxDeliveryCount>" in body and "<AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle>" in body and "<MaxSizeInMegabytes>2048</MaxSizeInMegabytes>" in body)
 
         # The admin-created queue must be immediately usable on the data plane.
         with client.get_queue_sender(admin_queue) as admin_sender:
@@ -130,7 +130,17 @@ def run() -> None:
             if amsgs:
                 admin_receiver.complete_message(amsgs[0])
 
-        # 13. admin status gate - SendDisabled rejects sends, Active restores them (issue #22).
+        # 13. admin size limit - a 300 KB message must be rejected against the default
+        # 256 KB limit the sender link advertises (issue #24).
+        oversize_blocked = False
+        try:
+            with client.get_queue_sender(admin_queue) as oversize_sender:
+                oversize_sender.send_messages(ServiceBusMessage(b"x" * (300 * 1024)))
+        except Exception:  # noqa: BLE001 - any SDK error counts as "send rejected"
+            oversize_blocked = True
+        check("admin size limit", oversize_blocked)
+
+        # 14. admin status gate - SendDisabled rejects sends, Active restores them (issue #22).
         def status_xml(entity_status: str) -> bytes:
             return (
                 '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">'

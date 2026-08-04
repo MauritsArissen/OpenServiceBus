@@ -45,6 +45,12 @@ public sealed class QueueConfig
 
 public sealed class QueueProperties
 {
+    [JsonPropertyName("MaxSizeInMegabytes")]
+    public long? MaxSizeInMegabytes { get; set; }
+
+    [JsonPropertyName("MaxMessageSizeInKilobytes")]
+    public long? MaxMessageSizeInKilobytes { get; set; }
+
     /// <summary>ISO 8601 duration (e.g. <c>PT1M</c>) - converted to <see cref="TimeSpan"/>.</summary>
     [JsonPropertyName("LockDuration")]
     public string? LockDuration { get; set; }
@@ -94,6 +100,12 @@ public sealed class TopicConfig
 
 public sealed class TopicProperties
 {
+    [JsonPropertyName("MaxSizeInMegabytes")]
+    public long? MaxSizeInMegabytes { get; set; }
+
+    [JsonPropertyName("MaxMessageSizeInKilobytes")]
+    public long? MaxMessageSizeInKilobytes { get; set; }
+
     /// <summary>ISO 8601 duration - null means messages never expire.</summary>
     [JsonPropertyName("AutoDeleteOnIdle")]
     public string? AutoDeleteOnIdle { get; set; }

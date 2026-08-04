@@ -81,6 +81,19 @@ public sealed record QueueDescriptor
     /// </summary>
     public TimeSpan? AutoDeleteOnIdle { get; init; }
 
+    /// <summary>
+    /// Largest accepted message, in kilobytes. Advertised as <c>max-message-size</c> on
+    /// sender link attach (the SDK sizes batches from it) and enforced per transfer.
+    /// Default mirrors Service Bus standard tier.
+    /// </summary>
+    public long MaxMessageSizeInKilobytes { get; init; } = 256;
+
+    /// <summary>
+    /// Entity size quota, in megabytes (main queue plus its dead-letter queue). Sends past
+    /// the quota are rejected until space is freed. Default mirrors standard tier (1 GB).
+    /// </summary>
+    public long MaxSizeInMegabytes { get; init; } = 1024;
+
     /// <summary>Operational status. Enforced on the send and receive paths.</summary>
     public EntityStatus Status { get; init; } = EntityStatus.Active;
 

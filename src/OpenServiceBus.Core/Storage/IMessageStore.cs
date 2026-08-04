@@ -94,6 +94,13 @@ public interface IMessageStore
     Task<long> CountAsync(string queueName, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Total encoded bytes currently stored on the queue (active + locked + scheduled +
+    /// deferred). Feeds quota enforcement and the management API's <c>SizeInBytes</c>.
+    /// Returns 0 for unknown queues.
+    /// </summary>
+    long GetSizeInBytes(string queueName) => 0;
+
+    /// <summary>
     /// Cumulative process-lifetime counters for a queue, for metrics/throughput. Default
     /// implementation returns zeros so stores that don't track them stay compatible.
     /// <list type="bullet">

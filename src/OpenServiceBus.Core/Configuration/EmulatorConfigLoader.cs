@@ -114,6 +114,8 @@ public static class EmulatorConfigLoader
             RequiresSession = props.RequiresSession ?? false,
             Status = EntityStatusExtensions.Parse(props.Status),
             AutoDeleteOnIdle = ParseDuration(props.AutoDeleteOnIdle, $"Queue '{q.Name}'.AutoDeleteOnIdle", warnings),
+            MaxSizeInMegabytes = props.MaxSizeInMegabytes ?? 1024,
+            MaxMessageSizeInKilobytes = props.MaxMessageSizeInKilobytes ?? 256,
             RequiresDuplicateDetection = props.RequiresDuplicateDetection ?? false,
             DuplicateDetectionHistoryTimeWindow = ParseDuration(props.DuplicateDetectionHistoryTimeWindow, $"Queue '{q.Name}'.DuplicateDetectionHistoryTimeWindow", warnings),
             // Auto-forwarding. The router enforces target-exists lazily at runtime so
@@ -131,6 +133,8 @@ public static class EmulatorConfigLoader
                 $"Topic '{t.Name}'.DefaultMessageTimeToLive", warnings),
             Status = EntityStatusExtensions.Parse(t.Properties?.Status),
             AutoDeleteOnIdle = ParseDuration(t.Properties?.AutoDeleteOnIdle, $"Topic '{t.Name}'.AutoDeleteOnIdle", warnings),
+            MaxSizeInMegabytes = t.Properties?.MaxSizeInMegabytes ?? 1024,
+            MaxMessageSizeInKilobytes = t.Properties?.MaxMessageSizeInKilobytes ?? 256,
         };
 
     private static SubscriptionDescriptor ProjectSubscription(string topicName, SubscriptionConfig s, List<string> warnings)

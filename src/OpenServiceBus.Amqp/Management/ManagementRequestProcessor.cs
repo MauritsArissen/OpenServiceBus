@@ -225,10 +225,16 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
     /// </summary>
     private Message HandleScheduleMessage(Message request)
     {
-        // Scheduling is a send: a (Send)Disabled entity rejects it like a transfer would.
+        // Scheduling is a send: a (Send)Disabled entity rejects it like a transfer would,
+        // and the same size/quota gates apply.
         if (!_descriptor.Status.AcceptsSends())
         {
             return BuildResponse(request, 403, $"Forbidden: entity '{_entityName}' is {_descriptor.Status} and does not accept messages.");
+        }
+        var usage = _store.GetSizeInBytes(_entityName) + _store.GetSizeInBytes(_entityName + EntityNames.DeadLetterSuffix);
+        if (usage >= _descriptor.MaxSizeInMegabytes * 1024 * 1024)
+        {
+            return BuildResponse(request, 403, $"Forbidden: entity '{_entityName}' has reached its {_descriptor.MaxSizeInMegabytes} MB quota.");
         }
 
         if (request.Body is not Map body || !body.TryGetValue(MessagesBodyKey, out var messagesObj))

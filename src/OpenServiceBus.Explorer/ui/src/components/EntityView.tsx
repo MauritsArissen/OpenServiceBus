@@ -161,6 +161,15 @@ export function EntityView() {
                     <Stat icon={SkullIcon} label="Dead-lettered" value={String(store.dlqCount(address))} />
                     <Stat icon={LockIcon} label="Lock duration" value={humanTime(d?.lockDuration)} />
                     <Stat icon={RepeatIcon} label="Max delivery" value={String(d?.maxDeliveryCount ?? "?")} />
+                    <Stat
+                      icon={LayersIcon}
+                      label="Size"
+                      value={
+                        d?.sizeInBytes != null
+                          ? `${(d.sizeInBytes / 1024).toFixed(0)} KB / ${d?.maxSizeInMegabytes ?? "?"} MB`
+                          : "?"
+                      }
+                    />
                     <Stat icon={ClockIcon} label="Default TTL" value={humanTime(d?.defaultMessageTimeToLive)} />
                   </>
                 )}

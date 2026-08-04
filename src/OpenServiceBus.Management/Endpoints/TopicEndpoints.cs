@@ -40,6 +40,8 @@ public static class TopicEndpoints
                 DefaultMessageTimeToLive = body?.DefaultMessageTimeToLive,
                 Status = body?.Status ?? EntityStatus.Active,
                 AutoDeleteOnIdle = body?.AutoDeleteOnIdle,
+                MaxSizeInMegabytes = body?.MaxSizeInMegabytes ?? 1024,
+                MaxMessageSizeInKilobytes = body?.MaxMessageSizeInKilobytes ?? 256,
             };
             // Idempotent re-declaration is fine; an attempt to change settings on an existing
             // topic is rejected rather than silently ignored (create is GetOrAdd - it returns the
@@ -49,7 +51,9 @@ public static class TopicEndpoints
             {
                 if (existing.DefaultMessageTimeToLive != descriptor.DefaultMessageTimeToLive
                     || existing.Status != descriptor.Status
-                    || existing.AutoDeleteOnIdle != descriptor.AutoDeleteOnIdle)
+                    || existing.AutoDeleteOnIdle != descriptor.AutoDeleteOnIdle
+                    || existing.MaxSizeInMegabytes != descriptor.MaxSizeInMegabytes
+                    || existing.MaxMessageSizeInKilobytes != descriptor.MaxMessageSizeInKilobytes)
                 {
                     return Results.Conflict(new
                     {
@@ -200,6 +204,8 @@ public sealed record CreateTopicRequest
     public TimeSpan? DefaultMessageTimeToLive { get; init; }
     public EntityStatus Status { get; init; } = EntityStatus.Active;
     public TimeSpan? AutoDeleteOnIdle { get; init; }
+    public long MaxSizeInMegabytes { get; init; } = 1024;
+    public long MaxMessageSizeInKilobytes { get; init; } = 256;
 }
 
 public sealed record CreateSubscriptionRequest
@@ -276,9 +282,9 @@ public sealed record CorrelationFilterFields(
     string? ContentType,
     Dictionary<string, string?>? Properties);
 
-public sealed record TopicResponse(string Name, TimeSpan? DefaultMessageTimeToLive, EntityStatus Status, TimeSpan? AutoDeleteOnIdle)
+public sealed record TopicResponse(string Name, TimeSpan? DefaultMessageTimeToLive, EntityStatus Status, TimeSpan? AutoDeleteOnIdle, long MaxSizeInMegabytes, long MaxMessageSizeInKilobytes)
 {
-    public static TopicResponse From(TopicDescriptor d) => new(d.Name, d.DefaultMessageTimeToLive, d.Status, d.AutoDeleteOnIdle);
+    public static TopicResponse From(TopicDescriptor d) => new(d.Name, d.DefaultMessageTimeToLive, d.Status, d.AutoDeleteOnIdle, d.MaxSizeInMegabytes, d.MaxMessageSizeInKilobytes);
 }
 
 public sealed record SubscriptionResponse(

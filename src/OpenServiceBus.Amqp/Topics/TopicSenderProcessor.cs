@@ -62,12 +62,35 @@ public sealed class TopicSenderProcessor : IMessageProcessor
             {
                 messageContext.Complete(new Error(new Symbol(Routing.ServiceBusErrors.EntityDisabled))
                 {
+                    Info = new Fields(),
                     Description = $"Topic '{_topic.Name}' is {currentStatus} and does not accept messages.",
                 });
                 return;
             }
 
             var msg = messageContext.Message;
+
+            var currentTopic = _topics.GetTopicAsync(_topic.Name).GetAwaiter().GetResult() ?? _topic;
+            var payloadBytes = (long)msg.Encode().Length;
+            if (payloadBytes > currentTopic.MaxMessageSizeInKilobytes * 1024)
+            {
+                messageContext.Complete(new Error(new Symbol(Routing.ServiceBusErrors.MessageSizeExceeded))
+                {
+                    Info = new Fields(),
+                    Description = $"Message of {payloadBytes} bytes exceeds the limit of {currentTopic.MaxMessageSizeInKilobytes} KB on '{_topic.Name}'.",
+                });
+                return;
+            }
+            var usage = TopicUsageBytes(currentTopic.Name);
+            if (usage + payloadBytes > currentTopic.MaxSizeInMegabytes * 1024 * 1024)
+            {
+                messageContext.Complete(new Error(new Symbol(Routing.ServiceBusErrors.QuotaExceeded))
+                {
+                    Info = new Fields(),
+                    Description = $"Topic '{_topic.Name}' has reached its {currentTopic.MaxSizeInMegabytes} MB quota.",
+                });
+                return;
+            }
 
             if (msg.Format == AmqpBatchedMessageFormat && msg.BodySection is DataList dataList)
             {
@@ -202,6 +225,17 @@ public sealed class TopicSenderProcessor : IMessageProcessor
             _logger.LogError(ex, "Failed to fan-out batched envelope on topic {Topic}", _topic.Name);
             context.Complete(new Error(new Symbol(ErrorCode.InternalError)) { Description = ex.Message });
         }
+    }
+
+    private long TopicUsageBytes(string topicName)
+    {
+        long usage = 0;
+        foreach (var sub in _topics.ListSubscriptionsAsync(topicName).GetAwaiter().GetResult())
+        {
+            usage += _store.GetSizeInBytes(sub.BackingQueueName);
+            usage += _store.GetSizeInBytes(sub.BackingQueueName + EntityNames.DeadLetterSuffix);
+        }
+        return usage;
     }
 
     private static MessageFilterContext BuildFilterContext(Message msg, DateTimeOffset enqueuedAt)

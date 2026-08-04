@@ -19,6 +19,9 @@ export type QueueInfo = {
   topicName?: string;
   status?: string;
   autoDeleteOnIdle?: string | null;
+  maxSizeInMegabytes?: number;
+  maxMessageSizeInKilobytes?: number;
+  sizeInBytes?: number | null;
 };
 
 export type RuleInfo = {
