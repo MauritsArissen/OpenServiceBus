@@ -3,6 +3,7 @@
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
+//   -> purge (JSON management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -151,6 +152,25 @@ try
     Check("admin delete detach", closeTimer.Elapsed < TimeSpan.FromSeconds(10), $"{closeTimer.ElapsedMilliseconds}ms");
 
     Check("admin delete queue", !(await admin.QueueExistsAsync(adminQueue)).Value);
+
+    // 16. purge - the emulator-native message purge on the JSON management API
+    // (issue #36): every message goes, the queue itself stays.
+    var mgmtBase = Environment.GetEnvironmentVariable("SMOKE_MANAGEMENT") ?? "http://localhost:5300";
+    var purgeQueue = $"smoke-purge-dotnet-{stamp}";
+    await admin.CreateQueueAsync(purgeQueue);
+    var purgeSender = client.CreateSender(purgeQueue);
+    await purgeSender.SendMessageAsync(new ServiceBusMessage("one"));
+    await purgeSender.SendMessageAsync(new ServiceBusMessage("two"));
+    await purgeSender.CloseAsync();
+    using var mgmtHttp = new HttpClient();
+    var purgeResp = await mgmtHttp.DeleteAsync($"{mgmtBase}/queues/{purgeQueue}/messages");
+    var purgeBody = await purgeResp.Content.ReadAsStringAsync();
+    var purgeReceiver = client.CreateReceiver(purgeQueue);
+    var afterPurge = await purgeReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2));
+    await purgeReceiver.CloseAsync();
+    Check("admin purge", purgeResp.IsSuccessStatusCode && purgeBody.Contains("\"purged\":2") && afterPurge is null,
+        purgeResp.IsSuccessStatusCode ? "" : $"status {(int)purgeResp.StatusCode}");
+    await admin.DeleteQueueAsync(purgeQueue);
 }
 catch (Exception e)
 {

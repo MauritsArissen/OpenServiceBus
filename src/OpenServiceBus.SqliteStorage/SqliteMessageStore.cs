@@ -103,6 +103,30 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         _notify.TryRemove(queueName, out _);
     }
 
+    public async Task<long> PurgeAsync(string queueName, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var count = _connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM messages WHERE queue_name = $q";
+            count.Parameters.AddWithValue("$q", queueName);
+            var purged = Convert.ToInt64(count.ExecuteScalar());
+
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                DELETE FROM messages WHERE queue_name = $q;
+                DELETE FROM locks WHERE queue_name = $q;
+                DELETE FROM session_state WHERE queue_name = $q;
+                DELETE FROM dedup_history WHERE queue_name = $q;
+                """;
+            cmd.Parameters.AddWithValue("$q", queueName);
+            cmd.ExecuteNonQuery();
+            return purged;
+        }
+        finally { _gate.Release(); }
+    }
+
     public IReadOnlyCollection<string> ListQueueNames()
     {
         _gate.Wait();

@@ -112,6 +112,16 @@ public interface IMessageStore
     (long Enqueued, long Completed) LifetimeCounters(string queueName) => (0, 0);
 
     /// <summary>
+    /// Remove every message-shaped thing from a queue while keeping the queue itself:
+    /// active, locked, scheduled and deferred messages, message locks, session state and
+    /// duplicate-detection history. Session locks are left in place so live session
+    /// receivers keep their exclusivity and simply observe an empty session. Returns the
+    /// number of messages removed. Default implementation is a no-op for stores that do
+    /// not support purging.
+    /// </summary>
+    Task<long> PurgeAsync(string queueName, CancellationToken cancellationToken = default) => Task.FromResult(0L);
+
+    /// <summary>
     /// Wait for and lock the next available message under peek-lock for <paramref name="lockDuration"/>.
     /// Returns <c>null</c> only on cancellation.
     /// </summary>

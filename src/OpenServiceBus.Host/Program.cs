@@ -74,12 +74,14 @@ app.MapGet("/", () => Results.Json(new
     version,
     status = "ok",
     storage = storageMode,
+    capabilities = new[] { "purge" },
 }));
 
 app.MapHealthChecks("/health");
 
 app.MapQueueEndpoints();
 app.MapTopicEndpoints();
+app.MapPurgeEndpoints();
 
 app.Run();
 

@@ -281,6 +281,7 @@ public static class ExplorerEndpoints
             string? mgmtStatus = null;
             string? sdkStatus = null;
             string? atomStatus = null;
+            BrokerInfo? broker = null;
 
             try
             {
@@ -290,6 +291,22 @@ public static class ExplorerEndpoints
             catch (Exception ex)
             {
                 mgmtStatus = "error: " + ex.Message;
+            }
+
+            // Emulator detection: the OpenServiceBus management root identifies itself and
+            // lists emulator-native capabilities (e.g. purge). A real Azure namespace has no
+            // reachable management URL, so `broker` stays null and native features stay off.
+            try
+            {
+                var info = await http.GetFromJsonAsync<BrokerInfo>(Combine(pingMgmt, "/"), ct);
+                if (string.Equals(info?.Name, "OpenServiceBus", StringComparison.OrdinalIgnoreCase))
+                {
+                    broker = info;
+                }
+            }
+            catch
+            {
+                broker = null;
             }
 
             var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
@@ -316,7 +333,41 @@ public static class ExplorerEndpoints
                 atomStatus = "error: " + ex.Message;
             }
 
-            return Results.Ok(new { management = mgmtStatus, serviceBus = sdkStatus, atomManagement = atomStatus });
+            return Results.Ok(new { management = mgmtStatus, serviceBus = sdkStatus, atomManagement = atomStatus, broker });
+        });
+
+        // --- Purge (OpenServiceBus-native; proxied to the JSON management API) ---
+        api.MapPost("/purge", async (PurgeRequest req, IHttpClientFactory httpFactory, CancellationToken ct) =>
+        {
+            var mgmt = ResolveManagementUrl(req.ManagementUrl);
+            if (string.IsNullOrWhiteSpace(mgmt))
+            {
+                return Results.BadRequest(new { error = "Purge is an OpenServiceBus-native operation and needs the broker's management URL." });
+            }
+
+            var suffix = req.DeadLetterOnly == true ? "?subqueue=deadletter" : string.Empty;
+            var http = httpFactory.CreateClient();
+            HttpResponseMessage resp;
+            if (!string.IsNullOrEmpty(req.Topic) && !string.IsNullOrEmpty(req.Subscription))
+            {
+                resp = await http.DeleteAsync(
+                    Combine(mgmt, $"/topics/{Uri.EscapeDataString(req.Topic)}/subscriptions/{Uri.EscapeDataString(req.Subscription)}/messages{suffix}"), ct);
+            }
+            else if (!string.IsNullOrEmpty(req.Topic))
+            {
+                resp = await http.DeleteAsync(Combine(mgmt, $"/topics/{Uri.EscapeDataString(req.Topic)}/messages"), ct);
+            }
+            else if (!string.IsNullOrEmpty(req.Queue))
+            {
+                resp = await http.DeleteAsync(Combine(mgmt, $"/queues/{Uri.EscapeDataString(req.Queue)}/messages{suffix}"), ct);
+            }
+            else
+            {
+                resp = await http.PostAsync(Combine(mgmt, "/purge"), content: null, ct);
+            }
+
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            return Results.Content(string.IsNullOrEmpty(body) ? "{}" : body, "application/json", statusCode: (int)resp.StatusCode);
         });
 
         // Historical metrics for an entity: its own sampled series plus its dead-letter
@@ -431,3 +482,5 @@ public sealed record PeekRequest(string ConnectionString, string Queue, int? Max
 public sealed record DispositionRequest(string ConnectionString, string Queue, string LockToken);
 public sealed record DeadLetterRequest(string ConnectionString, string Queue, string LockToken, string? Reason, string? Description);
 public sealed record PingRequest(string ConnectionString, string ManagementUrl);
+public sealed record PurgeRequest(string? ManagementUrl, string? Queue, string? Topic, string? Subscription, bool? DeadLetterOnly);
+public sealed record BrokerInfo(string? Name, string? Version, string[]? Capabilities);

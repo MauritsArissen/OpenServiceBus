@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { explorerApi, type MessageDto, type QueueInfo } from "@/lib/api";
+import { explorerApi, type MessageDto, type PingResult, type QueueInfo } from "@/lib/api";
 import { dlqAddress, entityAddress, isMainQueue, type Selected } from "@/lib/format";
 
 // localStorage keys preserved from the original explorer.
@@ -35,7 +35,9 @@ type Store = {
   setConn: (v: string) => void;
   setMgmt: (v: string) => void;
   status: ConnStatus;
-  pingResult: { management: string; serviceBus: string; atomManagement: string } | null;
+  pingResult: PingResult | null;
+  /** True when the connected broker is OpenServiceBus and advertises the purge capability. */
+  purgeCapable: boolean;
   connect: () => Promise<void>;
 
   /** Hosted live demo: connection is locked and a reset countdown is shown. */
@@ -237,6 +239,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<Store>(
     () => ({
       conn, mgmt, setConn, setMgmt, status, pingResult, connect,
+      purgeCapable: pingResult?.broker?.capabilities?.includes("purge") ?? false,
       demoMode, resetIntervalSeconds, version,
       queues: queues.filter((q) => isMainQueue(q.name)),
       topics, subsByTopic, loading, refresh,

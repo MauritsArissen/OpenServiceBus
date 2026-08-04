@@ -273,6 +273,29 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
     public Task<QueueDescriptor> CreateQueueAsync(QueueDescriptor descriptor) =>
         Queues.CreateAsync(descriptor);
 
+    /// <summary>
+    /// Purge every message from every queue and subscription on this broker (including
+    /// dead-letter queues) while keeping the topology and live clients intact. Returns
+    /// the number of messages removed. See docs/Purge.md.
+    /// </summary>
+    public async Task<long> PurgeAllAsync(CancellationToken cancellationToken = default) =>
+        (await new EntityPurger(Queues, Store, Topics).PurgeAllAsync(cancellationToken)).Purged;
+
+    /// <summary>Purge a queue and its dead-letter queue. Returns the number of messages
+    /// removed, or null when the queue does not exist.</summary>
+    public Task<long?> PurgeQueueAsync(string name, CancellationToken cancellationToken = default) =>
+        new EntityPurger(Queues, Store, Topics).PurgeQueueAsync(name, deadLetterOnly: false, cancellationToken);
+
+    /// <summary>Purge every subscription of a topic (backing queues plus their dead-letter
+    /// queues). Returns the number of messages removed, or null when the topic does not exist.</summary>
+    public Task<long?> PurgeTopicAsync(string name, CancellationToken cancellationToken = default) =>
+        new EntityPurger(Queues, Store, Topics).PurgeTopicAsync(name, cancellationToken);
+
+    /// <summary>Purge a subscription's backing queue and its dead-letter queue. Returns the
+    /// number of messages removed, or null when the subscription does not exist.</summary>
+    public Task<long?> PurgeSubscriptionAsync(string topicName, string subscriptionName, CancellationToken cancellationToken = default) =>
+        new EntityPurger(Queues, Store, Topics).PurgeSubscriptionAsync(topicName, subscriptionName, deadLetterOnly: false, cancellationToken);
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
