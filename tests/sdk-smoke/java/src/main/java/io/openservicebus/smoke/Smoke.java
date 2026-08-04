@@ -158,7 +158,7 @@ public final class Smoke {
             String queueXml =
                 "<entry xmlns=\"http://www.w3.org/2005/Atom\"><content type=\"application/xml\">"
                 + "<QueueDescription xmlns=\"http://schemas.microsoft.com/netservices/2010/10/servicebus/connect\">"
-                + "<MaxDeliveryCount>7</MaxDeliveryCount></QueueDescription></content></entry>";
+                + "<MaxDeliveryCount>7</MaxDeliveryCount><AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle></QueueDescription></content></entry>";
             HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
             URI queueUri = URI.create(base + "/" + adminQueue + "?api-version=2021-05");
 
@@ -173,7 +173,7 @@ public final class Smoke {
 
             HttpResponse<String> got = http.send(
                 HttpRequest.newBuilder(queueUri).GET().build(), HttpResponse.BodyHandlers.ofString());
-            results.add(got.statusCode() == 200 && got.body().contains("<MaxDeliveryCount>7</MaxDeliveryCount>")
+            results.add(got.statusCode() == 200 && got.body().contains("<MaxDeliveryCount>7</MaxDeliveryCount>") && got.body().contains("<AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle>")
                 ? "PASS admin get queue"
                 : "FAIL admin get queue: status " + got.statusCode());
 

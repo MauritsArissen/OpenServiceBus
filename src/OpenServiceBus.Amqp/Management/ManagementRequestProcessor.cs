@@ -95,6 +95,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
     private readonly IMessageRouter _router;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ManagementRequestProcessor> _logger;
+    private readonly EntityActivityTracker? _activity;
 
     // Set only when this processor sits in front of a subscription. Enables add-rule /
     // remove-rule / enumerate-rules ops; null for queue endpoints.
@@ -108,7 +109,8 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         IMessageStore store,
         IMessageRouter router,
         TimeProvider timeProvider,
-        ILogger<ManagementRequestProcessor> logger)
+        ILogger<ManagementRequestProcessor> logger,
+        EntityActivityTracker? activityTracker = null)
     {
         _entityName = entityName;
         _descriptor = descriptor;
@@ -116,6 +118,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         _router = router;
         _timeProvider = timeProvider;
         _logger = logger;
+        _activity = activityTracker;
     }
 
     /// <summary>
@@ -133,8 +136,9 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         ILogger<ManagementRequestProcessor> logger,
         ITopicRegistry topics,
         string topicName,
-        string subscriptionName)
-        : this(entityName, descriptor, store, router, timeProvider, logger)
+        string subscriptionName,
+        EntityActivityTracker? activityTracker = null)
+        : this(entityName, descriptor, store, router, timeProvider, logger, activityTracker)
     {
         _topics = topics;
         _topicName = topicName;
@@ -301,6 +305,8 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
     /// </summary>
     private Message HandlePeekMessage(Message request)
     {
+        _activity?.Touch(_entityName);
+
         if (request.Body is not Map body)
         {
             return BuildResponse(request, 400, "BadRequest: missing peek body");

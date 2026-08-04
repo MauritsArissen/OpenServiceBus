@@ -11,6 +11,7 @@ export function CreateTopicDialog() {
   const store = useStore();
   const [name, setName] = useState("");
   const [ttl, setTtl] = useState("");
+  const [idleDelete, setIdleDelete] = useState("");
   const [busy, setBusy] = useState(false);
 
   const create = async () => {
@@ -20,6 +21,8 @@ export function CreateTopicDialog() {
       const options: Record<string, unknown> = {};
       const ttlN = parseInt(ttl, 10);
       if (ttlN > 0) options.defaultMessageTimeToLive = secondsToTimeSpan(ttlN);
+      const idleN = parseInt(idleDelete, 10);
+      if (idleN > 0) options.autoDeleteOnIdle = secondsToTimeSpan(idleN);
       await explorerApi.createTopic(store.conn, name.trim(), options);
       toast.success(`Created topic '${name.trim()}'`);
       store.setDialog(null);
@@ -40,6 +43,7 @@ export function CreateTopicDialog() {
       <div className="space-y-3">
         <TextField label="Topic name" value={name} onChange={setName} mono placeholder="events" />
         <NumberField label="Default TTL (seconds)" value={ttl} onChange={setTtl} placeholder="∞" min={1} />
+          <NumberField label="Auto-delete when idle (seconds)" value={idleDelete} onChange={setIdleDelete} placeholder="never (min 300)" min={300} />
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={() => store.setDialog(null)}>Cancel</Button>

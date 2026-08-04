@@ -68,14 +68,14 @@ direct connection.
 | `GetQueueRuntimePropertiesAsync` / `GetSubscriptionRuntimePropertiesAsync` / `GetTopicRuntimePropertiesAsync` | active / scheduled / dead-letter counts, size in bytes, created/updated timestamps |
 | `GetNamespacePropertiesAsync` | reports a `Standard`-SKU messaging namespace |
 
-Properties the broker enforces round-trip faithfully: `Status`, `LockDuration`, `MaxDeliveryCount`,
+Properties the broker enforces round-trip faithfully: `Status`, `AutoDeleteOnIdle`, `LockDuration`, `MaxDeliveryCount`,
 `RequiresSession`, `RequiresDuplicateDetection`, `DuplicateDetectionHistoryTimeWindow`,
 `DefaultMessageTimeToLive`, `DeadLetteringOnMessageExpiration`, `ForwardTo`,
 `ForwardDeadLetteredMessagesTo`, and `UserMetadata`.
 
 Properties the broker does not (yet) enforce are **accepted and returned with Azure's
 defaults** so SDK parsers and IaC-style "ensure entity exists" code keep working:
-`MaxSizeInMegabytes`, `AutoDeleteOnIdle`, `EnableBatchedOperations`, `EnablePartitioning`,
+`MaxSizeInMegabytes`, `EnableBatchedOperations`, `EnablePartitioning`,
 and authorization rules. `Status` is enforced - see [Entity Status](Entity-Status.md). SQL rule **actions** round-trip and
 are evaluated during fan-out - see
 [Topics and Subscriptions](Topics-and-Subscriptions.md#sql-rule-actions).

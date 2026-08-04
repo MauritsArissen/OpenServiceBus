@@ -15,6 +15,7 @@ export function CreateQueueDialog() {
   const [maxDelivery, setMaxDelivery] = useState("10");
   const [lockDuration, setLockDuration] = useState("60");
   const [ttl, setTtl] = useState("");
+  const [idleDelete, setIdleDelete] = useState("");
   const [dleOnExpiration, setDleOnExpiration] = useState(false);
   const [requiresSession, setRequiresSession] = useState(false);
   const [requiresDedup, setRequiresDedup] = useState(false);
@@ -36,6 +37,8 @@ export function CreateQueueDialog() {
       };
       const ttlN = parseInt(ttl, 10);
       if (ttlN > 0) options.defaultMessageTimeToLive = secondsToTimeSpan(ttlN);
+      const idleN = parseInt(idleDelete, 10);
+      if (idleN > 0) options.autoDeleteOnIdle = secondsToTimeSpan(idleN);
       const dwN = parseInt(dedupWindow, 10);
       if (requiresDedup && dwN > 0) options.duplicateDetectionHistoryTimeWindow = secondsToTimeSpan(dwN);
       if (forwardTo.trim()) options.forwardTo = forwardTo.trim();
@@ -65,6 +68,7 @@ export function CreateQueueDialog() {
           <NumberField label="Max delivery count" value={maxDelivery} onChange={setMaxDelivery} min={1} />
           <NumberField label="Lock duration (seconds)" value={lockDuration} onChange={setLockDuration} min={1} />
           <NumberField label="Default TTL (seconds)" value={ttl} onChange={setTtl} placeholder="∞" min={1} />
+          <NumberField label="Auto-delete when idle (seconds)" value={idleDelete} onChange={setIdleDelete} placeholder="never (min 300)" min={300} />
           <NumberField label="Dedup window (seconds)" value={dedupWindow} onChange={setDedupWindow} placeholder="600 (10 min)" min={1} />
         </div>
         <div className="grid grid-cols-2 gap-3">

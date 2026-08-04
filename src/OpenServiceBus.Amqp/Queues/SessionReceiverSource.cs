@@ -41,6 +41,7 @@ public sealed class SessionReceiverSource : IMessageSource
     private readonly ILogger<SessionReceiverSource> _logger;
     private readonly bool _isDlq;
     private readonly IQueueRegistry? _registry;
+    private readonly EntityActivityTracker? _activity;
 
     public string SessionId { get; }
     public string? LinkName { get; }
@@ -62,9 +63,11 @@ public sealed class SessionReceiverSource : IMessageSource
         ILogger<SessionReceiverSource> logger,
         string sessionId,
         string? linkName,
-        IQueueRegistry? registry = null)
+        IQueueRegistry? registry = null,
+        EntityActivityTracker? activityTracker = null)
     {
         _registry = registry;
+        _activity = activityTracker;
         _entityName = entityName;
         _descriptor = descriptor;
         _store = store;
@@ -114,6 +117,8 @@ public sealed class SessionReceiverSource : IMessageSource
                     return null!;
                 }
             }
+
+            _activity?.Touch(_entityName);
 
             if (locked.Message.IsExpired(_timeProvider.GetUtcNow()))
             {

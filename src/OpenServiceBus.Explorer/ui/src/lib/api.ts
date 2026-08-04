@@ -17,12 +17,15 @@ export type QueueInfo = {
   forwardDeadLetteredMessagesTo?: string | null;
   backingQueueName?: string;
   topicName?: string;
+  status?: string;
+  autoDeleteOnIdle?: string | null;
 };
 
 export type RuleInfo = {
   name: string;
   filterType?: string;
   sqlExpression?: string | null;
+  sqlActionExpression?: string | null;
   messageId?: string | null;
   correlationId?: string | null;
   subject?: string | null;
@@ -107,6 +110,8 @@ export const explorerApi = {
     ),
 
   listQueues: (conn: string) => api<QueueInfo[]>("/api/queues" + cs(conn)),
+  setStatus: (conn: string, kind: string, name: string, subscription: string | null, status: string) =>
+    api<{ status: string }>("/api/status", put({ connectionString: conn, kind, name, subscription, status })),
   createQueue: (conn: string, name: string, options: Record<string, unknown>) =>
     api("/api/queues/" + encodeURIComponent(name), put({ connectionString: conn, options })),
   deleteQueue: (conn: string, name: string) =>

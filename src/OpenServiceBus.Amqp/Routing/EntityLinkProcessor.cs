@@ -46,6 +46,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
     private readonly RequestNodeRegistry _requestNodes;
     private readonly ResponsePairTable _responsePairs;
     private readonly ConnectionAuthRegistry _connectionAuth;
+    private readonly EntityActivityTracker? _activity;
 
     public EntityLinkProcessor(
         IQueueRegistry registry,
@@ -58,8 +59,10 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         RequestNodeRegistry requestNodes,
         ResponsePairTable responsePairs,
         ConnectionAuthRegistry connectionAuth,
-        ITopicRegistry? topics = null)
+        ITopicRegistry? topics = null,
+        EntityActivityTracker? activityTracker = null)
     {
+        _activity = activityTracker;
         _registry = registry;
         _topics = topics;
         _store = store;
@@ -218,6 +221,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
             return false;
         }
 
+        _activity?.Touch(backingQueue);
         if (entityAddress.SubResource == EntitySubResource.Main)
         {
             if (!sub.Status.AcceptsReceives())
@@ -235,7 +239,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         }
 
         var source = _receiverSources.GetOrAdd(backingQueue, name => new QueueReceiverSource(
-            name, descriptor, _store, _router, _transactions, _timeProvider, _loggerFactory.CreateLogger<QueueReceiverSource>(), _registry));
+            name, descriptor, _store, _router, _transactions, _timeProvider, _loggerFactory.CreateLogger<QueueReceiverSource>(), _registry, _activity));
         var endpoint = new SourceLinkEndpoint(source, attachContext.Link);
         attachContext.Complete(endpoint, 0);
         _logger.LogDebug("Wired subscription receiver attach to {Entity}", backingQueue);
@@ -250,6 +254,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
                 $"Topic '{topic.Name}' is {topic.Status} and does not accept messages.");
             return;
         }
+        _activity?.Touch(topic.Name);
 
         var processor = new TopicSenderProcessor(
             topic,
@@ -273,6 +278,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
             Reject(attachContext, ErrorCode.NotFound, $"Entity '{routingEntity}' does not exist.");
             return;
         }
+        _activity?.Touch(descriptor.Name);
 
         if (isReceiverFromClient)
         {
@@ -312,7 +318,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
             }
 
             var source = _receiverSources.GetOrAdd(descriptor.Name, name => new QueueReceiverSource(
-                name, descriptor, _store, _router, _transactions, _timeProvider, _loggerFactory.CreateLogger<QueueReceiverSource>(), _registry));
+                name, descriptor, _store, _router, _transactions, _timeProvider, _loggerFactory.CreateLogger<QueueReceiverSource>(), _registry, _activity));
             var endpoint = new SourceLinkEndpoint(source, attachContext.Link);
             attachContext.Complete(endpoint, 0);
             _logger.LogDebug("Wired receiver attach to {Entity}", descriptor.Name);
@@ -475,7 +481,8 @@ public sealed class EntityLinkProcessor : ILinkProcessor
             _loggerFactory.CreateLogger<SessionReceiverSource>(),
             sessionLock.SessionId,
             linkName,
-            _registry);
+            _registry,
+            _activity);
         var endpoint = new SourceLinkEndpoint(source, attachContext.Link);
         attachContext.Complete(endpoint, 0);
         _logger.LogDebug("Wired session receiver attach to {Entity}/{Session}", descriptor.Name, sessionLock.SessionId);

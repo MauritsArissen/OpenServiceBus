@@ -111,14 +111,14 @@ def run() -> None:
         queue_xml = (
             '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">'
             '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
-            "<MaxDeliveryCount>7</MaxDeliveryCount></QueueDescription></content></entry>"
+            "<MaxDeliveryCount>7</MaxDeliveryCount><AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle></QueueDescription></content></entry>"
         )
 
         status, _ = http("PUT", f"{base}/{admin_queue}?api-version=2021-05", queue_xml.encode())
         check("admin create queue", status == 201, "" if status == 201 else f"status {status}")
 
         status, body = http("GET", f"{base}/{admin_queue}?api-version=2021-05")
-        check("admin get queue", status == 200 and "<MaxDeliveryCount>7</MaxDeliveryCount>" in body)
+        check("admin get queue", status == 200 and "<MaxDeliveryCount>7</MaxDeliveryCount>" in body and "<AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle>" in body)
 
         # The admin-created queue must be immediately usable on the data plane.
         with client.get_queue_sender(admin_queue) as admin_sender:

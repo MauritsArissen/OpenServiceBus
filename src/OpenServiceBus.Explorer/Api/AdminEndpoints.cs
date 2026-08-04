@@ -53,6 +53,7 @@ public static class AdminEndpoints
                 if (o.DuplicateDetectionHistoryTimeWindow is { } window) options.DuplicateDetectionHistoryTimeWindow = window;
                 if (!string.IsNullOrWhiteSpace(o.ForwardTo)) options.ForwardTo = o.ForwardTo;
                 if (!string.IsNullOrWhiteSpace(o.ForwardDeadLetteredMessagesTo)) options.ForwardDeadLetteredMessagesTo = o.ForwardDeadLetteredMessagesTo;
+                if (o.AutoDeleteOnIdle is { } idle) options.AutoDeleteOnIdle = idle;
 
                 var created = (await admin.CreateQueueAsync(options, ct)).Value;
                 return Results.Ok(QueueDto(created, null));
@@ -72,7 +73,13 @@ public static class AdminEndpoints
                 var list = new List<object>();
                 await foreach (var topic in Admin(sessions, connectionString).GetTopicsAsync(ct))
                 {
-                    list.Add(new { name = topic.Name, defaultMessageTimeToLive = Finite(topic.DefaultMessageTimeToLive) });
+                    list.Add(new
+                    {
+                        name = topic.Name,
+                        defaultMessageTimeToLive = Finite(topic.DefaultMessageTimeToLive),
+                        status = topic.Status.ToString(),
+                        autoDeleteOnIdle = Finite(topic.AutoDeleteOnIdle),
+                    });
                 }
                 return Results.Ok(list);
             }));
@@ -82,8 +89,15 @@ public static class AdminEndpoints
             {
                 var options = new CreateTopicOptions(name);
                 if (body.Options?.DefaultMessageTimeToLive is { } ttl) options.DefaultMessageTimeToLive = ttl;
+                if (body.Options?.AutoDeleteOnIdle is { } idle) options.AutoDeleteOnIdle = idle;
                 var created = (await Admin(sessions, body.ConnectionString).CreateTopicAsync(options, ct)).Value;
-                return Results.Ok(new { name = created.Name, defaultMessageTimeToLive = Finite(created.DefaultMessageTimeToLive) });
+                return Results.Ok(new
+                {
+                    name = created.Name,
+                    defaultMessageTimeToLive = Finite(created.DefaultMessageTimeToLive),
+                    status = created.Status.ToString(),
+                    autoDeleteOnIdle = Finite(created.AutoDeleteOnIdle),
+                });
             }));
 
         api.MapDelete("/topics/{name}", (string name, string? connectionString, SessionManager sessions, CancellationToken ct) =>
@@ -123,6 +137,7 @@ public static class AdminEndpoints
                 if (o.RequiresSession is { } sessions_) options.RequiresSession = sessions_;
                 if (!string.IsNullOrWhiteSpace(o.ForwardTo)) options.ForwardTo = o.ForwardTo;
                 if (!string.IsNullOrWhiteSpace(o.ForwardDeadLetteredMessagesTo)) options.ForwardDeadLetteredMessagesTo = o.ForwardDeadLetteredMessagesTo;
+                if (o.AutoDeleteOnIdle is { } subIdle) options.AutoDeleteOnIdle = subIdle;
 
                 var created = (await Admin(sessions, body.ConnectionString).CreateSubscriptionAsync(options, ct)).Value;
                 return Results.Ok(SubscriptionDto(topic, created, null));
@@ -152,18 +167,21 @@ public static class AdminEndpoints
             {
                 var admin = Admin(sessions, body.ConnectionString);
                 var filter = BuildFilter(body.Rule);
+                var action = string.IsNullOrWhiteSpace(body.Rule?.SqlAction) ? null : new SqlRuleAction(body.Rule.SqlAction);
 
                 // The UI's save button is create-or-replace; the admin API distinguishes the
                 // two, so fall through to update when the rule already exists.
                 try
                 {
-                    var created = (await admin.CreateRuleAsync(topic, sub, new CreateRuleOptions(name, filter), ct)).Value;
+                    var createOptions = new CreateRuleOptions(name, filter) { Action = action };
+                    var created = (await admin.CreateRuleAsync(topic, sub, createOptions, ct)).Value;
                     return Results.Ok(RuleDto(created));
                 }
                 catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.MessagingEntityAlreadyExists)
                 {
                     RuleProperties existing = await admin.GetRuleAsync(topic, sub, name, ct);
                     existing.Filter = filter;
+                    existing.Action = action;
                     var updated = (await admin.UpdateRuleAsync(topic, sub, existing, ct)).Value;
                     return Results.Ok(RuleDto(updated));
                 }
@@ -174,6 +192,48 @@ public static class AdminEndpoints
             {
                 await Admin(sessions, connectionString).DeleteRuleAsync(topic, sub, name, ct);
                 return Results.Ok(new { deleted = true });
+            }));
+
+        // --- Entity status (freeze/drain/reactivate through the admin client) ---
+        api.MapPut("/status", (SetStatusRequest body, SessionManager sessions, CancellationToken ct) =>
+            Guarded(async () =>
+            {
+                if (!Enum.TryParse<EntityStatus>(body.Status, ignoreCase: true, out var status))
+                {
+                    return Results.BadRequest(new { error = $"Unknown status '{body.Status}'." });
+                }
+                var admin = Admin(sessions, body.ConnectionString);
+                switch (body.Kind?.ToLowerInvariant())
+                {
+                    case "queue":
+                    {
+                        QueueProperties queue = await admin.GetQueueAsync(body.Name, ct);
+                        queue.Status = status;
+                        await admin.UpdateQueueAsync(queue, ct);
+                        break;
+                    }
+                    case "topic":
+                    {
+                        TopicProperties topic = await admin.GetTopicAsync(body.Name, ct);
+                        topic.Status = status;
+                        await admin.UpdateTopicAsync(topic, ct);
+                        break;
+                    }
+                    case "subscription":
+                    {
+                        if (string.IsNullOrEmpty(body.Subscription))
+                        {
+                            return Results.BadRequest(new { error = "Subscription name is required for kind=subscription." });
+                        }
+                        SubscriptionProperties sub = await admin.GetSubscriptionAsync(body.Name, body.Subscription, ct);
+                        sub.Status = status;
+                        await admin.UpdateSubscriptionAsync(sub, ct);
+                        break;
+                    }
+                    default:
+                        return Results.BadRequest(new { error = $"Unknown entity kind '{body.Kind}'." });
+                }
+                return Results.Ok(new { status = status.ToString() });
             }));
 
         return endpoints;
@@ -215,6 +275,7 @@ public static class AdminEndpoints
         activeMessageCount = runtime?.ActiveMessageCount,
         deadLetterMessageCount = runtime?.DeadLetterMessageCount,
         status = queue.Status.ToString(),
+        autoDeleteOnIdle = Finite(queue.AutoDeleteOnIdle),
         maxDeliveryCount = queue.MaxDeliveryCount,
         lockDuration = queue.LockDuration,
         deadLetteringOnMessageExpiration = queue.DeadLetteringOnMessageExpiration,
@@ -234,6 +295,7 @@ public static class AdminEndpoints
         activeMessageCount = runtime?.ActiveMessageCount,
         deadLetterMessageCount = runtime?.DeadLetterMessageCount,
         status = sub.Status.ToString(),
+        autoDeleteOnIdle = Finite(sub.AutoDeleteOnIdle),
         maxDeliveryCount = sub.MaxDeliveryCount,
         lockDuration = sub.LockDuration,
         deadLetteringOnMessageExpiration = sub.DeadLetteringOnMessageExpiration,
@@ -246,9 +308,15 @@ public static class AdminEndpoints
     // The UI consumes rules FLAT (filterType + the correlation fields at top level).
     private static object RuleDto(RuleProperties rule) => rule.Filter switch
     {
-        TrueRuleFilter => new { name = rule.Name, filterType = "true" },
-        FalseRuleFilter => new { name = rule.Name, filterType = "false" },
-        SqlRuleFilter sql => new { name = rule.Name, filterType = "sql", sqlExpression = sql.SqlExpression } as object,
+        TrueRuleFilter => new { name = rule.Name, filterType = "true", sqlActionExpression = (rule.Action as SqlRuleAction)?.SqlExpression },
+        FalseRuleFilter => new { name = rule.Name, filterType = "false", sqlActionExpression = (rule.Action as SqlRuleAction)?.SqlExpression },
+        SqlRuleFilter sql => new
+        {
+            name = rule.Name,
+            filterType = "sql",
+            sqlExpression = sql.SqlExpression,
+            sqlActionExpression = (rule.Action as SqlRuleAction)?.SqlExpression,
+        } as object,
         CorrelationRuleFilter c => new
         {
             name = rule.Name,
@@ -261,6 +329,7 @@ public static class AdminEndpoints
             replyToSessionId = c.ReplyToSessionId,
             sessionId = c.SessionId,
             contentType = c.ContentType,
+            sqlActionExpression = (rule.Action as SqlRuleAction)?.SqlExpression,
             properties = c.ApplicationProperties.Count == 0
                 ? null
                 : c.ApplicationProperties.ToDictionary(kv => kv.Key, kv => kv.Value?.ToString(), StringComparer.Ordinal),
@@ -328,10 +397,14 @@ public sealed record EntityOptions
     public TimeSpan? DuplicateDetectionHistoryTimeWindow { get; init; }
     public string? ForwardTo { get; init; }
     public string? ForwardDeadLetteredMessagesTo { get; init; }
+    public TimeSpan? AutoDeleteOnIdle { get; init; }
 }
 
 /// <summary>PUT body for rules; the rule payload is flat, exactly as the UI's dialog builds it.</summary>
 public sealed record AdminRuleRequest(string? ConnectionString, RulePayload? Rule);
+
+/// <summary>PUT body for /api/status: kind = queue | topic | subscription.</summary>
+public sealed record SetStatusRequest(string? ConnectionString, string? Kind, string Name, string? Subscription, string? Status);
 
 public sealed record RulePayload
 {
@@ -346,4 +419,5 @@ public sealed record RulePayload
     public string? SessionId { get; init; }
     public string? ContentType { get; init; }
     public Dictionary<string, string>? Properties { get; init; }
+    public string? SqlAction { get; init; }
 }

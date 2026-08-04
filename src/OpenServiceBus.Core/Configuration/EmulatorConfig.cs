@@ -52,6 +52,9 @@ public sealed class QueueProperties
     [JsonPropertyName("MaxDeliveryCount")]
     public int? MaxDeliveryCount { get; set; }
 
+    [JsonPropertyName("AutoDeleteOnIdle")]
+    public string? AutoDeleteOnIdle { get; set; }
+
     [JsonPropertyName("Status")]
     public string? Status { get; set; }
 
@@ -92,6 +95,9 @@ public sealed class TopicConfig
 public sealed class TopicProperties
 {
     /// <summary>ISO 8601 duration - null means messages never expire.</summary>
+    [JsonPropertyName("AutoDeleteOnIdle")]
+    public string? AutoDeleteOnIdle { get; set; }
+
     [JsonPropertyName("Status")]
     public string? Status { get; set; }
 
@@ -118,6 +124,9 @@ public sealed class SubscriptionProperties
 
     [JsonPropertyName("MaxDeliveryCount")]
     public int? MaxDeliveryCount { get; set; }
+
+    [JsonPropertyName("AutoDeleteOnIdle")]
+    public string? AutoDeleteOnIdle { get; set; }
 
     [JsonPropertyName("Status")]
     public string? Status { get; set; }

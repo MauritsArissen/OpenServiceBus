@@ -84,7 +84,7 @@ const run = async () => {
   const queueXml =
     '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">' +
     '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
-    "<MaxDeliveryCount>7</MaxDeliveryCount></QueueDescription></content></entry>";
+    "<MaxDeliveryCount>7</MaxDeliveryCount><AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle></QueueDescription></content></entry>";
 
   const put = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`, {
     method: "PUT",
@@ -95,7 +95,7 @@ const run = async () => {
 
   const got = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`);
   const gotBody = await got.text();
-  check("admin get queue", got.status === 200 && gotBody.includes("<MaxDeliveryCount>7</MaxDeliveryCount>"));
+  check("admin get queue", got.status === 200 && gotBody.includes("<MaxDeliveryCount>7</MaxDeliveryCount>") && gotBody.includes("<AutoDeleteOnIdle>PT10M</AutoDeleteOnIdle>"));
 
   // The admin-created queue must be immediately usable on the data plane.
   const adminSender = client.createSender(adminQueue);
