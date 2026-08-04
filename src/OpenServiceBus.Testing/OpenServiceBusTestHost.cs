@@ -189,7 +189,37 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
         // is attached, so this is essentially free for tests that don't care about telemetry.
         var diagnostics = new DiagnosticsHostedService(storeAsIface, queues);
 
-        await listener.StartAsync(CancellationToken.None);
+        // Auto-selected ports are picked with a probe socket that is closed again before the
+        // real bind happens, so another process (or a parallel test collection) can grab the
+        // port in between. Every bind below retries on a fresh port when that race is lost;
+        // a caller-fixed opts.Port still fails loudly.
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                await listener.StartAsync(CancellationToken.None);
+                break;
+            }
+            catch (SocketException) when (opts.Port is null && attempt < 4)
+            {
+                amqpPort = GetFreePort();
+                listenerOptions.Port = amqpPort;
+                if (!opts.EnableAtomManagement)
+                {
+                    port = amqpPort;
+                }
+                listener = new AmqpListenerHost(
+                    Options.Create(listenerOptions),
+                    queues,
+                    storeAsIface,
+                    router,
+                    transactions,
+                    opts.TimeProvider,
+                    NullLoggerFactory.Instance,
+                    topics,
+                    activity);
+            }
+        }
         await ttlSweeper.StartAsync(CancellationToken.None);
         await scheduledActivator.StartAsync(CancellationToken.None);
         await idleReaper.StartAsync(CancellationToken.None);
@@ -210,10 +240,31 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
                     SasTokenValidator.Validate(header, keys, opts.TimeProvider.GetUtcNow()).IsValid;
             }
             var handler = new AtomManagementHandler(queues, topics, storeAsIface, opts.TimeProvider, atomOptions);
-            atomServer = new AtomHttpServer(handler, GetFreePort(), atomOptions);
-            atomServer.Start();
-            frontDoor = new ProtocolFrontDoor(opts.Host, port, amqpPort, atomServer.Port);
-            frontDoor.Start();
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    atomServer = new AtomHttpServer(handler, GetFreePort(), atomOptions);
+                    atomServer.Start();
+                    break;
+                }
+                catch (Exception ex) when (ex is SocketException or HttpListenerException && attempt < 4)
+                {
+                }
+            }
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    frontDoor = new ProtocolFrontDoor(opts.Host, port, amqpPort, atomServer!.Port);
+                    frontDoor.Start();
+                    break;
+                }
+                catch (SocketException) when (opts.Port is null && attempt < 4)
+                {
+                    port = GetFreePort();
+                }
+            }
         }
 
         var connectionString =
@@ -227,22 +278,32 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
         string? wsConnectionString = null;
         if (opts.EnableWebSocketBridge)
         {
-            wsPort = GetFreePort();
-            // HttpListener can't bind to "+" on macOS without root, but loopback is fine and
-            // matches the test's use case (client + bridge are in the same process).
-            var wsOptions = new WebSocketBridgeOptions
+            for (var attempt = 0; ; attempt++)
             {
-                Enabled = true,
-                Host = opts.Host,
-                Port = wsPort.Value,
-                UpstreamHost = "127.0.0.1",
-                UpstreamPort = amqpPort,
-            };
-            wsBridge = new WebSocketBridgeService(
-                Options.Create(wsOptions),
-                Options.Create(listenerOptions),
-                NullLogger<WebSocketBridgeService>.Instance);
-            await wsBridge.StartAsync(CancellationToken.None);
+                wsPort = GetFreePort();
+                // HttpListener can't bind to "+" on macOS without root, but loopback is fine and
+                // matches the test's use case (client + bridge are in the same process).
+                var wsOptions = new WebSocketBridgeOptions
+                {
+                    Enabled = true,
+                    Host = opts.Host,
+                    Port = wsPort.Value,
+                    UpstreamHost = "127.0.0.1",
+                    UpstreamPort = amqpPort,
+                };
+                wsBridge = new WebSocketBridgeService(
+                    Options.Create(wsOptions),
+                    Options.Create(listenerOptions),
+                    NullLogger<WebSocketBridgeService>.Instance);
+                try
+                {
+                    await wsBridge.StartAsync(CancellationToken.None);
+                    break;
+                }
+                catch (Exception ex) when (ex is SocketException or HttpListenerException && attempt < 4)
+                {
+                }
+            }
             wsConnectionString =
                 $"Endpoint=sb://{opts.Host}:{wsPort};SharedAccessKeyName={opts.SasKeyName};SharedAccessKey={opts.SasKey};UseDevelopmentEmulator=true";
         }
