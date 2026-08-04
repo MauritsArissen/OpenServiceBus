@@ -52,7 +52,9 @@ public sealed class QueueProperties
     [JsonPropertyName("MaxDeliveryCount")]
     public int? MaxDeliveryCount { get; set; }
 
-    /// <summary>ISO 8601 duration - null means messages never expire.</summary>
+    [JsonPropertyName("Status")]
+    public string? Status { get; set; }
+
     [JsonPropertyName("DefaultMessageTimeToLive")]
     public string? DefaultMessageTimeToLive { get; set; }
 
@@ -90,6 +92,9 @@ public sealed class TopicConfig
 public sealed class TopicProperties
 {
     /// <summary>ISO 8601 duration - null means messages never expire.</summary>
+    [JsonPropertyName("Status")]
+    public string? Status { get; set; }
+
     [JsonPropertyName("DefaultMessageTimeToLive")]
     public string? DefaultMessageTimeToLive { get; set; }
 }
@@ -113,6 +118,9 @@ public sealed class SubscriptionProperties
 
     [JsonPropertyName("MaxDeliveryCount")]
     public int? MaxDeliveryCount { get; set; }
+
+    [JsonPropertyName("Status")]
+    public string? Status { get; set; }
 
     [JsonPropertyName("DefaultMessageTimeToLive")]
     public string? DefaultMessageTimeToLive { get; set; }

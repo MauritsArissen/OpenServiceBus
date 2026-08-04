@@ -19,6 +19,14 @@ internal static class SqliteSchema
             name TEXT PRIMARY KEY COLLATE NOCASE
         );
 
+        -- Opaque descriptor snapshots (JSON) so entity settings - status, lock duration,
+        -- session flag, ... - survive a restart, not only the queue names.
+        CREATE TABLE IF NOT EXISTS queue_descriptors (
+            queue_name      TEXT PRIMARY KEY COLLATE NOCASE,
+            descriptor_json TEXT NOT NULL,
+            FOREIGN KEY (queue_name) REFERENCES queues(name) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS sequence_counters (
             queue_name TEXT PRIMARY KEY COLLATE NOCASE,
             next_sequence INTEGER NOT NULL,

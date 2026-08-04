@@ -27,6 +27,14 @@ stores, Management.Atom = admin API, Testing = embeddable host), tests in `tests
   commits.
 - **Dashes**: never use em dashes or en dashes anywhere (code, comments, docs, PRs).
   Only the plain hyphen-minus character.
+- **Unit tests for every new feature**: each new feature lands with unit tests for its
+  core logic (parser, routing, storage, codec, ...), in the test project matching the
+  layer it lives in - not only SDK-level integration tests.
+- **Every feature/fix reaches the cross-SDK smokes**: when a change affects what the
+  broker speaks on the wire or through the management surface, extend all four
+  `tests/sdk-smoke/` scripts (.NET, Node.js, Java, Python) with a step exercising it,
+  so it is verified against the four main languages and SDKs on every PR. Keep the
+  canonical step sequence identical across the four scripts.
 - Run `dotnet test` on the full solution before opening a PR; `dotnet test
-samples/dotnet/NovaBank/NovaBank.slnx` is the realistic end-to-end check when broker
+  samples/dotnet/NovaBank/NovaBank.slnx` is the realistic end-to-end check when broker
   delivery/session/peek behaviour changes.

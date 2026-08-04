@@ -75,6 +75,9 @@ public sealed record QueueDescriptor
     /// </summary>
     public string? UserMetadata { get; init; }
 
+    /// <summary>Operational status. Enforced on the send and receive paths.</summary>
+    public EntityStatus Status { get; init; } = EntityStatus.Active;
+
     /// <summary>When the entity was created. Reported through the management API.</summary>
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 

@@ -2,7 +2,7 @@
 //
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-//   -> topic session receive -> admin create/get/roundtrip/delete (ATOM management API)
+//   -> topic session receive -> admin create/get/roundtrip/status gate/delete (ATOM management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -101,6 +101,27 @@ try
     Check("admin roundtrip", adminMsg is not null && adminMsg.Body.ToString() == "admin roundtrip");
     if (adminMsg is not null) await adminReceiver.CompleteMessageAsync(adminMsg);
     await adminReceiver.CloseAsync();
+
+    // 13. admin status gate - SendDisabled rejects sends with MessagingEntityDisabled,
+    // flipping back to Active restores them (issue #22).
+    QueueProperties gate = await admin.GetQueueAsync(adminQueue);
+    gate.Status = EntityStatus.SendDisabled;
+    await admin.UpdateQueueAsync(gate);
+    var blocked = false;
+    try
+    {
+        await client.CreateSender(adminQueue).SendMessageAsync(new ServiceBusMessage("must not land"));
+    }
+    catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.MessagingEntityDisabled)
+    {
+        blocked = true;
+    }
+    gate.Status = EntityStatus.Active;
+    await admin.UpdateQueueAsync(gate);
+    var reopenedSender = client.CreateSender(adminQueue);
+    await reopenedSender.SendMessageAsync(new ServiceBusMessage("flowing again"));
+    await reopenedSender.CloseAsync();
+    Check("admin status gate", blocked);
 
     await admin.DeleteQueueAsync(adminQueue);
     Check("admin delete queue", !(await admin.QueueExistsAsync(adminQueue)).Value);

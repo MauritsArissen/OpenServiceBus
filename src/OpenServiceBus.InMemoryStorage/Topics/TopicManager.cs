@@ -146,6 +146,7 @@ public sealed class TopicManager : ITopicRegistry
             DefaultMessageTimeToLive = descriptor.DefaultMessageTimeToLive,
             DeadLetteringOnMessageExpiration = descriptor.DeadLetteringOnMessageExpiration,
             ForwardDeadLetteredMessagesTo = descriptor.ForwardDeadLetteredMessagesTo,
+            Status = descriptor.Status,
         }, cancellationToken).ConfigureAwait(false);
 
         // Every fresh subscription gets a $Default rule with a TrueFilter - same as Azure SB.
@@ -193,6 +194,7 @@ public sealed class TopicManager : ITopicRegistry
                 DefaultMessageTimeToLive = descriptor.DefaultMessageTimeToLive,
                 DeadLetteringOnMessageExpiration = descriptor.DeadLetteringOnMessageExpiration,
                 ForwardDeadLetteredMessagesTo = descriptor.ForwardDeadLetteredMessagesTo,
+                Status = descriptor.Status,
             }, cancellationToken).ConfigureAwait(false);
         }
 

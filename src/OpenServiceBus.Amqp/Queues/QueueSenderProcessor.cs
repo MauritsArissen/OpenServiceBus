@@ -33,6 +33,7 @@ public sealed class QueueSenderProcessor : IMessageProcessor
 
     private readonly string _queueName;
     private readonly QueueDescriptor _descriptor;
+    private readonly IQueueRegistry? _registry;
     private readonly IMessageStore _store;
     private readonly IMessageRouter _router;
     private readonly ITransactionManager _transactions;
@@ -46,7 +47,8 @@ public sealed class QueueSenderProcessor : IMessageProcessor
         IMessageRouter router,
         ITransactionManager transactions,
         TimeProvider timeProvider,
-        ILogger<QueueSenderProcessor> logger)
+        ILogger<QueueSenderProcessor> logger,
+        IQueueRegistry? registry = null)
     {
         _queueName = queueName;
         _descriptor = descriptor;
@@ -55,6 +57,7 @@ public sealed class QueueSenderProcessor : IMessageProcessor
         _transactions = transactions;
         _timeProvider = timeProvider;
         _logger = logger;
+        _registry = registry;
     }
 
     public int Credit => 100;
@@ -63,6 +66,18 @@ public sealed class QueueSenderProcessor : IMessageProcessor
     {
         try
         {
+            // Status is re-resolved per transfer so a flip to (Send)Disabled applies to
+            // links that attached while the entity was still active.
+            var currentStatus = (_registry?.GetAsync(_queueName).GetAwaiter().GetResult() ?? _descriptor).Status;
+            if (!currentStatus.AcceptsSends())
+            {
+                messageContext.Complete(new Error(new Symbol(Routing.ServiceBusErrors.EntityDisabled))
+                {
+                    Description = $"Entity '{_queueName}' is {currentStatus} and does not accept messages.",
+                });
+                return;
+            }
+
             var msg = messageContext.Message;
 
             // Batched envelope from SendMessagesAsync / ServiceBusMessageBatch - split into N individual

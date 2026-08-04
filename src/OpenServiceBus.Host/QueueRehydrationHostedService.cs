@@ -42,6 +42,7 @@ public sealed class QueueRehydrationHostedService : IHostedService
         var knownQueues = (await _queues.ListAsync(cancellationToken).ConfigureAwait(false))
             .Select(q => q.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var savedDescriptors = _store.LoadQueueDescriptors();
 
         var rehydratedQueues = 0;
         var rehydratedSubscriptions = 0;
@@ -79,8 +80,23 @@ public sealed class QueueRehydrationHostedService : IHostedService
                     {
                         // Creates the backing-queue descriptor (messages already in the store stay put)
                         // and a $Default TrueFilter rule. Custom rules are lost - see the class remarks.
-                        await _topics.CreateSubscriptionAsync(
-                            new SubscriptionDescriptor { TopicName = topicName, Name = subName }, cancellationToken).ConfigureAwait(false);
+                        // The persisted backing-queue snapshot restores the settings the backing
+                        // queue mirrors (status, lock duration, delivery cap, TTL, DLQ routing).
+                        var subDescriptor = new SubscriptionDescriptor { TopicName = topicName, Name = subName };
+                        if (savedDescriptors.TryGetValue(name, out var subJson)
+                            && QueueDescriptorJson.Deserialize(subJson) is { } backing)
+                        {
+                            subDescriptor = subDescriptor with
+                            {
+                                LockDuration = backing.LockDuration,
+                                MaxDeliveryCount = backing.MaxDeliveryCount,
+                                DefaultMessageTimeToLive = backing.DefaultMessageTimeToLive,
+                                DeadLetteringOnMessageExpiration = backing.DeadLetteringOnMessageExpiration,
+                                ForwardDeadLetteredMessagesTo = backing.ForwardDeadLetteredMessagesTo,
+                                Status = backing.Status,
+                            };
+                        }
+                        await _topics.CreateSubscriptionAsync(subDescriptor, cancellationToken).ConfigureAwait(false);
                         rehydratedSubscriptions++;
                     }
                 }
@@ -91,9 +107,12 @@ public sealed class QueueRehydrationHostedService : IHostedService
                 continue;
             }
 
-            // Plain queue.
+            // Plain queue - restored from its persisted descriptor snapshot when one exists.
             if (knownQueues.Contains(name)) continue;
-            await _queues.CreateAsync(new QueueDescriptor { Name = name }, cancellationToken).ConfigureAwait(false);
+            var descriptor = savedDescriptors.TryGetValue(name, out var json)
+                ? QueueDescriptorJson.Deserialize(json) ?? new QueueDescriptor { Name = name }
+                : new QueueDescriptor { Name = name };
+            await _queues.CreateAsync(descriptor with { Name = name }, cancellationToken).ConfigureAwait(false);
             rehydratedQueues++;
         }
 

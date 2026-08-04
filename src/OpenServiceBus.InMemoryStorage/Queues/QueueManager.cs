@@ -72,6 +72,7 @@ public sealed class QueueManager : IQueueRegistry
         }
 
         await _store.CreateQueueAsync(descriptor.Name, cancellationToken).ConfigureAwait(false);
+        await _store.SaveQueueDescriptorAsync(descriptor.Name, QueueDescriptorJson.Serialize(descriptor), cancellationToken).ConfigureAwait(false);
         QueueCreated?.Invoke(this, descriptor);
 
         // Every main queue gets an implicit dead-letter sibling - Azure Service Bus's contract.
@@ -119,6 +120,7 @@ public sealed class QueueManager : IQueueRegistry
             }
         }
 
+        await _store.SaveQueueDescriptorAsync(descriptor.Name, QueueDescriptorJson.Serialize(descriptor), cancellationToken).ConfigureAwait(false);
         QueueUpdated?.Invoke(this, descriptor);
 
         // Keep the DLQ sibling's lock duration in step with the parent, mirroring create.

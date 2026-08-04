@@ -118,6 +118,38 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    public async Task SaveQueueDescriptorAsync(string queueName, string descriptorJson, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO queue_descriptors(queue_name, descriptor_json) VALUES ($name, $json)
+                ON CONFLICT(queue_name) DO UPDATE SET descriptor_json = excluded.descriptor_json;
+                """;
+            cmd.Parameters.AddWithValue("$name", queueName);
+            cmd.Parameters.AddWithValue("$json", descriptorJson);
+            cmd.ExecuteNonQuery();
+        }
+        finally { _gate.Release(); }
+    }
+
+    public IReadOnlyDictionary<string, string> LoadQueueDescriptors()
+    {
+        _gate.Wait();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT queue_name, descriptor_json FROM queue_descriptors";
+            using var rdr = cmd.ExecuteReader();
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            while (rdr.Read()) result[rdr.GetString(0)] = rdr.GetString(1);
+            return result;
+        }
+        finally { _gate.Release(); }
+    }
+
     // ── Enqueue / dedup / sequence ────────────────────────────────────
 
     public async Task<StoredMessage> EnqueueAsync(

@@ -93,7 +93,8 @@ public static class QueueEndpoints
         && existing.RequiresDuplicateDetection == requested.RequiresDuplicateDetection
         && existing.DuplicateDetectionHistoryTimeWindow == requested.DuplicateDetectionHistoryTimeWindow
         && string.Equals(existing.ForwardTo, requested.ForwardTo, StringComparison.Ordinal)
-        && string.Equals(existing.ForwardDeadLetteredMessagesTo, requested.ForwardDeadLetteredMessagesTo, StringComparison.Ordinal);
+        && string.Equals(existing.ForwardDeadLetteredMessagesTo, requested.ForwardDeadLetteredMessagesTo, StringComparison.Ordinal)
+        && existing.Status == requested.Status;
 }
 
 public sealed record CreateQueueRequest
@@ -107,6 +108,7 @@ public sealed record CreateQueueRequest
     public TimeSpan? DuplicateDetectionHistoryTimeWindow { get; init; }
     public string? ForwardTo { get; init; }
     public string? ForwardDeadLetteredMessagesTo { get; init; }
+    public EntityStatus Status { get; init; } = EntityStatus.Active;
 
     public QueueDescriptor ToDescriptor(string name) => new()
     {
@@ -120,6 +122,7 @@ public sealed record CreateQueueRequest
         DuplicateDetectionHistoryTimeWindow = DuplicateDetectionHistoryTimeWindow,
         ForwardTo = ForwardTo,
         ForwardDeadLetteredMessagesTo = ForwardDeadLetteredMessagesTo,
+        Status = Status,
     };
 }
 
@@ -134,6 +137,7 @@ public sealed record QueueResponse(
     TimeSpan? DuplicateDetectionHistoryTimeWindow,
     string? ForwardTo,
     string? ForwardDeadLetteredMessagesTo,
+    EntityStatus Status,
     long? ActiveMessageCount,
     long? EnqueuedCount = null,
     long? CompletedCount = null)
@@ -149,6 +153,7 @@ public sealed record QueueResponse(
         d.DuplicateDetectionHistoryTimeWindow,
         d.ForwardTo,
         d.ForwardDeadLetteredMessagesTo,
+        d.Status,
         count,
         enqueued,
         completed);

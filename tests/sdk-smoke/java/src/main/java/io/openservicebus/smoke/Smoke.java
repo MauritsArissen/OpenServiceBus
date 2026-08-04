@@ -24,7 +24,7 @@ import java.util.regex.Pattern;
  *
  * Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
- *   -> topic session receive -> admin create/get/roundtrip/delete (ATOM management API)
+ *   -> topic session receive -> admin create/get/roundtrip/status gate/delete (ATOM management API)
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -192,6 +192,36 @@ public final class Smoke {
                 }
             }
             results.add(roundTripped ? "PASS admin roundtrip" : "FAIL admin roundtrip: no message within 10s");
+
+            // 13. admin status gate - SendDisabled rejects sends, Active restores them (issue #22).
+            String statusXmlTemplate =
+                "<entry xmlns=\"http://www.w3.org/2005/Atom\"><content type=\"application/xml\">"
+                + "<QueueDescription xmlns=\"http://schemas.microsoft.com/netservices/2010/10/servicebus/connect\">"
+                + "<MaxDeliveryCount>7</MaxDeliveryCount><Status>%s</Status></QueueDescription></content></entry>";
+            http.send(
+                HttpRequest.newBuilder(queueUri)
+                    .header("Content-Type", "application/atom+xml").header("If-Match", "*")
+                    .PUT(HttpRequest.BodyPublishers.ofString(String.format(statusXmlTemplate, "SendDisabled"))).build(),
+                HttpResponse.BodyHandlers.ofString());
+            boolean blocked = false;
+            try (ServiceBusSenderClient blockedSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(adminQueue).buildClient()) {
+                blockedSender.sendMessage(new ServiceBusMessage("must not land"));
+            } catch (Exception e) {
+                blocked = true;
+            }
+            http.send(
+                HttpRequest.newBuilder(queueUri)
+                    .header("Content-Type", "application/atom+xml").header("If-Match", "*")
+                    .PUT(HttpRequest.BodyPublishers.ofString(String.format(statusXmlTemplate, "Active"))).build(),
+                HttpResponse.BodyHandlers.ofString());
+            try (ServiceBusSenderClient reopenedSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(adminQueue).buildClient()) {
+                reopenedSender.sendMessage(new ServiceBusMessage("flowing again"));
+            }
+            results.add(blocked ? "PASS admin status gate" : "FAIL admin status gate: send on SendDisabled queue succeeded");
 
             HttpResponse<String> del = http.send(
                 HttpRequest.newBuilder(queueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());

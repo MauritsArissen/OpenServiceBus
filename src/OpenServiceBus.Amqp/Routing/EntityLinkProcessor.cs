@@ -220,6 +220,12 @@ public sealed class EntityLinkProcessor : ILinkProcessor
 
         if (entityAddress.SubResource == EntitySubResource.Main)
         {
+            if (!sub.Status.AcceptsReceives())
+            {
+                Reject(attachContext, ServiceBusErrors.EntityDisabled,
+                    $"Subscription '{sub.TopicName}/{sub.Name}' is {sub.Status} and does not accept receivers.");
+                return false;
+            }
             var sessionFilter = SessionFilter.TryReadFromAttach(attachContext.Attach);
             if (sessionFilter.IsSet)
             {
@@ -229,7 +235,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         }
 
         var source = _receiverSources.GetOrAdd(backingQueue, name => new QueueReceiverSource(
-            name, descriptor, _store, _router, _transactions, _timeProvider, _loggerFactory.CreateLogger<QueueReceiverSource>()));
+            name, descriptor, _store, _router, _transactions, _timeProvider, _loggerFactory.CreateLogger<QueueReceiverSource>(), _registry));
         var endpoint = new SourceLinkEndpoint(source, attachContext.Link);
         attachContext.Complete(endpoint, 0);
         _logger.LogDebug("Wired subscription receiver attach to {Entity}", backingQueue);
@@ -238,6 +244,13 @@ public sealed class EntityLinkProcessor : ILinkProcessor
 
     private void WireTopicSender(AttachContext attachContext, TopicDescriptor topic)
     {
+        if (!topic.Status.AcceptsSends())
+        {
+            Reject(attachContext, ServiceBusErrors.EntityDisabled,
+                $"Topic '{topic.Name}' is {topic.Status} and does not accept messages.");
+            return;
+        }
+
         var processor = new TopicSenderProcessor(
             topic,
             _topics!,
@@ -263,6 +276,12 @@ public sealed class EntityLinkProcessor : ILinkProcessor
 
         if (isReceiverFromClient)
         {
+            if (entityAddress.SubResource == EntitySubResource.Main && !descriptor.Status.AcceptsSends())
+            {
+                Reject(attachContext, ServiceBusErrors.EntityDisabled,
+                    $"Entity '{descriptor.Name}' is {descriptor.Status} and does not accept messages.");
+                return;
+            }
             var processor = new QueueSenderProcessor(
                 descriptor.Name,
                 descriptor,
@@ -270,13 +289,20 @@ public sealed class EntityLinkProcessor : ILinkProcessor
                 _router,
                 _transactions,
                 _timeProvider,
-                _loggerFactory.CreateLogger<QueueSenderProcessor>());
+                _loggerFactory.CreateLogger<QueueSenderProcessor>(),
+                _registry);
             var endpoint = new TargetLinkEndpoint(processor, attachContext.Link);
             attachContext.Complete(endpoint, processor.Credit);
             _logger.LogDebug("Wired sender attach to {Entity} (credit={Credit})", descriptor.Name, processor.Credit);
         }
         else
         {
+            if (entityAddress.SubResource == EntitySubResource.Main && !descriptor.Status.AcceptsReceives())
+            {
+                Reject(attachContext, ServiceBusErrors.EntityDisabled,
+                    $"Entity '{descriptor.Name}' is {descriptor.Status} and does not accept receivers.");
+                return;
+            }
             // Receivers carrying a session filter get an exclusive session-locked source.
             var sessionFilter = SessionFilter.TryReadFromAttach(attachContext.Attach);
             if (sessionFilter.IsSet)
@@ -286,7 +312,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
             }
 
             var source = _receiverSources.GetOrAdd(descriptor.Name, name => new QueueReceiverSource(
-                name, descriptor, _store, _router, _transactions, _timeProvider, _loggerFactory.CreateLogger<QueueReceiverSource>()));
+                name, descriptor, _store, _router, _transactions, _timeProvider, _loggerFactory.CreateLogger<QueueReceiverSource>(), _registry));
             var endpoint = new SourceLinkEndpoint(source, attachContext.Link);
             attachContext.Complete(endpoint, 0);
             _logger.LogDebug("Wired receiver attach to {Entity}", descriptor.Name);
@@ -448,7 +474,8 @@ public sealed class EntityLinkProcessor : ILinkProcessor
             _timeProvider,
             _loggerFactory.CreateLogger<SessionReceiverSource>(),
             sessionLock.SessionId,
-            linkName);
+            linkName,
+            _registry);
         var endpoint = new SourceLinkEndpoint(source, attachContext.Link);
         attachContext.Complete(endpoint, 0);
         _logger.LogDebug("Wired session receiver attach to {Entity}/{Session}", descriptor.Name, sessionLock.SessionId);

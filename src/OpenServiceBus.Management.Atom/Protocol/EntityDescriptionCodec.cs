@@ -50,7 +50,7 @@ public static class EntityDescriptionCodec
             new XElement(Sb + "MessageCount", runtime.TotalMessageCount),
             new XElement(Sb + "IsAnonymousAccessible", false),
             new XElement(Sb + "AuthorizationRules"),
-            new XElement(Sb + "Status", "Active"),
+            new XElement(Sb + "Status", queue.Status.ToString()),
             ForwardElement("ForwardTo", queue.ForwardTo),
             UserMetadataElement(queue.UserMetadata),
             new XElement(Sb + "CreatedAt", AtomXml.Timestamp(queue.CreatedAt)),
@@ -84,6 +84,7 @@ public static class EntityDescriptionCodec
                 "ForwardTo" => queue with { ForwardTo = NormalizeForwardTarget(value) },
                 "ForwardDeadLetteredMessagesTo" => queue with { ForwardDeadLetteredMessagesTo = NormalizeForwardTarget(value) },
                 "UserMetadata" => queue with { UserMetadata = value },
+                "Status" => queue with { Status = EntityStatusExtensions.Parse(value) },
                 _ => queue, // Accepted-but-ignored (MaxSizeInMegabytes, Status, AutoDeleteOnIdle, …).
             };
         }
@@ -106,7 +107,7 @@ public static class EntityDescriptionCodec
             new XElement(Sb + "FilteringMessagesBeforePublishing", false),
             new XElement(Sb + "IsAnonymousAccessible", false),
             new XElement(Sb + "AuthorizationRules"),
-            new XElement(Sb + "Status", "Active"),
+            new XElement(Sb + "Status", topic.Status.ToString()),
             UserMetadataElement(topic.UserMetadata),
             new XElement(Sb + "CreatedAt", AtomXml.Timestamp(topic.CreatedAt)),
             new XElement(Sb + "UpdatedAt", AtomXml.Timestamp(updated)),
@@ -131,6 +132,7 @@ public static class EntityDescriptionCodec
             {
                 "DefaultMessageTimeToLive" => topic with { DefaultMessageTimeToLive = AtomXml.ParseOptionalDuration(value) },
                 "UserMetadata" => topic with { UserMetadata = value },
+                "Status" => topic with { Status = EntityStatusExtensions.Parse(value) },
                 _ => topic,
             };
         }
@@ -152,7 +154,7 @@ public static class EntityDescriptionCodec
             new XElement(Sb + "MessageCount", runtime.TotalMessageCount),
             new XElement(Sb + "MaxDeliveryCount", subscription.MaxDeliveryCount),
             new XElement(Sb + "EnableBatchedOperations", true),
-            new XElement(Sb + "Status", "Active"),
+            new XElement(Sb + "Status", subscription.Status.ToString()),
             ForwardElement("ForwardTo", subscription.ForwardTo),
             UserMetadataElement(subscription.UserMetadata),
             new XElement(Sb + "CreatedAt", AtomXml.Timestamp(subscription.CreatedAt)),
@@ -202,6 +204,7 @@ public static class EntityDescriptionCodec
                 "ForwardTo" => subscription with { ForwardTo = NormalizeForwardTarget(value) },
                 "ForwardDeadLetteredMessagesTo" => subscription with { ForwardDeadLetteredMessagesTo = NormalizeForwardTarget(value) },
                 "UserMetadata" => subscription with { UserMetadata = value },
+                "Status" => subscription with { Status = EntityStatusExtensions.Parse(value) },
                 _ => subscription,
             };
         }

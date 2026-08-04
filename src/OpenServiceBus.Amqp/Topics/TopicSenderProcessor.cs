@@ -57,6 +57,16 @@ public sealed class TopicSenderProcessor : IMessageProcessor
     {
         try
         {
+            var currentStatus = (_topics.GetTopicAsync(_topic.Name).GetAwaiter().GetResult() ?? _topic).Status;
+            if (!currentStatus.AcceptsSends())
+            {
+                messageContext.Complete(new Error(new Symbol(Routing.ServiceBusErrors.EntityDisabled))
+                {
+                    Description = $"Topic '{_topic.Name}' is {currentStatus} and does not accept messages.",
+                });
+                return;
+            }
+
             var msg = messageContext.Message;
 
             if (msg.Format == AmqpBatchedMessageFormat && msg.BodySection is DataList dataList)

@@ -15,6 +15,8 @@ using OpenServiceBus.SqliteStorage.DependencyInjection;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHealthChecks();
+builder.Services.ConfigureHttpJsonOptions(o =>
+    o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services
     .AddOptions<AmqpListenerOptions>()
     .Bind(builder.Configuration.GetSection("OpenServiceBus:Amqp"));

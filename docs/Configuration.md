@@ -84,6 +84,7 @@ and logs an informational message. Parse errors are logged but do **not** stop t
 | `RequiresDuplicateDetection`          | bool              | `false`     | Enable dedup - see [Duplicate Detection](Duplicate-Detection)                 |
 | `DuplicateDetectionHistoryTimeWindow` | ISO-8601 duration | `PT10M`     | Sliding dedup window                                                          |
 | `ForwardTo`                           | string            | -           | Auto-forward target (queue or topic) - see [Auto-Forwarding](Auto-Forwarding) |
+| `Status`                              | string            | `Active`    | `Active`/`Disabled`/`SendDisabled`/`ReceiveDisabled` - see [Entity Status](Entity-Status) |
 | `ForwardDeadLetteredMessagesTo`       | string            | -           | DLQ-forward target                                                            |
 
 Topics + subscriptions in `config.json` are accepted in the same shape as the Microsoft
