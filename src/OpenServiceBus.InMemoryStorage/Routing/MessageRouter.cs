@@ -95,6 +95,14 @@ public sealed class MessageRouter : IMessageRouter
 
                 foreach (var (sub, action) in matched)
                 {
+                    // SendDisabled stops NEW copies entering the subscription; Disabled keeps
+                    // accepting copies (frozen for receive) so a drain-and-re-enable loses
+                    // nothing. See docs/Entity-Status.md.
+                    if (sub.Status == EntityStatus.SendDisabled)
+                    {
+                        continue;
+                    }
+
                     var subEncoded = encoded;
                     if (action is not null && _actionApplier is not null)
                     {

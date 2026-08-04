@@ -221,6 +221,12 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
     /// </summary>
     private Message HandleScheduleMessage(Message request)
     {
+        // Scheduling is a send: a (Send)Disabled entity rejects it like a transfer would.
+        if (!_descriptor.Status.AcceptsSends())
+        {
+            return BuildResponse(request, 403, $"Forbidden: entity '{_entityName}' is {_descriptor.Status} and does not accept messages.");
+        }
+
         if (request.Body is not Map body || !body.TryGetValue(MessagesBodyKey, out var messagesObj))
         {
             return BuildResponse(request, 400, "BadRequest: missing 'messages' in body");

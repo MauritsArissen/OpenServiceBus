@@ -2,7 +2,7 @@
 
 Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-  -> topic session receive -> admin create/get/roundtrip/delete (ATOM management API)
+  -> topic session receive -> admin create/get/roundtrip/status gate/delete (ATOM management API)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.
@@ -129,6 +129,38 @@ def run() -> None:
             check("admin roundtrip", got)
             if amsgs:
                 admin_receiver.complete_message(amsgs[0])
+
+        # 13. admin status gate - SendDisabled rejects sends, Active restores them (issue #22).
+        def status_xml(entity_status: str) -> bytes:
+            return (
+                '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">'
+                '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
+                f"<MaxDeliveryCount>7</MaxDeliveryCount><Status>{entity_status}</Status></QueueDescription></content></entry>"
+            ).encode()
+
+        def put_status(entity_status: str) -> int:
+            request = urllib.request.Request(
+                f"{base}/{admin_queue}?api-version=2021-05", data=status_xml(entity_status), method="PUT"
+            )
+            request.add_header("Content-Type", "application/atom+xml")
+            request.add_header("If-Match", "*")
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status
+            except urllib.error.HTTPError as e:
+                return e.code
+
+        put_status("SendDisabled")
+        blocked = False
+        try:
+            with client.get_queue_sender(admin_queue) as blocked_sender:
+                blocked_sender.send_messages(ServiceBusMessage("must not land"))
+        except Exception:  # noqa: BLE001 - any SDK error counts as "send rejected"
+            blocked = True
+        put_status("Active")
+        with client.get_queue_sender(admin_queue) as reopened_sender:
+            reopened_sender.send_messages(ServiceBusMessage("flowing again"))
+        check("admin status gate", blocked)
 
         status, _ = http("DELETE", f"{base}/{admin_queue}?api-version=2021-05")
         gone, _ = http("GET", f"{base}/{admin_queue}?api-version=2021-05")

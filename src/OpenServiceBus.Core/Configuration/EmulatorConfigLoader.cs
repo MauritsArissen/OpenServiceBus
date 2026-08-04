@@ -112,6 +112,7 @@ public static class EmulatorConfigLoader
             DefaultMessageTimeToLive = ParseDuration(props.DefaultMessageTimeToLive, $"Queue '{q.Name}'.DefaultMessageTimeToLive", warnings),
             DeadLetteringOnMessageExpiration = props.DeadLetteringOnMessageExpiration ?? false,
             RequiresSession = props.RequiresSession ?? false,
+            Status = EntityStatusExtensions.Parse(props.Status),
             RequiresDuplicateDetection = props.RequiresDuplicateDetection ?? false,
             DuplicateDetectionHistoryTimeWindow = ParseDuration(props.DuplicateDetectionHistoryTimeWindow, $"Queue '{q.Name}'.DuplicateDetectionHistoryTimeWindow", warnings),
             // Auto-forwarding. The router enforces target-exists lazily at runtime so
@@ -127,6 +128,7 @@ public static class EmulatorConfigLoader
             Name = t.Name,
             DefaultMessageTimeToLive = ParseDuration(t.Properties?.DefaultMessageTimeToLive,
                 $"Topic '{t.Name}'.DefaultMessageTimeToLive", warnings),
+            Status = EntityStatusExtensions.Parse(t.Properties?.Status),
         };
 
     private static SubscriptionDescriptor ProjectSubscription(string topicName, SubscriptionConfig s, List<string> warnings)
@@ -145,6 +147,7 @@ public static class EmulatorConfigLoader
                 $"Subscription '{topicName}/{s.Name}'.DefaultMessageTimeToLive", warnings),
             DeadLetteringOnMessageExpiration = props.DeadLetteringOnMessageExpiration ?? false,
             RequiresSession = props.RequiresSession ?? false,
+            Status = EntityStatusExtensions.Parse(props.Status),
             ForwardTo = string.IsNullOrEmpty(props.ForwardTo) ? null : props.ForwardTo,
             ForwardDeadLetteredMessagesTo = string.IsNullOrEmpty(props.ForwardDeadLetteredMessagesTo)
                 ? null : props.ForwardDeadLetteredMessagesTo,

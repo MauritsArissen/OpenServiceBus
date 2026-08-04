@@ -39,6 +39,9 @@ public sealed record SubscriptionDescriptor
     /// </summary>
     public string? UserMetadata { get; init; }
 
+    /// <summary>Operational status. Enforced on fan-out and the receive path.</summary>
+    public EntityStatus Status { get; init; } = EntityStatus.Active;
+
     /// <summary>When the entity was created. Reported through the management API.</summary>
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 

@@ -40,6 +40,7 @@ public sealed class SessionReceiverSource : IMessageSource
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SessionReceiverSource> _logger;
     private readonly bool _isDlq;
+    private readonly IQueueRegistry? _registry;
 
     public string SessionId { get; }
     public string? LinkName { get; }
@@ -60,8 +61,10 @@ public sealed class SessionReceiverSource : IMessageSource
         TimeProvider timeProvider,
         ILogger<SessionReceiverSource> logger,
         string sessionId,
-        string? linkName)
+        string? linkName,
+        IQueueRegistry? registry = null)
     {
+        _registry = registry;
         _entityName = entityName;
         _descriptor = descriptor;
         _store = store;
@@ -88,6 +91,12 @@ public sealed class SessionReceiverSource : IMessageSource
             while (locked is null)
             {
                 if (link.IsDraining) return null!;
+                if (_registry?.GetAsync(_entityName).GetAwaiter().GetResult() is { } current
+                    && !current.Status.AcceptsReceives())
+                {
+                    await Task.Delay(200).ConfigureAwait(false);
+                    continue;
+                }
                 using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
                 try
                 {

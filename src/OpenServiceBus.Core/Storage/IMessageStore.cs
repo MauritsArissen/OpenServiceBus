@@ -24,6 +24,19 @@ public interface IMessageStore
     IReadOnlyCollection<string> ListQueueNames();
 
     /// <summary>
+    /// Persist an opaque descriptor snapshot (JSON) for a queue, replacing any previous
+    /// snapshot. Persistent stores keep it so <c>LoadQueueDescriptors</c> can restore full
+    /// descriptors (status, lock duration, ...) after a restart; the in-memory default is a
+    /// no-op.
+    /// </summary>
+    Task SaveQueueDescriptorAsync(string queueName, string descriptorJson, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
+    /// <summary>Descriptor snapshots by queue name, as persisted by <see cref="SaveQueueDescriptorAsync"/>.</summary>
+    IReadOnlyDictionary<string, string> LoadQueueDescriptors() =>
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Enqueue an encoded message. The returned record carries the assigned sequence number.
     /// </summary>
     /// <param name="expiresAt">

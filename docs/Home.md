@@ -23,6 +23,7 @@ in the repo - every page here is committed in source.
 ### Service Bus features
 
 - **[SDK Admin Client](Admin-Client)** - `ServiceBusAdministrationClient` entity CRUD on the AMQP port.
+- **[Entity Status](Entity-Status)** - freeze or drain entities with `Disabled`/`SendDisabled`/`ReceiveDisabled`.
 - **[Topics and Subscriptions](Topics-and-Subscriptions)** - fan-out with SQL + correlation filters.
 - **[Sessions](Sessions)** - per-session FIFO, session state, session locks.
 - **[Auto-Forwarding](Auto-Forwarding)** - `ForwardTo`, DLQ forwarding, cycle protection.

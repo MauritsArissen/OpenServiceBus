@@ -2,7 +2,7 @@
 //
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-//   -> topic session receive -> admin create/get/roundtrip/delete (ATOM management API)
+//   -> topic session receive -> admin create/get/roundtrip/status gate/delete (ATOM management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -108,6 +108,30 @@ const run = async () => {
   check("admin roundtrip", aMsgs.length === 1 && aMsgs[0].body === "admin roundtrip");
   if (aMsgs.length === 1) await adminReceiver.completeMessage(aMsgs[0]);
   await adminReceiver.close();
+
+  // 13. admin status gate - SendDisabled rejects sends, Active restores them (issue #22).
+  const statusXml = (status) =>
+    '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">' +
+    '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
+    `<MaxDeliveryCount>7</MaxDeliveryCount><Status>${status}</Status></QueueDescription></content></entry>`;
+  const putStatus = (status) =>
+    fetch(`${httpBase}/${adminQueue}?api-version=2021-05`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/atom+xml", "If-Match": "*" },
+      body: statusXml(status),
+    });
+  await putStatus("SendDisabled");
+  let blocked = false;
+  try {
+    await client.createSender(adminQueue).sendMessages({ body: "must not land", messageId: `blocked-${stamp}` });
+  } catch {
+    blocked = true;
+  }
+  await putStatus("Active");
+  const reopened = client.createSender(adminQueue);
+  await reopened.sendMessages({ body: "flowing again", messageId: `reopened-${stamp}` });
+  await reopened.close();
+  check("admin status gate", blocked);
 
   const del = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`, { method: "DELETE" });
   const gone = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`);

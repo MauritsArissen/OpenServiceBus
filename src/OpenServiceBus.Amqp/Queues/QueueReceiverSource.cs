@@ -50,6 +50,7 @@ public sealed class QueueReceiverSource : IMessageSource
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<QueueReceiverSource> _logger;
     private readonly bool _isDlq;
+    private readonly IQueueRegistry? _registry;
 
     public QueueReceiverSource(
         string entityName,
@@ -58,7 +59,8 @@ public sealed class QueueReceiverSource : IMessageSource
         IMessageRouter router,
         ITransactionManager transactions,
         TimeProvider timeProvider,
-        ILogger<QueueReceiverSource> logger)
+        ILogger<QueueReceiverSource> logger,
+        IQueueRegistry? registry = null)
     {
         _entityName = entityName;
         _descriptor = descriptor;
@@ -67,6 +69,7 @@ public sealed class QueueReceiverSource : IMessageSource
         _transactions = transactions;
         _timeProvider = timeProvider;
         _logger = logger;
+        _registry = registry;
         _isDlq = EntityNames.IsDeadLetterQueue(entityName);
     }
 
@@ -84,6 +87,14 @@ public sealed class QueueReceiverSource : IMessageSource
             while (locked is null)
             {
                 if (link.IsDraining) return null!;
+                // A receive-disabled entity delivers nothing: credit stays outstanding and the
+                // link parks here until the status flips back (or the link drains/closes).
+                if (_registry?.GetAsync(_entityName).GetAwaiter().GetResult() is { } current
+                    && !current.Status.AcceptsReceives())
+                {
+                    await Task.Delay(200).ConfigureAwait(false);
+                    continue;
+                }
                 using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
                 try
                 {
