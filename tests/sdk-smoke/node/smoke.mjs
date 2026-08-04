@@ -3,6 +3,7 @@
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
+//   -> purge (JSON management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -163,6 +164,31 @@ const run = async () => {
 
   const gone = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`);
   check("admin delete queue", del.status === 200 && gone.status === 404);
+
+  // 16. purge - the emulator-native message purge on the JSON management API
+  // (issue #36): every message goes, the queue itself stays.
+  const mgmtBase = process.env.SMOKE_MANAGEMENT ?? "http://localhost:5300";
+  const purgeQueue = `smoke-purge-node-${stamp}`;
+  const emptyQueueXml =
+    '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">' +
+    '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/></content></entry>';
+  await fetch(`${httpBase}/${purgeQueue}?api-version=2021-05`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/atom+xml" },
+    body: emptyQueueXml,
+  });
+  const purgeSender = client.createSender(purgeQueue);
+  await purgeSender.sendMessages({ body: "one", messageId: `purge-1-${stamp}` });
+  await purgeSender.sendMessages({ body: "two", messageId: `purge-2-${stamp}` });
+  await purgeSender.close();
+  const purgeResp = await fetch(`${mgmtBase}/queues/${purgeQueue}/messages`, { method: "DELETE" });
+  const purgeJson = purgeResp.ok ? await purgeResp.json() : {};
+  const purgeReceiver = client.createReceiver(purgeQueue);
+  const afterPurge = await purgeReceiver.receiveMessages(1, { maxWaitTimeInMs: 2_000 });
+  await purgeReceiver.close();
+  check("admin purge", purgeResp.ok && purgeJson.purged === 2 && afterPurge.length === 0,
+    purgeResp.ok ? "" : `status ${purgeResp.status}`);
+  await fetch(`${httpBase}/${purgeQueue}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>

@@ -60,6 +60,11 @@ port) and messaging through the real `ServiceBusClient` - the JSON REST API (def
   to the parent (or through the topic so rules re-evaluate), or **Delete** it off the DLQ.
 - **Rules tab** (subscriptions only) - SQL / Correlation / True / False editor with
   examples in the help text. `$Default` rule visually distinguished from custom rules.
+- **Purge** - a per-entity Purge button (queue + DLQ, topic across subscriptions,
+  single subscription) and a sidebar purge-all action, both behind a confirm dialog.
+  Purge is OpenServiceBus-native (real Service Bus has no purge API), so the buttons
+  only enable when the connect ping's management probe identifies the broker as
+  OpenServiceBus advertising the `purge` capability - see [Purge](Purge).
 - **Metrics tab** - live throughput (new / completed / dead-lettered per interval) and
   message-count charts per entity, sampled every 15s while the Explorer runs, with a
   30 min - 24 h window selector. History is in-memory only and resets with the Explorer.

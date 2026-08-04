@@ -1,5 +1,5 @@
 import {
-  ClockIcon, InboxIcon, LayersIcon, LockIcon, RepeatIcon, SkullIcon, Trash2Icon, WaypointsIcon,
+  ClockIcon, EraserIcon, InboxIcon, LayersIcon, LockIcon, RepeatIcon, SkullIcon, Trash2Icon, WaypointsIcon,
   type LucideIcon,
 } from "lucide-react";
 import { useState } from "react";
@@ -84,6 +84,32 @@ export function EntityView() {
     }
   };
 
+  // Purge is OpenServiceBus-native (real Service Bus has no purge API): remove every
+  // message while keeping the entity, its settings, and any live consumers. Disabled
+  // unless the connected broker advertised the capability during the connect ping.
+  const handlePurge = () => {
+    const label = sel.kind === "subscription" ? `${sel.name}/${sel.sub}` : sel.name;
+    const target =
+      sel.kind === "queue" ? { queue: sel.name }
+      : sel.kind === "topic" ? { topic: sel.name }
+      : { topic: sel.name, subscription: sel.sub! };
+    store.setDialog({
+      type: "confirm",
+      title: `Purge '${label}'?`,
+      description:
+        sel.kind === "topic"
+          ? "Every message on every subscription of this topic (including their dead-letter queues) is removed. The topology stays."
+          : "Every message (active, scheduled, deferred, locked, and dead-lettered) is removed. The entity itself stays.",
+      destructive: true,
+      action: async () => {
+        const r = await explorerApi.purge(store.mgmt, target);
+        store.clearEntityLocal(address);
+        toast.success(`Purged ${r.purged} message(s) from '${label}'`);
+        await store.refresh();
+      },
+    });
+  };
+
   return (
     <main className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-muted/30" key={address}>
       <div className="mx-auto max-w-5xl space-y-5 p-5">
@@ -138,6 +164,20 @@ export function EntityView() {
                       <SelectItem value="Disabled">Disabled</SelectItem>
                     </SelectContent>
                   </Select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 text-muted-foreground hover:border-destructive/40 hover:text-destructive"
+                    onClick={handlePurge}
+                    disabled={!store.purgeCapable}
+                    title={
+                      store.purgeCapable
+                        ? "Remove every message but keep the entity"
+                        : "Purge is OpenServiceBus-native and unavailable on this connection"
+                    }
+                  >
+                    <EraserIcon /> Purge
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"

@@ -82,6 +82,10 @@ host.Store                     // IMessageStore - host.Store.CountAsync(...), Pe
 host.TimeProvider              // the time source the broker is using (e.g. FakeTimeProvider)
 ```
 
+For between-test cleanup on a shared host, `PurgeAllAsync` / `PurgeQueueAsync` /
+`PurgeTopicAsync` / `PurgeSubscriptionAsync` wipe messages instantly while keeping the
+topology and any attached processors - see [Purge](Purge).
+
 ## Time-travel testing
 
 The whole broker runs on a single `TimeProvider`. Pass `FakeTimeProvider` and you control

@@ -1,5 +1,5 @@
 import {
-  CableIcon, ChevronRightIcon, InboxIcon, PlusIcon, RadioIcon, RefreshCwIcon,
+  CableIcon, ChevronRightIcon, EraserIcon, InboxIcon, PlusIcon, RadioIcon, RefreshCwIcon,
   SearchIcon, WaypointsIcon, XIcon,
 } from "lucide-react";
 import { useState } from "react";
@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { type QueueInfo } from "@/lib/api";
+import { explorerApi, type QueueInfo } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
 
@@ -101,6 +101,40 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="px-2.5 text-muted-foreground hover:border-destructive/40 hover:text-destructive"
+                  disabled={!store.purgeCapable}
+                  aria-label="Purge all messages"
+                  onClick={() =>
+                    store.setDialog({
+                      type: "confirm",
+                      title: "Purge ALL messages?",
+                      description:
+                        "Every message on every queue, subscription, and dead-letter queue is removed. Entities and live consumers are untouched.",
+                      destructive: true,
+                      action: async () => {
+                        const r = await explorerApi.purge(store.mgmt, {});
+                        toast.success(`Purged ${r.purged} message(s) across ${r.entities ?? 0} entities`);
+                        await store.refresh();
+                      },
+                    })
+                  }
+                >
+                  <EraserIcon />
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              {store.purgeCapable
+                ? "Purge all messages (keeps every entity)"
+                : "Purge is OpenServiceBus-native and unavailable on this connection"}
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 

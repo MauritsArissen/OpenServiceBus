@@ -26,6 +26,7 @@ in the repo - every page here is committed in source.
 - **[Entity Status](Entity-Status)** - freeze or drain entities with `Disabled`/`SendDisabled`/`ReceiveDisabled`.
 - **[Auto-Delete On Idle](Auto-Delete-On-Idle)** - entities that clean themselves up after inactivity.
 - **[Size Limits](Size-Limits)** - message size ceilings and entity quotas with standard-tier defaults.
+- **[Purge](Purge)** - emulator-native instant message wipe for between-test resets.
 - **[Topics and Subscriptions](Topics-and-Subscriptions)** - fan-out with SQL + correlation filters.
 - **[Sessions](Sessions)** - per-session FIFO, session state, session locks.
 - **[Auto-Forwarding](Auto-Forwarding)** - `ForwardTo`, DLQ forwarding, cycle protection.

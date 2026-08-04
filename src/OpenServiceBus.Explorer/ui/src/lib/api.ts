@@ -105,12 +105,33 @@ const cs = (connectionString: string) => "?connectionString=" + encodeURICompone
 const post = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
 const put = (body: unknown): RequestInit => ({ method: "PUT", body: JSON.stringify(body) });
 
+export type BrokerInfo = {
+  name?: string | null;
+  version?: string | null;
+  capabilities?: string[] | null;
+};
+
+export type PingResult = {
+  management: string;
+  serviceBus: string;
+  atomManagement: string;
+  broker?: BrokerInfo | null;
+};
+
 export const explorerApi = {
   ping: (connectionString: string, managementUrl: string) =>
-    api<{ management: string; serviceBus: string; atomManagement: string }>(
+    api<PingResult>(
       "/api/ping",
       post({ connectionString, managementUrl }),
     ),
+
+  // OpenServiceBus-native: purge messages while keeping topology. Routed through the
+  // backend to the broker's JSON management API; only enabled when the ping's broker
+  // info advertises the "purge" capability.
+  purge: (
+    managementUrl: string,
+    target: { queue?: string; topic?: string; subscription?: string; deadLetterOnly?: boolean },
+  ) => api<{ purged: number; entities?: number }>("/api/purge", post({ managementUrl, ...target })),
 
   listQueues: (conn: string) => api<QueueInfo[]>("/api/queues" + cs(conn)),
   setStatus: (conn: string, kind: string, name: string, subscription: string | null, status: string) =>

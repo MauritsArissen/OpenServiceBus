@@ -25,6 +25,7 @@ import java.util.regex.Pattern;
  * Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
+ *   -> purge (JSON management API)
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -288,6 +289,45 @@ public final class Smoke {
             results.add(deleteStatus[0] == 200 && gone.statusCode() == 404
                 ? "PASS admin delete queue"
                 : "FAIL admin delete queue: delete " + deleteStatus[0] + ", get-after " + gone.statusCode());
+
+            // 16. purge - the emulator-native message purge on the JSON management API
+            // (issue #36): every message goes, the queue itself stays.
+            String mgmtBase = System.getenv().getOrDefault("SMOKE_MANAGEMENT", "http://localhost:5300");
+            String purgeQueue = "smoke-purge-java-" + stamp;
+            String emptyQueueXml =
+                "<entry xmlns=\"http://www.w3.org/2005/Atom\"><content type=\"application/xml\">"
+                + "<QueueDescription xmlns=\"http://schemas.microsoft.com/netservices/2010/10/servicebus/connect\"/></content></entry>";
+            URI purgeQueueUri = URI.create(base + "/" + purgeQueue + "?api-version=2021-05");
+            http.send(
+                HttpRequest.newBuilder(purgeQueueUri)
+                    .header("Content-Type", "application/atom+xml")
+                    .PUT(HttpRequest.BodyPublishers.ofString(emptyQueueXml)).build(),
+                HttpResponse.BodyHandlers.ofString());
+            try (ServiceBusSenderClient purgeSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(purgeQueue).buildClient()) {
+                purgeSender.sendMessage(new ServiceBusMessage("one"));
+                purgeSender.sendMessage(new ServiceBusMessage("two"));
+            }
+            HttpResponse<String> purgeResp = http.send(
+                HttpRequest.newBuilder(URI.create(mgmtBase + "/queues/" + purgeQueue + "/messages"))
+                    .DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+            boolean afterPurgeEmpty = true;
+            try (ServiceBusReceiverClient purgeReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(purgeQueue).disableAutoComplete().buildClient()) {
+                for (ServiceBusReceivedMessage m : purgeReceiver.receiveMessages(1, Duration.ofSeconds(2))) {
+                    afterPurgeEmpty = false;
+                }
+            }
+            results.add(purgeResp.statusCode() == 200
+                    && purgeResp.body().replace(" ", "").contains("\"purged\":2")
+                    && afterPurgeEmpty
+                ? "PASS admin purge"
+                : "FAIL admin purge: status " + purgeResp.statusCode() + ", body " + purgeResp.body());
+            http.send(
+                HttpRequest.newBuilder(purgeQueueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);
         }

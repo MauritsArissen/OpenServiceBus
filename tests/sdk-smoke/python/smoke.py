@@ -3,6 +3,7 @@
 Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
+  -> purge (JSON management API)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.
@@ -202,6 +203,29 @@ def run() -> None:
 
         gone, _ = http("GET", f"{base}/{admin_queue}?api-version=2021-05")
         check("admin delete queue", delete_status == [200] and gone == 404)
+
+        # 16. purge - the emulator-native message purge on the JSON management API
+        # (issue #36): every message goes, the queue itself stays.
+        mgmt_base = os.environ.get("SMOKE_MANAGEMENT", "http://localhost:5300")
+        purge_queue = f"smoke-purge-python-{stamp}"
+        empty_queue_xml = (
+            '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">'
+            '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'
+            "</content></entry>"
+        )
+        http("PUT", f"{base}/{purge_queue}?api-version=2021-05", empty_queue_xml.encode())
+        with client.get_queue_sender(purge_queue) as purge_sender:
+            purge_sender.send_messages(ServiceBusMessage("one"))
+            purge_sender.send_messages(ServiceBusMessage("two"))
+        purge_status, purge_body = http("DELETE", f"{mgmt_base}/queues/{purge_queue}/messages")
+        with client.get_queue_receiver(purge_queue, max_wait_time=2) as purge_receiver:
+            after_purge = purge_receiver.receive_messages(max_message_count=1, max_wait_time=2)
+        check(
+            "admin purge",
+            purge_status == 200 and '"purged":2' in purge_body.replace(" ", "") and not after_purge,
+            "" if purge_status == 200 else f"status {purge_status}",
+        )
+        http("DELETE", f"{base}/{purge_queue}?api-version=2021-05")
 
 
 try:

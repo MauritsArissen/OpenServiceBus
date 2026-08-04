@@ -44,6 +44,35 @@ public sealed class InMemoryMessageStore : IMessageStore
         return Task.CompletedTask;
     }
 
+    public Task<long> PurgeAsync(string queueName, CancellationToken cancellationToken = default)
+    {
+        if (!_queues.TryGetValue(queueName, out var state))
+        {
+            return Task.FromResult(0L);
+        }
+
+        long purged;
+        lock (state.Sync)
+        {
+            purged = state.Messages.Count;
+            state.Messages.Clear();
+            state.Locks.Clear();
+            state.SeenMessageIds.Clear();
+            state.OriginalsByMessageId.Clear();
+            while (state.Available.Reader.TryRead(out _))
+            {
+            }
+            foreach (var session in state.Sessions.Values)
+            {
+                while (session.Available.Reader.TryRead(out _))
+                {
+                }
+                session.State = null;
+            }
+        }
+        return Task.FromResult(purged);
+    }
+
     public Task<StoredMessage> EnqueueAsync(
         string queueName,
         byte[] encodedMessage,
