@@ -57,7 +57,13 @@ public sealed class TopicSenderProcessor : IMessageProcessor
     {
         try
         {
-            var currentStatus = (_topics.GetTopicAsync(_topic.Name).GetAwaiter().GetResult() ?? _topic).Status;
+            var resolvedTopic = _topics.GetTopicAsync(_topic.Name).GetAwaiter().GetResult();
+            if (resolvedTopic is null)
+            {
+                CompleteEntityDeleted(messageContext);
+                return;
+            }
+            var currentStatus = resolvedTopic.Status;
             if (!currentStatus.AcceptsSends())
             {
                 messageContext.Complete(new Error(new Symbol(Routing.ServiceBusErrors.EntityDisabled))
@@ -70,7 +76,7 @@ public sealed class TopicSenderProcessor : IMessageProcessor
 
             var msg = messageContext.Message;
 
-            var currentTopic = _topics.GetTopicAsync(_topic.Name).GetAwaiter().GetResult() ?? _topic;
+            var currentTopic = resolvedTopic;
             var payloadBytes = (long)msg.Encode().Length;
             if (payloadBytes > currentTopic.MaxMessageSizeInKilobytes * 1024)
             {
@@ -165,11 +171,27 @@ public sealed class TopicSenderProcessor : IMessageProcessor
             _logger.LogDebug("Fanned out 1 message on topic {Topic} to {Count} subscriber(s)", _topic.Name, landed.Count);
             context.Complete();
         }
+        catch (InvalidOperationException) when (TopicDeleted())
+        {
+            CompleteEntityDeleted(context);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to fan-out message on topic {Topic}", _topic.Name);
             context.Complete(new Error(new Symbol(ErrorCode.InternalError)) { Description = ex.Message });
         }
+    }
+
+    private bool TopicDeleted() =>
+        _topics.GetTopicAsync(_topic.Name).GetAwaiter().GetResult() is null;
+
+    private void CompleteEntityDeleted(MessageContext context)
+    {
+        context.Complete(new Error(new Symbol(ErrorCode.NotFound))
+        {
+            Info = new Fields(),
+            Description = $"The messaging entity '{_topic.Name}' has been deleted.",
+        });
     }
 
     private async Task FanOutBatchAsync(MessageContext context, DataList dataList, byte[]? txnId)
@@ -219,6 +241,10 @@ public sealed class TopicSenderProcessor : IMessageProcessor
             {
                 context.Complete();
             }
+        }
+        catch (InvalidOperationException) when (TopicDeleted())
+        {
+            CompleteEntityDeleted(context);
         }
         catch (Exception ex)
         {

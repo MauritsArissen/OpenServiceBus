@@ -80,6 +80,30 @@ and authorization rules. `Status` is enforced - see [Entity Status](Entity-Statu
 are evaluated during fan-out - see
 [Topics and Subscriptions](Topics-and-Subscriptions.md#sql-rule-actions).
 
+## Deleting entities that have live clients
+
+Deleting an entity while AMQP links are still attached to it behaves like real Service
+Bus instead of stranding those clients (issue #36):
+
+- Live receiver links (plain, session, and DLQ receivers, on queues and on subscription
+  backing queues) are detached by the broker with `amqp:not-found` within one poll cycle
+  (about 200 ms). The SDKs surface `ServiceBusException` with reason
+  `MessagingEntityNotFound`, and `ServiceBusProcessor` / Azure Functions
+  `ServiceBusTrigger` listeners route it to their error handler and keep retrying - so a
+  delete + recreate cycle under a running processor heals itself once the entity is back.
+- Closing a receiver whose entity was deleted completes immediately. Previously the
+  broker left the link's delivery pump stuck, the drain issued by
+  `ServiceBusReceiver.CloseAsync` was never answered, and every close stalled for the
+  SDK's full timeout ("The operation did not complete within the allocated time 00:01:00
+  for object drain").
+- Sends on a sender link whose queue or topic was deleted are rejected with
+  `amqp:not-found` (`MessagingEntityNotFound`) instead of a generic internal error.
+- Settling messages received before the delete (complete / abandon / defer /
+  dead-letter, including under a transaction) becomes a quiet no-op; the connection and
+  its other links stay usable.
+- Recreating an entity with the same name gives it a fresh descriptor: new receiver
+  attaches see the new settings, not a cached copy of the deleted entity's.
+
 ## Authentication
 
 By default the management surface mirrors emulator-mode permissive auth: any

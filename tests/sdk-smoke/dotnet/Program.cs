@@ -2,7 +2,7 @@
 //
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-//   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete (ATOM management API)
+//   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -136,7 +136,20 @@ try
     await reopenedSender.CloseAsync();
     Check("admin status gate", blocked);
 
+    // 15. admin delete detach - deleting the queue under a live receiver must detach the
+    // link promptly instead of stalling the close on the SDK's 60s drain timeout (issue #36).
+    var doomedReceiver = client.CreateReceiver(adminQueue);
+    var leftover = await doomedReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    if (leftover is not null) await doomedReceiver.CompleteMessageAsync(leftover);
+    var pendingReceive = doomedReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(30));
+    await Task.Delay(500);
     await admin.DeleteQueueAsync(adminQueue);
+    var closeTimer = System.Diagnostics.Stopwatch.StartNew();
+    await doomedReceiver.CloseAsync();
+    closeTimer.Stop();
+    try { await pendingReceive; } catch (ServiceBusException) { }
+    Check("admin delete detach", closeTimer.Elapsed < TimeSpan.FromSeconds(10), $"{closeTimer.ElapsedMilliseconds}ms");
+
     Check("admin delete queue", !(await admin.QueueExistsAsync(adminQueue)).Value);
 }
 catch (Exception e)

@@ -75,6 +75,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         _responsePairs = responsePairs;
         _connectionAuth = connectionAuth;
         _logger = loggerFactory.CreateLogger<EntityLinkProcessor>();
+        _registry.QueueDeleted += (_, descriptor) => _receiverSources.TryRemove(descriptor.Name, out QueueReceiverSource? _);
     }
 
     public void Process(AttachContext attachContext)

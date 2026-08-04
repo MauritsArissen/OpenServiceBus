@@ -90,13 +90,21 @@ public sealed class QueueReceiverSource : IMessageSource
             while (locked is null)
             {
                 if (link.IsDraining) return null!;
-                // A receive-disabled entity delivers nothing: credit stays outstanding and the
-                // link parks here until the status flips back (or the link drains/closes).
-                if (_registry?.GetAsync(_entityName).GetAwaiter().GetResult() is { } current
-                    && !current.Status.AcceptsReceives())
+                if (_registry is not null)
                 {
-                    await Task.Delay(200).ConfigureAwait(false);
-                    continue;
+                    var current = _registry.GetAsync(_entityName).GetAwaiter().GetResult();
+                    if (current is null)
+                    {
+                        Routing.DeletedEntityLink.Close(link, _entityName, _logger);
+                        return null!;
+                    }
+                    // A receive-disabled entity delivers nothing: credit stays outstanding and the
+                    // link parks here until the status flips back (or the link drains/closes).
+                    if (!current.Status.AcceptsReceives())
+                    {
+                        await Task.Delay(200).ConfigureAwait(false);
+                        continue;
+                    }
                 }
                 using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
                 try
@@ -109,10 +117,15 @@ public sealed class QueueReceiverSource : IMessageSource
                 {
                     // Poll timeout - loop and re-check drain state.
                 }
+                catch (InvalidOperationException)
+                {
+                    Routing.DeletedEntityLink.Close(link, _entityName, _logger);
+                    return null!;
+                }
 
                 if (locked is null && !cts.IsCancellationRequested)
                 {
-                    // Store-side cancellation (e.g. queue deleted) - bail out like before.
+                    Routing.DeletedEntityLink.Close(link, _entityName, _logger);
                     return null!;
                 }
             }
@@ -265,6 +278,10 @@ public sealed class QueueReceiverSource : IMessageSource
                 new KeyValuePair<string, object?>(OpenServiceBusDiagnostics.TagDestination, _entityName),
                 new KeyValuePair<string, object?>(OpenServiceBusDiagnostics.TagDisposition, disposition));
         }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogDebug(ex, "Ignored disposition for lock {Lock} on deleted entity {Entity}", lockToken, _entityName);
+        }
         finally
         {
             // Only complete here for the non-tx path; the tx branch already settled the delivery
@@ -282,26 +299,33 @@ public sealed class QueueReceiverSource : IMessageSource
     /// </summary>
     private async Task InvokeDispositionAsync(Guid lockToken, Outcome? outcome)
     {
-        switch (outcome)
+        try
         {
-            case Accepted:
-                await _store.TryCompleteAsync(_entityName, lockToken).ConfigureAwait(false);
-                break;
-            case Modified modified when modified.UndeliverableHere:
-                await _store.TryDeferAsync(_entityName, lockToken).ConfigureAwait(false);
-                break;
-            case Released:
-            case Modified:
-                await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
-                break;
-            case Rejected rejected:
-                var (reason, description) = ExtractDeadLetterInfo(rejected);
-                await DeadLetterAsync(lockToken, reason, description, inFlightDelivery: true).ConfigureAwait(false);
-                break;
-            default:
-                // Treat unknown as abandon so the lock is at least released on commit.
-                await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
-                break;
+            switch (outcome)
+            {
+                case Accepted:
+                    await _store.TryCompleteAsync(_entityName, lockToken).ConfigureAwait(false);
+                    break;
+                case Modified modified when modified.UndeliverableHere:
+                    await _store.TryDeferAsync(_entityName, lockToken).ConfigureAwait(false);
+                    break;
+                case Released:
+                case Modified:
+                    await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
+                    break;
+                case Rejected rejected:
+                    var (reason, description) = ExtractDeadLetterInfo(rejected);
+                    await DeadLetterAsync(lockToken, reason, description, inFlightDelivery: true).ConfigureAwait(false);
+                    break;
+                default:
+                    // Treat unknown as abandon so the lock is at least released on commit.
+                    await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
+                    break;
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogDebug(ex, "Ignored transactional disposition for lock {Lock} on deleted entity {Entity}", lockToken, _entityName);
         }
     }
 

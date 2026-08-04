@@ -47,41 +47,7 @@ public class ServiceBusTriggerTests
         var stderrBuffer = new StringBuilder();
         try
         {
-            // Use a /bin/sh wrapper so we can guarantee DOTNET_ROOT and PATH are scoped to the
-            // child. brew's `dotnet@8` is keg-only - without these, `func` (a Node.js script)
-            // happily finds the system `dotnet` 10 and the build fails trying to load .NET 10's
-            // hostfxr against a DOTNET_ROOT we've redirected to .NET 8.
-            // ArgumentList passes each arg verbatim, so we don't have to worry about argv re-parsing.
-            var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            // `dotnet test` injects MSBuild/SDK env vars (MSBuildExtensionsPath,
-            // MSBuildSDKsPath, DOTNET_HOST_PATH, MSBuildLoadMicrosoftTargetsReadOnly, etc.)
-            // pointing at the .NET 10 SDK that ran the test. They poison the SDK-8 build that
-            // func is about to perform - unset everything that could redirect MSBuild lookups.
-            var shellCommand = "unset MSBuildExtensionsPath MSBuildSDKsPath MSBuildLoadMicrosoftTargetsReadOnly " +
-                               "DOTNET_HOST_PATH DOTNET_CLI_TELEMETRY_SESSIONID DOTNET_ADD_GLOBAL_TOOLS_TO_PATH " +
-                               "DOTNET_NOLOGO MSBuildToolsPath MSBUILD_EXE_PATH MSBuildBinPath; " +
-                               $"export DOTNET_ROOT={ShellQuote(dotnet8Root!)}; " +
-                               $"export PATH={ShellQuote(dotnet8Root!)}:{ShellQuote(existingPath)}; " +
-                               $"export OSB_FUNCTIONS_SENTINEL_FILE={ShellQuote(sentinelPath)}; " +
-                               $"exec {ShellQuote(funcExe!)} start --port {funcPort} --verbose";
-
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "/bin/sh",
-                WorkingDirectory = sampleDir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            startInfo.ArgumentList.Add("-c");
-            startInfo.ArgumentList.Add(shellCommand);
-
-            func = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to spawn `func` process.");
-            func.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (stdoutBuffer) stdoutBuffer.AppendLine(e.Data); };
-            func.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (stderrBuffer) stderrBuffer.AppendLine(e.Data); };
-            func.BeginOutputReadLine();
-            func.BeginErrorReadLine();
+            func = StartFunc(sampleDir, funcExe!, dotnet8Root!, sentinelPath, funcPort, stdoutBuffer, stderrBuffer);
 
             // Act - wait for func host to be ready, then dispatch 100 messages.
             await WaitForFuncReadyAsync(func, stdoutBuffer, stderrBuffer, TimeSpan.FromSeconds(180));
@@ -114,6 +80,141 @@ public class ServiceBusTriggerTests
             File.WriteAllText(localSettingsPath, originalSettings);
             try { if (File.Exists(sentinelPath)) File.Delete(sentinelPath); } catch { /* best effort */ }
         }
+    }
+
+    [SkippableFact]
+    public async Task ServiceBusTrigger_SurvivesQueueDeleteAndRecreate_WithoutDrainTimeout()
+    {
+        // Regression for issue #36: deleting + recreating an entity while a
+        // ServiceBusTrigger stays attached used to strand the trigger's receiver - its
+        // close stalled on "The operation did not complete within the allocated time
+        // 00:01:00 for object drain" because the broker never detached links whose
+        // entity was deleted.
+        var funcExe = FuncRuntime.FindFunc();
+        Skip.If(funcExe is null,
+            "Azure Functions Core Tools (`func`) not on PATH. Install: `brew install azure/functions/azure-functions-core-tools@4` or `npm i -g azure-functions-core-tools@4`.");
+        var dotnet8Root = FuncRuntime.DiscoverDotNet8Root();
+        Skip.If(dotnet8Root is null,
+            "Microsoft.NETCore.App 8.x runtime is required to host the Functions worker. Install via `brew install dotnet@8` or the official .NET 8 installer.");
+
+        var sampleDir = FuncRuntime.ResolveSampleProjectDir();
+        var sentinelPath = Path.Combine(Path.GetTempPath(), $"osb-functions-{Guid.NewGuid():N}.log");
+        var funcPort = GetFreePort();
+
+        await using var broker = await OpenServiceBusTestHost.StartAsync();
+        await broker.CreateQueueAsync(QueueName);
+
+        var localSettingsPath = Path.Combine(sampleDir, "local.settings.json");
+        var originalSettings = File.ReadAllText(localSettingsPath);
+        File.WriteAllText(localSettingsPath, BuildLocalSettings(broker.ConnectionString));
+        SafeDelete(Path.Combine(sampleDir, "obj"));
+        SafeDelete(Path.Combine(sampleDir, "bin"));
+
+        Process? func = null;
+        var stdoutBuffer = new StringBuilder();
+        var stderrBuffer = new StringBuilder();
+        try
+        {
+            func = StartFunc(sampleDir, funcExe!, dotnet8Root!, sentinelPath, funcPort, stdoutBuffer, stderrBuffer);
+            await WaitForFuncReadyAsync(func, stdoutBuffer, stderrBuffer, TimeSpan.FromSeconds(180));
+
+            await using var client = new ServiceBusClient(broker.ConnectionString);
+            var sender = client.CreateSender(QueueName);
+
+            for (var i = 0; i < 10; i++)
+            {
+                await sender.SendMessageAsync(new ServiceBusMessage($"round-1-{i}") { MessageId = $"a-{i}" });
+            }
+            (await WaitForLinesAsync(sentinelPath, expectedLines: 10, func, TimeSpan.FromSeconds(120)))
+                .Length.ShouldBe(10, $"first round should be processed before the recreate.\nfunc stdout:\n{stdoutBuffer}\nfunc stderr:\n{stderrBuffer}");
+
+            var admin = new Azure.Messaging.ServiceBus.Administration.ServiceBusAdministrationClient(broker.ConnectionString);
+            await admin.DeleteQueueAsync(QueueName);
+            await admin.CreateQueueAsync(QueueName);
+
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            for (var i = 0; i < 10; i++)
+            {
+                while (true)
+                {
+                    try
+                    {
+                        await sender.SendMessageAsync(new ServiceBusMessage($"round-2-{i}") { MessageId = $"b-{i}" });
+                        break;
+                    }
+                    catch (ServiceBusException) when (DateTime.UtcNow < deadline)
+                    {
+                        await Task.Delay(250);
+                    }
+                }
+            }
+
+            var processed = await WaitForLinesAsync(sentinelPath, expectedLines: 20, func, TimeSpan.FromSeconds(120));
+            processed.Length.ShouldBe(20,
+                $"the trigger should reconnect after the recreate and process round 2.\nfunc stdout:\n{stdoutBuffer}\nfunc stderr:\n{stderrBuffer}");
+            for (var i = 0; i < 10; i++)
+            {
+                processed.ShouldContain($"a-{i}");
+                processed.ShouldContain($"b-{i}");
+            }
+
+            string stdoutSnapshot;
+            string stderrSnapshot;
+            lock (stdoutBuffer) stdoutSnapshot = stdoutBuffer.ToString();
+            lock (stderrBuffer) stderrSnapshot = stderrBuffer.ToString();
+            stdoutSnapshot.ShouldNotContain("for object drain");
+            stderrSnapshot.ShouldNotContain("for object drain");
+        }
+        finally
+        {
+            try { if (func is { HasExited: false }) func.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            func?.Dispose();
+            File.WriteAllText(localSettingsPath, originalSettings);
+            try { if (File.Exists(sentinelPath)) File.Delete(sentinelPath); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>
+    /// Spawns Azure Functions Core Tools via a /bin/sh wrapper so DOTNET_ROOT and PATH are
+    /// scoped to the child (brew's dotnet@8 is keg-only), with `dotnet test`'s injected
+    /// MSBuild/SDK-10 environment variables unset so func's SDK-8 build isn't poisoned.
+    /// </summary>
+    private static Process StartFunc(
+        string sampleDir,
+        string funcExe,
+        string dotnet8Root,
+        string sentinelPath,
+        int funcPort,
+        StringBuilder stdoutBuffer,
+        StringBuilder stderrBuffer)
+    {
+        var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var shellCommand = "unset MSBuildExtensionsPath MSBuildSDKsPath MSBuildLoadMicrosoftTargetsReadOnly " +
+                           "DOTNET_HOST_PATH DOTNET_CLI_TELEMETRY_SESSIONID DOTNET_ADD_GLOBAL_TOOLS_TO_PATH " +
+                           "DOTNET_NOLOGO MSBuildToolsPath MSBUILD_EXE_PATH MSBuildBinPath; " +
+                           $"export DOTNET_ROOT={ShellQuote(dotnet8Root)}; " +
+                           $"export PATH={ShellQuote(dotnet8Root)}:{ShellQuote(existingPath)}; " +
+                           $"export OSB_FUNCTIONS_SENTINEL_FILE={ShellQuote(sentinelPath)}; " +
+                           $"exec {ShellQuote(funcExe)} start --port {funcPort} --verbose";
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "/bin/sh",
+            WorkingDirectory = sampleDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("-c");
+        startInfo.ArgumentList.Add(shellCommand);
+
+        var func = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to spawn `func` process.");
+        func.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (stdoutBuffer) stdoutBuffer.AppendLine(e.Data); };
+        func.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (stderrBuffer) stderrBuffer.AppendLine(e.Data); };
+        func.BeginOutputReadLine();
+        func.BeginErrorReadLine();
+        return func;
     }
 
     private static async Task WaitForFuncReadyAsync(Process func, StringBuilder stdout, StringBuilder stderr, TimeSpan timeout)

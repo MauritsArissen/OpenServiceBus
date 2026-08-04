@@ -24,7 +24,7 @@ import java.util.regex.Pattern;
  *
  * Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
- *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete (ATOM management API)
+ *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -235,13 +235,59 @@ public final class Smoke {
             }
             results.add(blocked ? "PASS admin status gate" : "FAIL admin status gate: send on SendDisabled queue succeeded");
 
-            HttpResponse<String> del = http.send(
-                HttpRequest.newBuilder(queueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+            // 15. admin delete detach - deleting the queue while a receiver is live must
+            // not stall that receiver's close on a drain timeout (issue #36). The delete
+            // fires from a helper thread while the main thread waits in receiveMessages;
+            // the sync Java client sits out its own maxWaitTime after the detach, so the
+            // prompt-close assertion is on close() itself.
+            long closeElapsedMs = -1;
+            final int[] deleteStatus = {0};
+            ServiceBusReceiverClient doomedReceiver = new ServiceBusClientBuilder()
+                .connectionString(conn).retryOptions(retry)
+                .receiver().queueName(adminQueue).disableAutoComplete().buildClient();
+            try {
+                for (ServiceBusReceivedMessage m : doomedReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    doomedReceiver.complete(m);
+                }
+                Thread deleter = new Thread(() -> {
+                    try {
+                        Thread.sleep(500);
+                        deleteStatus[0] = http.send(
+                            HttpRequest.newBuilder(queueUri).DELETE().build(),
+                            HttpResponse.BodyHandlers.ofString()).statusCode();
+                    } catch (Exception ignored) {
+                    }
+                });
+                deleter.start();
+                try {
+                    for (ServiceBusReceivedMessage m : doomedReceiver.receiveMessages(1, Duration.ofSeconds(5))) {
+                        // deleted entity - nothing is expected here
+                    }
+                } catch (Exception ignored) {
+                }
+                deleter.join();
+                long started = System.nanoTime();
+                doomedReceiver.close();
+                closeElapsedMs = (System.nanoTime() - started) / 1_000_000;
+            } catch (Exception e) {
+                results.add("FAIL admin delete detach: " + e);
+            } finally {
+                try {
+                    doomedReceiver.close();
+                } catch (Exception ignored) {
+                }
+            }
+            if (closeElapsedMs >= 0) {
+                results.add(closeElapsedMs < 10_000
+                    ? "PASS admin delete detach"
+                    : "FAIL admin delete detach: close took " + closeElapsedMs + "ms");
+            }
+
             HttpResponse<String> gone = http.send(
                 HttpRequest.newBuilder(queueUri).GET().build(), HttpResponse.BodyHandlers.ofString());
-            results.add(del.statusCode() == 200 && gone.statusCode() == 404
+            results.add(deleteStatus[0] == 200 && gone.statusCode() == 404
                 ? "PASS admin delete queue"
-                : "FAIL admin delete queue: delete " + del.statusCode() + ", get-after " + gone.statusCode());
+                : "FAIL admin delete queue: delete " + deleteStatus[0] + ", get-after " + gone.statusCode());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);
         }

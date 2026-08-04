@@ -41,3 +41,5 @@ src/OpenServiceBus.Explorer/wwwroot/
 
 # Local scratch art / testbeds
 /tmp/
+
+.venv/

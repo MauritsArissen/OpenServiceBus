@@ -2,7 +2,7 @@
 //
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
-//   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete (ATOM management API)
+//   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -145,7 +145,22 @@ const run = async () => {
   await reopened.close();
   check("admin status gate", blocked);
 
+  // 15. admin delete detach - deleting the queue under a live receiver must detach the
+  // link promptly instead of stalling the close on the SDK's drain timeout (issue #36).
+  const doomedReceiver = client.createReceiver(adminQueue);
+  const leftover = await doomedReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  if (leftover.length === 1) await doomedReceiver.completeMessage(leftover[0]);
+  const pendingReceive = doomedReceiver
+    .receiveMessages(1, { maxWaitTimeInMs: 30_000 })
+    .catch(() => []);
+  await new Promise((resolve) => setTimeout(resolve, 500));
   const del = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`, { method: "DELETE" });
+  const closeStart = Date.now();
+  await doomedReceiver.close();
+  const closeMs = Date.now() - closeStart;
+  await pendingReceive;
+  check("admin delete detach", closeMs < 10_000, `${closeMs}ms`);
+
   const gone = await fetch(`${httpBase}/${adminQueue}?api-version=2021-05`);
   check("admin delete queue", del.status === 200 && gone.status === 404);
 };
