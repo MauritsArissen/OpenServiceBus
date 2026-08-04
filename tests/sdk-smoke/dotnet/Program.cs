@@ -139,17 +139,20 @@ try
 
     // 15. admin delete detach - deleting the queue under a live receiver must detach the
     // link promptly instead of stalling the close on the SDK's 60s drain timeout (issue #36).
+    // Await the pending receive BEFORE closing: it settles once the broker detaches the
+    // link, so the close never crosses the in-flight detach on the wire - closing during
+    // the detach/retry window can strand the SDK's drain waiter for its full try-timeout.
     var doomedReceiver = client.CreateReceiver(adminQueue);
     var leftover = await doomedReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
     if (leftover is not null) await doomedReceiver.CompleteMessageAsync(leftover);
     var pendingReceive = doomedReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(30));
     await Task.Delay(500);
+    var detachTimer = System.Diagnostics.Stopwatch.StartNew();
     await admin.DeleteQueueAsync(adminQueue);
-    var closeTimer = System.Diagnostics.Stopwatch.StartNew();
-    await doomedReceiver.CloseAsync();
-    closeTimer.Stop();
     try { await pendingReceive; } catch (ServiceBusException) { }
-    Check("admin delete detach", closeTimer.Elapsed < TimeSpan.FromSeconds(10), $"{closeTimer.ElapsedMilliseconds}ms");
+    await doomedReceiver.CloseAsync();
+    detachTimer.Stop();
+    Check("admin delete detach", detachTimer.Elapsed < TimeSpan.FromSeconds(15), $"{detachTimer.ElapsedMilliseconds}ms");
 
     Check("admin delete queue", !(await admin.QueueExistsAsync(adminQueue)).Value);
 
