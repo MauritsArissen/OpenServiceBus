@@ -9,10 +9,9 @@
 # fronted by a generated nginx server block for pr-<PR>.openservicebus.net. Deploys are
 # idempotent: rerunning replaces the containers and rewrites the nginx conf in place.
 #
-# Expects on the VPS: docker, nginx with a conf.d include, and a wildcard certificate
-# covering *.openservicebus.net at $CERT_PATH/$KEY_PATH (default: a Let's Encrypt
-# lineage named wildcard.openservicebus.net). `deploy` also expects GHCR_USER and
-# GHCR_TOKEN in the environment for the registry login.
+# Expects on the VPS: docker, nginx with a conf.d include, and a Cloudflare origin
+# certificate covering *.openservicebus.net at $CERT_PATH/$KEY_PATH. `deploy` also
+# expects GHCR_USER and GHCR_TOKEN in the environment for the registry login.
 set -eu
 
 COMMAND="${1:?usage: pr-preview.sh deploy|teardown <pr-number> [app-image] [seeder-image]}"
@@ -23,8 +22,8 @@ NAME="osb-pr-${PR}"
 PORT=$((20000 + PR % 10000))
 DOMAIN="pr-${PR}.openservicebus.net"
 CONF="/etc/nginx/conf.d/${NAME}.conf"
-CERT_PATH="${CERT_PATH:-/etc/letsencrypt/live/wildcard.openservicebus.net/fullchain.pem}"
-KEY_PATH="${KEY_PATH:-/etc/letsencrypt/live/wildcard.openservicebus.net/privkey.pem}"
+CERT_PATH="${CERT_PATH:-/etc/ssl/cloudflare/openservicebus.net.pem}"
+KEY_PATH="${KEY_PATH:-/etc/ssl/cloudflare/openservicebus.net.key}"
 CONNECTION="Endpoint=sb://127.0.0.1:5672;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true"
 
 reload_nginx() {
