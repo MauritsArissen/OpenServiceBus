@@ -1,0 +1,150 @@
+name: PR preview
+
+# Every open PR into main gets a live demo-style environment at
+# https://pr-<number>.openservicebus.net: the broker+Explorer image plus the demo seeder,
+# rebuilt and redeployed on every push, torn down when the PR closes or merges.
+# Deliberately separate from the CI workflow so build/test results and previews never
+# block each other. Same-repo PRs only: fork PRs have no access to the deploy secrets.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write
+
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  APP_IMAGE: ghcr.io/mauritsarissen/openservicebus-preview:pr-${{ github.event.pull_request.number }}
+  SEEDER_IMAGE: ghcr.io/mauritsarissen/openservicebus-preview-seeder:pr-${{ github.event.pull_request.number }}
+  PREVIEW_URL: https://pr-${{ github.event.pull_request.number }}.openservicebus.net
+
+jobs:
+  deploy:
+    name: Build & deploy preview
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment:
+      name: PR preview
+      url: https://pr-${{ github.event.pull_request.number }}.openservicebus.net
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push broker+Explorer image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.APP_IMAGE }}
+          build-args: VERSION=pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha,scope=preview-app
+          cache-to: type=gha,scope=preview-app,mode=max
+
+      - name: Build & push demo seeder image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/OpenServiceBus.DemoSeeder/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.SEEDER_IMAGE }}
+          cache-from: type=gha,scope=preview-seeder
+          cache-to: type=gha,scope=preview-seeder,mode=max
+
+      - name: Sync deploy script to VPS
+        uses: burnett01/rsync-deployments@v8
+        with:
+          switches: -avz --chmod=F755
+          path: .github/preview/pr-preview.sh
+          remote_path: /srv/osb-previews/bin/
+          remote_host: ${{ secrets.VPS_HOST }}
+          remote_user: ${{ secrets.VPS_USER }}
+          remote_key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Deploy on VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: GHCR_USER,GHCR_TOKEN,APP_IMAGE,SEEDER_IMAGE
+          script: /srv/osb-previews/bin/pr-preview.sh deploy ${{ github.event.pull_request.number }} "$APP_IMAGE" "$SEEDER_IMAGE"
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+
+      - name: Comment preview URL on the PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-preview
+          message: |
+            **Preview environment**: ${{ env.PREVIEW_URL }}
+
+            Demo-mode Explorer + broker for this PR. Redeploys on every push; removed when the PR closes.
+            Last deployed: `${{ github.event.pull_request.head.sha }}`
+
+  teardown:
+    name: Tear down preview
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Sync deploy script to VPS
+        uses: burnett01/rsync-deployments@v8
+        with:
+          switches: -avz --chmod=F755
+          path: .github/preview/pr-preview.sh
+          remote_path: /srv/osb-previews/bin/
+          remote_host: ${{ secrets.VPS_HOST }}
+          remote_user: ${{ secrets.VPS_USER }}
+          remote_key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Remove from VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: /srv/osb-previews/bin/pr-preview.sh teardown ${{ github.event.pull_request.number }}
+
+      # Uses the workflow's own GITHUB_TOKEN: packages first published by this workflow
+      # are repo-linked with admin access, so no extra PAT scope is needed for cleanup.
+      - name: Delete preview image tags from GHCR
+        continue-on-error: true
+        run: |
+          for pkg in openservicebus-preview openservicebus-preview-seeder; do
+            version_id=$(gh api "user/packages/container/${pkg}/versions" \
+              --jq '.[] | select(.metadata.container.tags[]? == "pr-${{ github.event.pull_request.number }}") | .id' | head -1)
+            if [ -n "$version_id" ]; then
+              gh api -X DELETE "user/packages/container/${pkg}/versions/${version_id}"
+            fi
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mark the preview comment as removed
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-preview
+          message: |
+            **Preview environment**: removed (PR closed).

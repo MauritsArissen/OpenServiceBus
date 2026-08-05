@@ -68,6 +68,12 @@ either is missing.
 - **Document non-obvious comments.** WHY a line exists, not what it does. Reference the SDK source line if you decompiled to figure something out.
 - **Single-responsibility assemblies.** Adding a new dependency on a heavyweight package (e.g. EF Core, gRPC) should go in a new optional assembly so `OpenServiceBus.Core` and `OpenServiceBus.Testing` stay light.
 
+## PR previews
+
+Every open PR into `main` gets a live demo environment at
+`https://pr-<number>.openservicebus.net`, redeployed on every push and removed on
+close - see [PR Previews](PR-Previews).
+
 ## Adding a milestone
 
 The roadmap is in [`docs/ROADMAP.md`](ROADMAP). When picking up a new milestone:
