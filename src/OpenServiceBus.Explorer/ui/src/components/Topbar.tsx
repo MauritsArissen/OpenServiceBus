@@ -23,6 +23,9 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
     localStorage.setItem(LS_THEME, dark ? "dark" : "light");
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", dark ? "#0a0a0a" : "#ffffff");
   }, [dark]);
 
   const meta = STATUS_META[status];

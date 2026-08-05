@@ -6,9 +6,25 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
-    <!-- No browser-chrome theme colour anywhere (neither this meta nor the manifest): the
-         Explorer defaults to a light theme, so a fixed dark value makes iOS Safari paint a solid
-         dark bottom bar over the light UI instead of its translucent, page-adaptive material. -->
+    <!-- Browser-chrome colour must FOLLOW the app's own theme toggle, so it is never a fixed
+         value (a static dark value painted a dark bar over the light UI - the old bug). The
+         inline script runs before first paint: it applies the persisted theme class (no dark-mode
+         flash) and points this meta at the matching background; the Topbar keeps both in sync on
+         toggle. Colours mirror --background in index.css. -->
+    <meta name="theme-color" content="#ffffff" />
+    <script>
+      (function () {
+        var dark = false;
+        try {
+          dark = localStorage.getItem("osb_theme") === "dark";
+        } catch (e) {
+          /* storage blocked - stay light */
+        }
+        document.documentElement.classList.toggle("dark", dark);
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", dark ? "#0a0a0a" : "#ffffff");
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenServiceBus Explorer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
