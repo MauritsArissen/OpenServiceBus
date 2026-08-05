@@ -16,16 +16,17 @@ export default function App() {
   return (
     <StoreProvider>
       <TooltipProvider delayDuration={200}>
-        <div className="flex h-full flex-col pb-[env(safe-area-inset-bottom)]">
+        <div className="flex h-full flex-col pb-[max(0.5rem,env(safe-area-inset-bottom))] md:pb-0">
           <Topbar onMenuClick={() => setSidebarOpen((v) => !v)} />
           <div className="relative flex min-h-0 flex-1">
             <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
             {/* Backdrop for the mobile drawer - tap to dismiss. Sits below the sidebar
-                (z-40) and above the content, only on phones. */}
+                (z-40) and above the content, only on phones. Absolute within the content
+                container, never viewport-fixed - see the note on the Sidebar drawer. */}
             {sidebarOpen && (
               <button
                 aria-label="Close sidebar"
-                className="fixed inset-x-0 bottom-0 top-[3.25rem] z-30 bg-black/50 md:hidden"
+                className="absolute inset-0 z-30 bg-black/50 md:hidden"
                 onClick={() => setSidebarOpen(false)}
               />
             )}
