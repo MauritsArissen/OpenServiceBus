@@ -127,6 +127,8 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: /srv/osb-previews/bin/pr-preview.sh teardown ${{ github.event.pull_request.number }}
 
+      # Uses the workflow's own GITHUB_TOKEN: packages first published by this workflow
+      # are repo-linked with admin access, so no extra PAT scope is needed for cleanup.
       - name: Delete preview image tags from GHCR
         continue-on-error: true
         run: |
@@ -138,7 +140,7 @@ jobs:
             fi
           done
         env:
-          GH_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Mark the preview comment as removed
         uses: marocchino/sticky-pull-request-comment@v2
