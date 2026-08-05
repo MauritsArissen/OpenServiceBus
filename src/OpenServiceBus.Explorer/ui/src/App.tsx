@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Toaster } from "sonner";
 import { DialogHost } from "@/components/DialogHost";
 import { EntityView } from "@/components/EntityView";
@@ -6,7 +6,6 @@ import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UpdateBanner } from "@/components/UpdateBanner";
-import { setThemeColorDimmed } from "@/lib/theme";
 import { StoreProvider } from "@/store";
 
 export default function App() {
@@ -14,17 +13,10 @@ export default function App() {
   // and this flag is irrelevant (the sidebar is always shown there).
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // The drawer's scrim only exists below md (the backdrop is md:hidden), so only dim
-  // the browser chrome there - and explicitly restore it on close.
-  useEffect(() => {
-    setThemeColorDimmed(sidebarOpen && window.matchMedia("(max-width: 767px)").matches);
-    return () => setThemeColorDimmed(false);
-  }, [sidebarOpen]);
-
   return (
     <StoreProvider>
       <TooltipProvider delayDuration={200}>
-        <div className="flex h-full flex-col">
+        <div className="flex h-full flex-col pb-[env(safe-area-inset-bottom)]">
           <Topbar onMenuClick={() => setSidebarOpen((v) => !v)} />
           <div className="relative flex min-h-0 flex-1">
             <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
