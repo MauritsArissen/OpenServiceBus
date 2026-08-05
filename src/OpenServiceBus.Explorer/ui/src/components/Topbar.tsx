@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { displayName } from "@/lib/format";
+import { syncThemeColor } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { LS_THEME, useStore } from "@/store";
 import { BrandMark } from "./BrandMark";
@@ -23,9 +24,7 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
     localStorage.setItem(LS_THEME, dark ? "dark" : "light");
-    document
-      .querySelector('meta[name="theme-color"]')
-      ?.setAttribute("content", dark ? "#0a0a0a" : "#ffffff");
+    syncThemeColor();
   }, [dark]);
 
   const meta = STATUS_META[status];
