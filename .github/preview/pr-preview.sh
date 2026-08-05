@@ -80,7 +80,7 @@ server {
     ssl_certificate     ${CERT_PATH};
     ssl_certificate_key ${KEY_PATH};
 
-    return 302 https://www.openservicebus.net/404;
+    return 302 https://www.openservicebus.net/404/;
 }
 NGINX
 
