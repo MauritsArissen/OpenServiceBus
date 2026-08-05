@@ -260,6 +260,7 @@ public sealed class TopicSenderProcessor : IMessageProcessor
         {
             usage += _store.GetSizeInBytes(sub.BackingQueueName);
             usage += _store.GetSizeInBytes(sub.BackingQueueName + EntityNames.DeadLetterSuffix);
+            usage += _store.GetSizeInBytes(sub.BackingQueueName + EntityNames.TransferDeadLetterSuffix);
         }
         return usage;
     }

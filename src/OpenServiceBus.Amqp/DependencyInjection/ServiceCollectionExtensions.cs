@@ -1,3 +1,4 @@
+using OpenServiceBus.Amqp.DeadLettering;
 using OpenServiceBus.Amqp.Diagnostics;
 using OpenServiceBus.Amqp.Hosting;
 using OpenServiceBus.Amqp.Lifecycle;
@@ -7,6 +8,7 @@ using OpenServiceBus.Amqp.WebSockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using OpenServiceBus.Core.Filters;
+using OpenServiceBus.Core.Routing;
 
 namespace OpenServiceBus.Amqp.DependencyInjection;
 
@@ -28,6 +30,7 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IRuleActionApplier, AmqpRuleActionApplier>();
+        services.TryAddSingleton<IDeadLetterAnnotator, AmqpDeadLetterAnnotator>();
         services.TryAddSingleton<Core.Storage.EntityActivityTracker>();
         services.TryAddSingleton<AmqpListenerHost>();
         services.AddHostedService(sp => sp.GetRequiredService<AmqpListenerHost>());

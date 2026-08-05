@@ -81,6 +81,7 @@ public sealed class EntityPurger
         if (!deadLetterOnly)
         {
             purged += await _store.PurgeAsync(backingQueue, cancellationToken).ConfigureAwait(false);
+            purged += await _store.PurgeAsync(backingQueue + EntityNames.TransferDeadLetterSuffix, cancellationToken).ConfigureAwait(false);
         }
         purged += await _store.PurgeAsync(backingQueue + EntityNames.DeadLetterSuffix, cancellationToken).ConfigureAwait(false);
         return purged;

@@ -19,6 +19,7 @@ public sealed class MessageRouter : IMessageRouter
     private readonly ILogger<MessageRouter> _logger;
     private readonly IRuleActionApplier? _actionApplier;
     private readonly EntityActivityTracker? _activity;
+    private readonly IDeadLetterAnnotator? _deadLetterAnnotator;
 
     public MessageRouter(
         IQueueRegistry queues,
@@ -26,7 +27,8 @@ public sealed class MessageRouter : IMessageRouter
         ILogger<MessageRouter> logger,
         ITopicRegistry? topics = null,
         IRuleActionApplier? actionApplier = null,
-        EntityActivityTracker? activityTracker = null)
+        EntityActivityTracker? activityTracker = null,
+        IDeadLetterAnnotator? deadLetterAnnotator = null)
     {
         _queues = queues;
         _topics = topics;
@@ -34,6 +36,7 @@ public sealed class MessageRouter : IMessageRouter
         _logger = logger;
         _actionApplier = actionApplier;
         _activity = activityTracker;
+        _deadLetterAnnotator = deadLetterAnnotator;
     }
 
     public async Task<IReadOnlyList<string>> RouteAsync(
@@ -46,13 +49,14 @@ public sealed class MessageRouter : IMessageRouter
         TimeSpan? duplicateDetectionWindow = null,
         MessageFilterContext? filterContext = null,
         int deliveryCount = 0,
+        string? forwardSource = null,
         CancellationToken cancellationToken = default)
     {
         var landed = new List<string>();
         await RouteInternalAsync(
             targetEntityName, encodedMessage, expiresAt, scheduledEnqueueTime,
             sessionId, messageId, duplicateDetectionWindow, filterContext, deliveryCount,
-            depth: 0, landed, cancellationToken).ConfigureAwait(false);
+            depth: 0, landed, forwardSource, cancellationToken).ConfigureAwait(false);
         return landed;
     }
 
@@ -68,13 +72,23 @@ public sealed class MessageRouter : IMessageRouter
         int deliveryCount,
         int depth,
         List<string> landed,
+        string? forwardSource,
         CancellationToken cancellationToken)
     {
-        if (depth >= ((IMessageRouter)this).MaxForwardDepth)
+        var maxDepth = ((IMessageRouter)this).MaxForwardDepth;
+        if (depth >= maxDepth)
         {
+            if (forwardSource is not null)
+            {
+                await TransferDeadLetterAsync(
+                    forwardSource, encoded, "MaxTransferHopCountExceeded",
+                    $"The maximum number of transfer hops ({maxDepth}) was exceeded while forwarding to '{targetEntityName}'.",
+                    deliveryCount, landed, cancellationToken).ConfigureAwait(false);
+                return;
+            }
             _logger.LogWarning(
                 "Auto-forward chain exceeded {MaxDepth} hops at '{Target}' - message dropped to prevent loops.",
-                ((IMessageRouter)this).MaxForwardDepth, targetEntityName);
+                maxDepth, targetEntityName);
             return;
         }
 
@@ -85,6 +99,27 @@ public sealed class MessageRouter : IMessageRouter
             var topic = await _topics.GetTopicAsync(targetEntityName, cancellationToken).ConfigureAwait(false);
             if (topic is not null)
             {
+                if (forwardSource is not null)
+                {
+                    if (!topic.Status.AcceptsSends())
+                    {
+                        await TransferDeadLetterAsync(
+                            forwardSource, encoded, "MessagingEntityDisabled",
+                            $"The forward target topic '{topic.Name}' is {topic.Status} and does not accept messages.",
+                            deliveryCount, landed, cancellationToken).ConfigureAwait(false);
+                        return;
+                    }
+                    var topicUsage = await TopicUsageBytesAsync(topic.Name, cancellationToken).ConfigureAwait(false);
+                    if (topicUsage + encoded.Length > topic.MaxSizeInMegabytes * 1024L * 1024L)
+                    {
+                        await TransferDeadLetterAsync(
+                            forwardSource, encoded, "QuotaExceeded",
+                            $"The forward target topic '{topic.Name}' has reached its {topic.MaxSizeInMegabytes} MB quota.",
+                            deliveryCount, landed, cancellationToken).ConfigureAwait(false);
+                        return;
+                    }
+                }
+
                 if (filterContext is null)
                 {
                     _logger.LogWarning(
@@ -125,7 +160,7 @@ public sealed class MessageRouter : IMessageRouter
                     {
                         await RouteInternalAsync(sub.ForwardTo, subEncoded, expiresAt, scheduledFor,
                             sessionId, messageId, dedupWindow, filterContext, deliveryCount,
-                            depth + 1, landed, cancellationToken).ConfigureAwait(false);
+                            depth + 1, landed, sub.BackingQueueName, cancellationToken).ConfigureAwait(false);
                         continue;
                     }
 
@@ -157,7 +192,24 @@ public sealed class MessageRouter : IMessageRouter
         var queue = await _queues.GetAsync(targetEntityName, cancellationToken).ConfigureAwait(false);
         if (queue is null)
         {
+            if (forwardSource is not null)
+            {
+                await TransferDeadLetterAsync(
+                    forwardSource, encoded, "MessagingEntityNotFound",
+                    $"The forward target '{targetEntityName}' does not exist.",
+                    deliveryCount, landed, cancellationToken).ConfigureAwait(false);
+                return;
+            }
             _logger.LogWarning("Routing target '{Target}' resolves to neither a topic nor a queue - message dropped.", targetEntityName);
+            return;
+        }
+
+        if (forwardSource is not null && !queue.Status.AcceptsSends())
+        {
+            await TransferDeadLetterAsync(
+                forwardSource, encoded, "MessagingEntityDisabled",
+                $"The forward target '{queue.Name}' is {queue.Status} and does not accept messages.",
+                deliveryCount, landed, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -165,8 +217,23 @@ public sealed class MessageRouter : IMessageRouter
         {
             await RouteInternalAsync(queue.ForwardTo, encoded, expiresAt, scheduledFor,
                 sessionId, messageId, dedupWindow, filterContext, deliveryCount,
-                depth + 1, landed, cancellationToken).ConfigureAwait(false);
+                depth + 1, landed, queue.Name, cancellationToken).ConfigureAwait(false);
             return;
+        }
+
+        if (forwardSource is not null)
+        {
+            var usage = _store.GetSizeInBytes(queue.Name)
+                + _store.GetSizeInBytes(queue.Name + EntityNames.DeadLetterSuffix)
+                + _store.GetSizeInBytes(queue.Name + EntityNames.TransferDeadLetterSuffix);
+            if (usage + encoded.Length > queue.MaxSizeInMegabytes * 1024L * 1024L)
+            {
+                await TransferDeadLetterAsync(
+                    forwardSource, encoded, "QuotaExceeded",
+                    $"The forward target '{queue.Name}' has reached its {queue.MaxSizeInMegabytes} MB quota.",
+                    deliveryCount, landed, cancellationToken).ConfigureAwait(false);
+                return;
+            }
         }
 
         await _store.EnqueueAsync(
@@ -174,5 +241,54 @@ public sealed class MessageRouter : IMessageRouter
             sessionId, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
         landed.Add(queue.Name);
         _activity?.Touch(queue.Name);
+    }
+
+    /// <summary>
+    /// A forward hop could not be delivered: move the message to the forwarding entity's
+    /// transfer dead-letter queue with the Service Bus dead-letter metadata stamped on.
+    /// Mirrors regular dead-lettering: no session affinity, no scheduling, no TTL.
+    /// </summary>
+    private async Task TransferDeadLetterAsync(
+        string sourceEntity,
+        byte[] encoded,
+        string reason,
+        string description,
+        int deliveryCount,
+        List<string> landed,
+        CancellationToken cancellationToken)
+    {
+        var target = sourceEntity + EntityNames.TransferDeadLetterSuffix;
+        var stamped = _deadLetterAnnotator?.Annotate(encoded, sourceEntity, reason, description) ?? encoded;
+        try
+        {
+            await _store.EnqueueAsync(
+                target, stamped, expiresAt: null, scheduledEnqueueTime: null,
+                sessionId: null, messageId: null, duplicateDetectionWindow: null,
+                deliveryCount, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            _logger.LogWarning(
+                "Transfer dead-letter queue '{Target}' does not exist - message from '{Source}' dropped ({Reason}).",
+                target, sourceEntity, reason);
+            return;
+        }
+        landed.Add(target);
+        _activity?.Touch(sourceEntity);
+        _logger.LogWarning(
+            "Forward hop from '{Source}' failed ({Reason}) - message moved to its transfer dead-letter queue. {Description}",
+            sourceEntity, reason, description);
+    }
+
+    private async Task<long> TopicUsageBytesAsync(string topicName, CancellationToken cancellationToken)
+    {
+        long usage = 0;
+        foreach (var sub in await _topics!.ListSubscriptionsAsync(topicName, cancellationToken).ConfigureAwait(false))
+        {
+            usage += _store.GetSizeInBytes(sub.BackingQueueName);
+            usage += _store.GetSizeInBytes(sub.BackingQueueName + EntityNames.DeadLetterSuffix);
+            usage += _store.GetSizeInBytes(sub.BackingQueueName + EntityNames.TransferDeadLetterSuffix);
+        }
+        return usage;
     }
 }

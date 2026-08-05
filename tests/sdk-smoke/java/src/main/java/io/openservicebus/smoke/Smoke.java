@@ -7,6 +7,7 @@ import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
 import com.azure.messaging.servicebus.ServiceBusReceiverClient;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import com.azure.messaging.servicebus.ServiceBusSessionReceiverClient;
+import com.azure.messaging.servicebus.models.SubQueue;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -25,7 +26,7 @@ import java.util.regex.Pattern;
  * Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
- *   -> purge (JSON management API)
+ *   -> purge (JSON management API) -> transfer dlq
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -328,6 +329,49 @@ public final class Smoke {
                 : "FAIL admin purge: status " + purgeResp.statusCode() + ", body " + purgeResp.body());
             http.send(
                 HttpRequest.newBuilder(purgeQueueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+
+            // 17. transfer dlq - a send whose auto-forward target was deleted lands in the
+            // source queue's $Transfer/$DeadLetterQueue with a descriptive reason (issue #25).
+            String fwdTarget = "smoke-fwd-target-" + stamp;
+            String fwdSource = "smoke-fwd-" + stamp;
+            URI fwdTargetUri = URI.create(base + "/" + fwdTarget + "?api-version=2021-05");
+            URI fwdSourceUri = URI.create(base + "/" + fwdSource + "?api-version=2021-05");
+            http.send(
+                HttpRequest.newBuilder(fwdTargetUri)
+                    .header("Content-Type", "application/atom+xml")
+                    .PUT(HttpRequest.BodyPublishers.ofString(emptyQueueXml)).build(),
+                HttpResponse.BodyHandlers.ofString());
+            String fwdXml =
+                "<entry xmlns=\"http://www.w3.org/2005/Atom\"><content type=\"application/xml\">"
+                + "<QueueDescription xmlns=\"http://schemas.microsoft.com/netservices/2010/10/servicebus/connect\">"
+                + "<ForwardTo>" + fwdTarget + "</ForwardTo></QueueDescription></content></entry>";
+            http.send(
+                HttpRequest.newBuilder(fwdSourceUri)
+                    .header("Content-Type", "application/atom+xml")
+                    .PUT(HttpRequest.BodyPublishers.ofString(fwdXml)).build(),
+                HttpResponse.BodyHandlers.ofString());
+            http.send(
+                HttpRequest.newBuilder(fwdTargetUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+            try (ServiceBusSenderClient fwdSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(fwdSource).buildClient()) {
+                fwdSender.sendMessage(new ServiceBusMessage("undeliverable"));
+            }
+            String movedReason = null;
+            try (ServiceBusReceiverClient transferReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(fwdSource).subQueue(SubQueue.TRANSFER_DEAD_LETTER_QUEUE)
+                    .disableAutoComplete().buildClient()) {
+                for (ServiceBusReceivedMessage m : transferReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    movedReason = m.getDeadLetterReason();
+                    transferReceiver.complete(m);
+                }
+            }
+            results.add("MessagingEntityNotFound".equals(movedReason)
+                ? "PASS transfer dlq"
+                : "FAIL transfer dlq: reason " + movedReason);
+            http.send(
+                HttpRequest.newBuilder(fwdSourceUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);
         }

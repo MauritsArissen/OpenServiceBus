@@ -491,7 +491,8 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
             : _descriptor.ForwardDeadLetteredMessagesTo!;
         // Management-plane dead-letter always settles a delivery the client is holding
         // (receive-by-sequence / deferred), so that delivery counts toward the history.
-        await _router.RouteAsync(dlqTarget, dlqBytes, deliveryCount: removed.DeliveryCount + 1).ConfigureAwait(false);
+        await _router.RouteAsync(dlqTarget, dlqBytes, deliveryCount: removed.DeliveryCount + 1,
+            forwardSource: string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo) ? null : _entityName).ConfigureAwait(false);
     }
 
     private Message HandleAddRule(Message request)

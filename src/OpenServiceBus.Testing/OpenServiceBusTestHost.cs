@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using OpenServiceBus.Amqp.DeadLettering;
 using OpenServiceBus.Amqp.Diagnostics;
 using OpenServiceBus.Amqp.Hosting;
 using OpenServiceBus.Amqp.Lifecycle;
@@ -151,7 +152,7 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
         var topics = new TopicManager(queues);
         var activity = new EntityActivityTracker(opts.TimeProvider);
         var router = new MessageRouter(queues, storeAsIface, NullLogger<MessageRouter>.Instance, topics,
-            new AmqpRuleActionApplier(opts.TimeProvider), activity);
+            new AmqpRuleActionApplier(opts.TimeProvider), activity, new AmqpDeadLetterAnnotator());
         var transactions = new TransactionManager(NullLogger<TransactionManager>.Instance);
 
         var listener = new AmqpListenerHost(

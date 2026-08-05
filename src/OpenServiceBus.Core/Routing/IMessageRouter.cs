@@ -36,6 +36,13 @@ public interface IMessageRouter
     /// count the message had when it was dead-lettered, matching Azure Service Bus where a
     /// moved message keeps its delivery history.
     /// </param>
+    /// <param name="forwardSource">
+    /// The entity whose <c>ForwardTo</c> (or <c>ForwardDeadLetteredMessagesTo</c>) caused
+    /// this call, when the call IS a forward hop. Enables transfer-dead-letter semantics: a
+    /// hop that cannot be delivered (missing, disabled, or full target; hop cap exceeded)
+    /// lands in this entity's <c>$Transfer/$DeadLetterQueue</c> instead of being dropped.
+    /// Null for direct sends, fan-out, and broker-internal DLQ moves.
+    /// </param>
     Task<IReadOnlyList<string>> RouteAsync(
         string targetEntityName,
         byte[] encodedMessage,
@@ -46,5 +53,6 @@ public interface IMessageRouter
         TimeSpan? duplicateDetectionWindow = null,
         MessageFilterContext? filterContext = null,
         int deliveryCount = 0,
+        string? forwardSource = null,
         CancellationToken cancellationToken = default);
 }

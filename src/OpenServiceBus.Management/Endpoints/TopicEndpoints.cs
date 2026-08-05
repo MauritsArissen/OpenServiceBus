@@ -73,24 +73,26 @@ public static class TopicEndpoints
         });
 
         // --- Subscriptions ---
-        group.MapGet("/{topic}/subscriptions", async (string topic, ITopicRegistry topics, IMessageStore store, CancellationToken ct) =>
+        group.MapGet("/{topic}/subscriptions", async (string topic, ITopicRegistry topics, IQueueRegistry registry, IMessageStore store, CancellationToken ct) =>
         {
             var subs = await topics.ListSubscriptionsAsync(topic, ct);
             var response = new List<SubscriptionResponse>(subs.Count);
             foreach (var sub in subs)
             {
                 var count = await store.CountAsync(sub.BackingQueueName, ct);
-                response.Add(SubscriptionResponse.From(sub, count));
+                response.Add(SubscriptionResponse.From(sub, count,
+                    await QueueEndpoints.TransferDeadLetteredCountAsync(registry, store, sub.BackingQueueName, ct)));
             }
             return Results.Ok(response);
         });
 
-        group.MapGet("/{topic}/subscriptions/{name}", async (string topic, string name, ITopicRegistry topics, IMessageStore store, CancellationToken ct) =>
+        group.MapGet("/{topic}/subscriptions/{name}", async (string topic, string name, ITopicRegistry topics, IQueueRegistry registry, IMessageStore store, CancellationToken ct) =>
         {
             var sub = await topics.GetSubscriptionAsync(topic, name, ct);
             if (sub is null) return Results.NotFound();
             var count = await store.CountAsync(sub.BackingQueueName, ct);
-            return Results.Ok(SubscriptionResponse.From(sub, count));
+            return Results.Ok(SubscriptionResponse.From(sub, count,
+                await QueueEndpoints.TransferDeadLetteredCountAsync(registry, store, sub.BackingQueueName, ct)));
         });
 
         group.MapPut("/{topic}/subscriptions/{name}", async (string topic, string name, CreateSubscriptionRequest? body, ITopicRegistry topics, CancellationToken ct) =>
@@ -300,9 +302,10 @@ public sealed record SubscriptionResponse(
     EntityStatus Status,
     TimeSpan? AutoDeleteOnIdle,
     string BackingQueueName,
-    long? ActiveMessageCount)
+    long? ActiveMessageCount,
+    long? TransferDeadLetterMessageCount = null)
 {
-    public static SubscriptionResponse From(SubscriptionDescriptor d, long? count = null) => new(
+    public static SubscriptionResponse From(SubscriptionDescriptor d, long? count = null, long? transferDeadLettered = null) => new(
         d.TopicName,
         d.Name,
         d.MaxDeliveryCount,
@@ -315,7 +318,8 @@ public sealed record SubscriptionResponse(
         d.Status,
         d.AutoDeleteOnIdle,
         d.BackingQueueName,
-        count);
+        count,
+        transferDeadLettered);
 }
 
 public sealed record RuleResponse(

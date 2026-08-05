@@ -289,6 +289,7 @@ public sealed class SessionReceiverSource : IMessageSource
         // See QueueReceiverSource.DeadLetterAsync for the delivery-count semantics.
         await _router.RouteAsync(dlqTarget, dlqBytes, expiresAt: null,
             deliveryCount: removed.DeliveryCount + (inFlightDelivery ? 1 : 0),
+            forwardSource: string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo) ? null : _entityName,
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 

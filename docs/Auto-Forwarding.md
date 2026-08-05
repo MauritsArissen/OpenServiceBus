@@ -75,15 +75,44 @@ await host.Topics.CreateSubscriptionAsync(new SubscriptionDescriptor
 Messages that match `eu`'s rules skip the subscription's backing queue entirely and route
 to `eu-aggregate`. Other subscriptions on the same topic are unaffected.
 
+## Transfer dead-letter queue
+
+Every queue and subscription has a transfer dead-letter sub-entity at
+`<entity>/$Transfer/$DeadLetterQueue`, matching Azure Service Bus. When a forward hop
+cannot be delivered, the message moves there instead of being dropped, stamped with
+`DeadLetterReason`, `DeadLetterErrorDescription`, and the `x-opt-deadletter-source`
+annotation:
+
+| Forward failure | `DeadLetterReason` |
+| --- | --- |
+| Target queue or topic no longer exists | `MessagingEntityNotFound` |
+| Target is `SendDisabled` / `Disabled` | `MessagingEntityDisabled` |
+| Target is over its `MaxSizeInMegabytes` quota | `QuotaExceeded` |
+| Chain exceeded the 4-hop cap | `MaxTransferHopCountExceeded` |
+
+The message lands in the transfer DLQ of the entity **whose forward failed** - for a
+chain A → B → C where C was deleted, that is B's. This covers `ForwardTo` and
+`ForwardDeadLetteredMessagesTo` hops (from live receives, TTL expiration, and
+management-plane dead-lettering alike).
+
+Receive from it with the SDK's dedicated sub-queue option or by raw path:
+
+```csharp
+var receiver = client.CreateReceiver("orders",
+    new ServiceBusReceiverOptions { SubQueue = SubQueue.TransferDeadLetter });
+```
+
+`TransferDeadLetterMessageCount` is reported on queue and subscription runtime
+properties (ATOM/`Get*RuntimePropertiesAsync` and the JSON REST API), the entity's
+size and quota include the transfer DLQ contents, and the Explorer shows a
+Transfer DLQ tab on every queue and subscription. Purging an entity purges its
+transfer DLQ along with it.
+
 ## Cycle protection
 
 Auto-forwarding has a **4-hop chain cap**, matching Azure Service Bus. If A → B → A → B → …
-the router drops the message at the 4th hop and logs a warning:
-
-```text
-warn: OpenServiceBus.Core.Routing.MessageRouter[0]
-      Auto-forward chain exceeded 4 hops at 'ring-a' - message dropped to prevent loops.
-```
+the router stops at the 4th hop and moves the message to the transfer dead-letter queue
+of the entity where the cap tripped, with reason `MaxTransferHopCountExceeded`.
 
 Self-forwarding (`ForwardTo == Name`) is rejected at creation time with
 `InvalidOperationException`.
@@ -95,8 +124,9 @@ Self-forwarding (`ForwardTo == Name`) is rejected at creation time with
 | `ForwardTo == Name`                                          | At create  | `InvalidOperationException`      |
 | `ForwardDeadLetteredMessagesTo == Name`                      | At create  | `InvalidOperationException`      |
 | Subscription `ForwardTo == BackingQueueName` or parent topic | At create  | `InvalidOperationException`      |
-| Target entity doesn't exist                                  | At runtime | Message dropped + warning logged |
-| Chain > 4 hops                                               | At runtime | Message dropped + warning logged |
+| Target entity doesn't exist                                  | At runtime | Transfer DLQ (`MessagingEntityNotFound`) |
+| Target disabled or over quota                                | At runtime | Transfer DLQ (`MessagingEntityDisabled` / `QuotaExceeded`) |
+| Chain > 4 hops                                               | At runtime | Transfer DLQ (`MaxTransferHopCountExceeded`) |
 
 Target existence is checked **lazily** at runtime so `config.json` bootstrap can declare
 queues + topics in any order without forcing a topological sort.

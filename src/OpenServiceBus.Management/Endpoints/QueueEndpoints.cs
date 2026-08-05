@@ -26,7 +26,8 @@ public static class QueueEndpoints
             {
                 var count = await store.CountAsync(q.Name, ct);
                 var (enqueued, completed) = store.LifetimeCounters(q.Name);
-                withCounts.Add(QueueResponse.From(q, count, enqueued, completed));
+                withCounts.Add(QueueResponse.From(q, count, enqueued, completed,
+                    await TransferDeadLetteredCountAsync(registry, store, q.Name, ct)));
             }
             return Results.Ok(withCounts);
         });
@@ -37,7 +38,8 @@ public static class QueueEndpoints
             if (queue is null) return Results.NotFound();
             var count = await store.CountAsync(name, ct);
             var (enqueued, completed) = store.LifetimeCounters(name);
-            return Results.Ok(QueueResponse.From(queue, count, enqueued, completed));
+            return Results.Ok(QueueResponse.From(queue, count, enqueued, completed,
+                await TransferDeadLetteredCountAsync(registry, store, name, ct)));
         });
 
         group.MapPut("/{name}", async (string name, CreateQueueRequest? body, IQueueRegistry registry, CancellationToken ct) =>
@@ -84,6 +86,14 @@ public static class QueueEndpoints
 
     // Compares the settings a PUT is asking for against an existing queue. Used to tell an
     // idempotent re-declaration (allowed) from an attempted update (rejected).
+    internal static async Task<long?> TransferDeadLetteredCountAsync(
+        IQueueRegistry registry, IMessageStore store, string queueName, CancellationToken ct)
+    {
+        var transferDlq = queueName + EntityNames.TransferDeadLetterSuffix;
+        if (await registry.GetAsync(transferDlq, ct) is null) return null;
+        return await store.CountAsync(transferDlq, ct);
+    }
+
     private static bool DescriptorMatchesRequest(QueueDescriptor existing, QueueDescriptor requested) =>
         existing.MaxDeliveryCount == requested.MaxDeliveryCount
         && existing.LockDuration == requested.LockDuration
@@ -152,9 +162,10 @@ public sealed record QueueResponse(
     long MaxMessageSizeInKilobytes,
     long? ActiveMessageCount,
     long? EnqueuedCount = null,
-    long? CompletedCount = null)
+    long? CompletedCount = null,
+    long? TransferDeadLetterMessageCount = null)
 {
-    public static QueueResponse From(QueueDescriptor d, long? count = null, long? enqueued = null, long? completed = null) => new(
+    public static QueueResponse From(QueueDescriptor d, long? count = null, long? enqueued = null, long? completed = null, long? transferDeadLettered = null) => new(
         d.Name,
         d.MaxDeliveryCount,
         d.LockDuration,
@@ -171,5 +182,6 @@ public sealed record QueueResponse(
         d.MaxMessageSizeInKilobytes,
         count,
         enqueued,
-        completed);
+        completed,
+        transferDeadLettered);
 }

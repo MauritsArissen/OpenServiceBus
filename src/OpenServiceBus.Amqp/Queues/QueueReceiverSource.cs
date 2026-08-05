@@ -371,6 +371,7 @@ public sealed class QueueReceiverSource : IMessageSource
         // pass the stored count as-is.
         await _router.RouteAsync(dlqTarget, dlqBytes, expiresAt: null,
             deliveryCount: removed.DeliveryCount + (inFlightDelivery ? 1 : 0),
+            forwardSource: string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo) ? null : _entityName,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // Dead-letter counter tagged with the source queue and reason - lets a dashboard

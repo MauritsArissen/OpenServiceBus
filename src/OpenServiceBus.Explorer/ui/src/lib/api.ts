@@ -6,6 +6,7 @@ export type QueueInfo = {
   name: string;
   activeMessageCount?: number;
   deadLetterMessageCount?: number;
+  transferDeadLetterMessageCount?: number;
   maxDeliveryCount?: number;
   lockDuration?: string;
   defaultMessageTimeToLive?: string | null;
