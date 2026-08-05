@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 const ROUTES = [
   { url: "/", out: "dist/index.html" },
   { url: "/examples", out: "dist/examples/index.html" },
+  { url: "/404", out: "dist/404/index.html" },
 ];
 
 const { render } = await import(pathToFileURL("dist-ssr/entry-server.js"));
