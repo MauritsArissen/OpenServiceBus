@@ -50,8 +50,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     <aside
       className={cn(
         "flex min-h-0 w-[300px] max-w-[85vw] flex-col border-r bg-sidebar text-sidebar-foreground",
-        // Mobile: off-canvas drawer that sits below the topbar and slides in/out.
-        "fixed bottom-0 left-0 top-[3.25rem] z-40 transition-transform duration-200",
+        // Mobile: off-canvas drawer that slides in/out. Positioned absolute WITHIN the
+        // content container (not viewport-fixed): iOS Safari tints its translucent bars
+        // from viewport-anchored fixed elements, and this app never scrolls the document,
+        // so a fixed drawer/scrim touching the bottom edge left the chrome tint stuck dark
+        // after closing. Inside the container it never enters that heuristic.
+        "absolute inset-y-0 left-0 z-40 transition-transform duration-200",
         open ? "translate-x-0" : "-translate-x-full",
         // Desktop (md+): static in-flow column, always visible.
         "md:static md:top-auto md:bottom-auto md:z-auto md:max-w-none md:translate-x-0 md:transition-none",

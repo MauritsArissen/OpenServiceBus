@@ -8,7 +8,7 @@ function TabsList({ className, ...props }: React.ComponentProps<typeof TabsPrimi
   return (
     <TabsPrimitive.List
       className={cn(
-        "flex h-auto w-full items-center justify-start gap-5 overflow-x-auto border-b bg-transparent p-0 text-muted-foreground",
+        "flex h-auto w-full items-center justify-start gap-5 overflow-x-auto overflow-y-hidden border-b bg-transparent p-0 text-muted-foreground",
         "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         className,
       )}
