@@ -66,6 +66,24 @@ deploy)
         -e SEEDER_RESET_INTERVAL_SECONDS=1800 \
         "$SEEDER_IMAGE"
 
+    # Default server for the *.openservicebus.net wildcard DNS record: any hostname
+    # without its own server block (unknown subdomains, torn-down previews) is sent to
+    # the website's 404 page instead of falling through to whichever server block nginx
+    # loads first. 302, not 301: a future preview subdomain visited before its deploy
+    # must not be permanently cached as a redirect by browsers.
+    cat > /etc/nginx/conf.d/osb-preview-000-catchall.conf <<NGINX
+server {
+    listen 80 default_server;
+    listen 443 ssl default_server;
+    server_name _;
+
+    ssl_certificate     ${CERT_PATH};
+    ssl_certificate_key ${KEY_PATH};
+
+    return 302 https://www.openservicebus.net/404;
+}
+NGINX
+
     cat > "$CONF" <<NGINX
 server {
     listen 80;
