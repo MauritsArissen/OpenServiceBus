@@ -3,7 +3,7 @@
 Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
-  -> purge (JSON management API)
+  -> purge (JSON management API) -> transfer dlq
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.
@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from azure.servicebus import ServiceBusClient, ServiceBusMessage
+from azure.servicebus import ServiceBusClient, ServiceBusMessage, ServiceBusSubQueue
 
 CONN = os.environ.get(
     "SMOKE_CONNECTION",
@@ -226,6 +226,34 @@ def run() -> None:
             "" if purge_status == 200 else f"status {purge_status}",
         )
         http("DELETE", f"{base}/{purge_queue}?api-version=2021-05")
+
+        # 17. transfer dlq - a send whose auto-forward target was deleted lands in the
+        # source queue's $Transfer/$DeadLetterQueue with a descriptive reason (issue #25).
+        fwd_target = f"smoke-fwd-target-{stamp}"
+        fwd_source = f"smoke-fwd-{stamp}"
+        http("PUT", f"{base}/{fwd_target}?api-version=2021-05", empty_queue_xml.encode())
+        fwd_xml = (
+            '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">'
+            '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
+            f"<ForwardTo>{fwd_target}</ForwardTo></QueueDescription></content></entry>"
+        )
+        http("PUT", f"{base}/{fwd_source}?api-version=2021-05", fwd_xml.encode())
+        http("DELETE", f"{base}/{fwd_target}?api-version=2021-05")
+        with client.get_queue_sender(fwd_source) as fwd_sender:
+            fwd_sender.send_messages(ServiceBusMessage("undeliverable"))
+        with client.get_queue_receiver(
+            fwd_source, sub_queue=ServiceBusSubQueue.TRANSFER_DEAD_LETTER, max_wait_time=10
+        ) as transfer_receiver:
+            moved = transfer_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+            got = len(moved) == 1 and moved[0].dead_letter_reason == "MessagingEntityNotFound"
+            check(
+                "transfer dlq",
+                got,
+                "" if got else ("no message" if not moved else (moved[0].dead_letter_reason or "no reason")),
+            )
+            if moved:
+                transfer_receiver.complete_message(moved[0])
+        http("DELETE", f"{base}/{fwd_source}?api-version=2021-05")
 
 
 try:

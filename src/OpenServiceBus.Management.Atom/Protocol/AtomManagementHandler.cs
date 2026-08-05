@@ -516,11 +516,19 @@ public sealed class AtomManagementHandler
             deadLettered = await _store.CountAsync(dlqName, ct).ConfigureAwait(false);
             size += _store.Peek(dlqName, 0, int.MaxValue).Sum(m => (long)m.EncodedMessage.Length);
         }
+        long transferDeadLettered = 0;
+        var transferDlqName = queueName + EntityNames.TransferDeadLetterSuffix;
+        if (await _queues.GetAsync(transferDlqName, ct).ConfigureAwait(false) is not null)
+        {
+            transferDeadLettered = await _store.CountAsync(transferDlqName, ct).ConfigureAwait(false);
+            size += _store.Peek(transferDlqName, 0, int.MaxValue).Sum(m => (long)m.EncodedMessage.Length);
+        }
         return new EntityRuntimeInfo(
             ActiveMessageCount: Math.Max(0, total - scheduled),
             ScheduledMessageCount: scheduled,
             DeadLetterMessageCount: deadLettered,
-            SizeInBytes: size);
+            SizeInBytes: size,
+            TransferDeadLetterMessageCount: transferDeadLettered);
     }
 
     /// <summary>DLQ sub-entities and subscription backing queues are not addressable queues.</summary>

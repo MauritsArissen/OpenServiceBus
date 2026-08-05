@@ -85,7 +85,9 @@ public sealed class TtlExpirationService : BackgroundService
                             QueueReceiverSource.TtlExpiredReason,
                             QueueReceiverSource.TtlExpiredDescription);
                         await _router.RouteAsync(dlqTarget, dlqBytes, expiresAt: null,
-                            deliveryCount: msg.DeliveryCount, cancellationToken: cancellationToken).ConfigureAwait(false);
+                            deliveryCount: msg.DeliveryCount,
+                            forwardSource: string.IsNullOrEmpty(queue.ForwardDeadLetteredMessagesTo) ? null : queue.Name,
+                            cancellationToken: cancellationToken).ConfigureAwait(false);
                     }
                     _logger.LogDebug("TTL-expired {Count} message(s) from {Queue} → {Dlq}", expired.Count, queue.Name, dlqTarget);
                 }

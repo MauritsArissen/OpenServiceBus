@@ -3,7 +3,7 @@
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
-//   -> purge (JSON management API)
+//   -> purge (JSON management API) -> transfer dlq
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -191,6 +191,40 @@ const run = async () => {
   check("admin purge", purgeResp.ok && purgeJson.purged === 2 && afterPurge.length === 0,
     purgeResp.ok ? "" : `status ${purgeResp.status}`);
   await fetch(`${httpBase}/${purgeQueue}?api-version=2021-05`, { method: "DELETE" });
+
+  // 17. transfer dlq - a send whose auto-forward target was deleted lands in the
+  // source queue's $Transfer/$DeadLetterQueue with a descriptive reason (issue #25).
+  const fwdTarget = `smoke-fwd-target-${stamp}`;
+  const fwdSource = `smoke-fwd-${stamp}`;
+  await fetch(`${httpBase}/${fwdTarget}?api-version=2021-05`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/atom+xml" },
+    body: emptyQueueXml,
+  });
+  const fwdXml =
+    '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">' +
+    '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
+    `<ForwardTo>${fwdTarget}</ForwardTo></QueueDescription></content></entry>`;
+  await fetch(`${httpBase}/${fwdSource}?api-version=2021-05`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/atom+xml" },
+    body: fwdXml,
+  });
+  await fetch(`${httpBase}/${fwdTarget}?api-version=2021-05`, { method: "DELETE" });
+  const fwdSender = client.createSender(fwdSource);
+  await fwdSender.sendMessages({ body: "undeliverable", messageId: `tdlq-${stamp}` });
+  await fwdSender.close();
+  const transferReceiver = client.createReceiver(fwdSource, { subQueueType: "transferDeadLetter" });
+  const movedMsgs = await transferReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  if (movedMsgs.length === 1) await transferReceiver.completeMessage(movedMsgs[0]);
+  await transferReceiver.close();
+  const transferOk = movedMsgs.length === 1 && movedMsgs[0].deadLetterReason === "MessagingEntityNotFound";
+  check(
+    "transfer dlq",
+    transferOk,
+    transferOk ? "" : movedMsgs.length === 0 ? "no message" : movedMsgs[0].deadLetterReason ?? "no reason",
+  );
+  await fetch(`${httpBase}/${fwdSource}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>

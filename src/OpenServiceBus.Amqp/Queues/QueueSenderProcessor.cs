@@ -98,7 +98,9 @@ public sealed class QueueSenderProcessor : IMessageProcessor
                 });
                 return;
             }
-            var usage = _store.GetSizeInBytes(_queueName) + _store.GetSizeInBytes(_queueName + EntityNames.DeadLetterSuffix);
+            var usage = _store.GetSizeInBytes(_queueName)
+                + _store.GetSizeInBytes(_queueName + EntityNames.DeadLetterSuffix)
+                + _store.GetSizeInBytes(_queueName + EntityNames.TransferDeadLetterSuffix);
             if (usage + payloadBytes > current.MaxSizeInMegabytes * 1024 * 1024)
             {
                 messageContext.Complete(new Error(new Symbol(Routing.ServiceBusErrors.QuotaExceeded))
@@ -331,7 +333,8 @@ public sealed class QueueSenderProcessor : IMessageProcessor
             {
                 await _router.RouteAsync(
                     _descriptor.ForwardTo, encoded, expiresAt, scheduledFor,
-                    sessionId, messageId, dedupWindow, filterContext).ConfigureAwait(false);
+                    sessionId, messageId, dedupWindow, filterContext,
+                    forwardSource: _queueName).ConfigureAwait(false);
             }
             else
             {

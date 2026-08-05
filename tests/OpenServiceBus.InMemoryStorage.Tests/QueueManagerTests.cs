@@ -74,8 +74,8 @@ public class QueueManagerTests
         // Assert
         all.Select(q => q.Name).OrderBy(n => n).ShouldBe(new[]
         {
-            "a", "a/$DeadLetterQueue",
-            "b", "b/$DeadLetterQueue",
+            "a", "a/$DeadLetterQueue", "a/$Transfer/$DeadLetterQueue",
+            "b", "b/$DeadLetterQueue", "b/$Transfer/$DeadLetterQueue",
         });
     }
 

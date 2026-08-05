@@ -24,6 +24,7 @@ public readonly record struct EntityAddress(
     public string BackingQueueName => SubResource switch
     {
         EntitySubResource.DeadLetterQueue => $"{StorageBaseName}{EntityNames.DeadLetterSuffix}",
+        EntitySubResource.TransferDeadLetterQueue => $"{StorageBaseName}{EntityNames.TransferDeadLetterSuffix}",
         _ => StorageBaseName,
     };
 
@@ -43,14 +44,24 @@ public readonly record struct EntityAddress(
         var normalized = address.TrimStart('/');
         if (string.IsNullOrEmpty(normalized)) return false;
 
-        // Detect and peel off a known terminal sub-resource first (DLQ or $management).
+        // Detect and peel off a known terminal sub-resource first (transfer DLQ before the
+        // plain DLQ - they share the terminal suffix - then $management). Matching is
+        // case-insensitive like Azure: the Java SDK addresses the transfer DLQ as
+        // "$Transfer/$deadletterqueue" where the other stacks use "$DeadLetterQueue".
+        // BackingQueueName recomposes with the canonical constants, so storage lookups
+        // stay canonical regardless of the client's casing.
         var subResource = EntitySubResource.Main;
-        if (normalized.EndsWith(EntityNames.DeadLetterSuffix, StringComparison.Ordinal))
+        if (normalized.EndsWith(EntityNames.TransferDeadLetterSuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[..^EntityNames.TransferDeadLetterSuffix.Length];
+            subResource = EntitySubResource.TransferDeadLetterQueue;
+        }
+        else if (normalized.EndsWith(EntityNames.DeadLetterSuffix, StringComparison.OrdinalIgnoreCase))
         {
             normalized = normalized[..^EntityNames.DeadLetterSuffix.Length];
             subResource = EntitySubResource.DeadLetterQueue;
         }
-        else if (normalized.EndsWith(EntityNames.ManagementSuffix, StringComparison.Ordinal))
+        else if (normalized.EndsWith(EntityNames.ManagementSuffix, StringComparison.OrdinalIgnoreCase))
         {
             normalized = normalized[..^EntityNames.ManagementSuffix.Length];
             subResource = EntitySubResource.Management;
@@ -88,5 +99,6 @@ public enum EntitySubResource
 {
     Main,
     DeadLetterQueue,
+    TransferDeadLetterQueue,
     Management,
 }

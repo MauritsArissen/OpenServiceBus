@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { explorerApi } from "@/lib/api";
 import { humanTime, type Selected } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { transferDlqAddress } from "@/lib/format";
 import { dlqAddress, entityAddress, useStore } from "@/store";
 import { KIND_ICON, KIND_TILE } from "./kind";
 import { MetricsTab } from "./MetricsTab";
@@ -49,6 +50,7 @@ export function EntityView() {
   const d = store.descriptorFor(sel);
   const address = entityAddress(sel);
   const dlq = dlqAddress(sel);
+  const transferDlq = transferDlqAddress(sel);
   const hasDlq = sel.kind !== "topic";
   const canSend = sel.kind === "queue" || sel.kind === "topic";
   const canReceive = sel.kind !== "topic";
@@ -270,6 +272,13 @@ export function EntityView() {
                 Dead-letter {dlqBadge > 0 && <Badge variant="destructive">{dlqBadge}</Badge>}
               </TabsTrigger>
             )}
+            {hasDlq && (
+              <TabsTrigger value="transferdlq">
+                Transfer DLQ {(d?.transferDeadLetterMessageCount ?? 0) > 0 && (
+                  <Badge variant="destructive">{d?.transferDeadLetterMessageCount}</Badge>
+                )}
+              </TabsTrigger>
+            )}
             {sel.kind === "subscription" && <TabsTrigger value="rules">Rules</TabsTrigger>}
             <TabsTrigger value="metrics">Metrics</TabsTrigger>
           </TabsList>
@@ -290,6 +299,11 @@ export function EntityView() {
           {hasDlq && (
             <TabsContent value="deadletter">
               <ReceiveTab sel={sel} target={dlq} isDlq />
+            </TabsContent>
+          )}
+          {hasDlq && (
+            <TabsContent value="transferdlq">
+              <ReceiveTab sel={sel} target={transferDlq} isDlq />
             </TabsContent>
           )}
           {sel.kind === "subscription" && (

@@ -70,7 +70,8 @@ internal sealed class TestListenerHarness : IAsyncDisposable
         var store = new InMemoryMessageStore(tp);
         IMessageStore storeAsIface = store;
         var queues = new QueueManager(storeAsIface);
-        var router = new MessageRouter(queues, storeAsIface, NullLogger<MessageRouter>.Instance);
+        var router = new MessageRouter(queues, storeAsIface, NullLogger<MessageRouter>.Instance,
+            deadLetterAnnotator: new OpenServiceBus.Amqp.DeadLettering.AmqpDeadLetterAnnotator());
         var transactions = new TransactionManager(NullLogger<TransactionManager>.Instance);
 
         var host = new AmqpListenerHost(

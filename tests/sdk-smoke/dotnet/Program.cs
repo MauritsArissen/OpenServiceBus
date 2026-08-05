@@ -3,7 +3,7 @@
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
-//   -> purge (JSON management API)
+//   -> purge (JSON management API) -> transfer dlq
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -174,6 +174,26 @@ try
     Check("admin purge", purgeResp.IsSuccessStatusCode && purgeBody.Contains("\"purged\":2") && afterPurge is null,
         purgeResp.IsSuccessStatusCode ? "" : $"status {(int)purgeResp.StatusCode}");
     await admin.DeleteQueueAsync(purgeQueue);
+
+    // 17. transfer dlq - a send whose auto-forward target was deleted lands in the
+    // source queue's $Transfer/$DeadLetterQueue with a descriptive reason (issue #25).
+    var fwdTarget = $"smoke-fwd-target-{stamp}";
+    var fwdSource = $"smoke-fwd-{stamp}";
+    await admin.CreateQueueAsync(fwdTarget);
+    await admin.CreateQueueAsync(new CreateQueueOptions(fwdSource) { ForwardTo = fwdTarget });
+    await admin.DeleteQueueAsync(fwdTarget);
+    var fwdSender = client.CreateSender(fwdSource);
+    await fwdSender.SendMessageAsync(new ServiceBusMessage("undeliverable") { MessageId = $"tdlq-{stamp}" });
+    await fwdSender.CloseAsync();
+    var transferReceiver = client.CreateReceiver(fwdSource,
+        new ServiceBusReceiverOptions { SubQueue = SubQueue.TransferDeadLetter });
+    var movedMsg = await transferReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    if (movedMsg is not null) await transferReceiver.CompleteMessageAsync(movedMsg);
+    await transferReceiver.CloseAsync();
+    var transferOk = movedMsg is not null && movedMsg.DeadLetterReason == "MessagingEntityNotFound";
+    Check("transfer dlq", transferOk,
+        transferOk ? "" : movedMsg is null ? "no message" : movedMsg.DeadLetterReason ?? "no reason");
+    await admin.DeleteQueueAsync(fwdSource);
 }
 catch (Exception e)
 {

@@ -14,9 +14,11 @@ public readonly record struct EntityRuntimeInfo(
     long ActiveMessageCount,
     long ScheduledMessageCount,
     long DeadLetterMessageCount,
-    long SizeInBytes)
+    long SizeInBytes,
+    long TransferDeadLetterMessageCount = 0)
 {
-    public long TotalMessageCount => ActiveMessageCount + ScheduledMessageCount + DeadLetterMessageCount;
+    public long TotalMessageCount =>
+        ActiveMessageCount + ScheduledMessageCount + DeadLetterMessageCount + TransferDeadLetterMessageCount;
 }
 
 /// <summary>
@@ -274,7 +276,7 @@ public static class EntityDescriptionCodec
             new XElement(d + "DeadLetterMessageCount", runtime.DeadLetterMessageCount),
             new XElement(d + "ScheduledMessageCount", runtime.ScheduledMessageCount),
             new XElement(d + "TransferMessageCount", 0),
-            new XElement(d + "TransferDeadLetterMessageCount", 0));
+            new XElement(d + "TransferDeadLetterMessageCount", runtime.TransferDeadLetterMessageCount));
     }
 
     private static XElement? ForwardElement(string name, string? target) =>

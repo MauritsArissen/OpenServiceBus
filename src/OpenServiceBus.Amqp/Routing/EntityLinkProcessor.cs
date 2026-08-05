@@ -105,7 +105,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
 
             if (!EntityAddress.TryParse(rawAddress, out var entityAddress))
             {
-                Reject(attachContext, ErrorCode.InvalidField, "Link attach has no resolvable address.");
+                Reject(attachContext, ErrorCode.InvalidField, $"Link attach has no resolvable address ('{rawAddress}').");
                 return;
             }
 
@@ -525,8 +525,9 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         }
     }
 
-    private static void Reject(AttachContext attachContext, string code, string description)
+    private void Reject(AttachContext attachContext, string code, string description)
     {
+        _logger.LogDebug("Rejected link attach ({Code}): {Description}", code, description);
         attachContext.Complete(new Error(new Symbol(code)) { Description = description });
     }
 

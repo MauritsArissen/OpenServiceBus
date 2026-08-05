@@ -76,8 +76,10 @@ public sealed class QueueManager : IQueueRegistry
         await _store.SaveQueueDescriptorAsync(descriptor.Name, QueueDescriptorJson.Serialize(descriptor), cancellationToken).ConfigureAwait(false);
         QueueCreated?.Invoke(this, descriptor);
 
-        // Every main queue gets an implicit dead-letter sibling - Azure Service Bus's contract.
-        // DLQs themselves do NOT get DLQ siblings (no recursion).
+        // Every main queue gets an implicit dead-letter sibling and a transfer dead-letter
+        // sibling (for failed auto-forward hops) - Azure Service Bus's contract. The
+        // siblings themselves do NOT get siblings of their own (no recursion; both end in
+        // the dead-letter suffix so the guard covers them).
         if (!IsDeadLetterQueue(descriptor.Name))
         {
             var dlq = new QueueDescriptor
@@ -87,6 +89,14 @@ public sealed class QueueManager : IQueueRegistry
                 MaxDeliveryCount = int.MaxValue,
             };
             await CreateAsync(dlq, cancellationToken).ConfigureAwait(false);
+
+            var transferDlq = new QueueDescriptor
+            {
+                Name = descriptor.Name + EntityNames.TransferDeadLetterSuffix,
+                LockDuration = descriptor.LockDuration,
+                MaxDeliveryCount = int.MaxValue,
+            };
+            await CreateAsync(transferDlq, cancellationToken).ConfigureAwait(false);
         }
 
         return descriptor;
@@ -125,12 +135,19 @@ public sealed class QueueManager : IQueueRegistry
         await _store.SaveQueueDescriptorAsync(descriptor.Name, QueueDescriptorJson.Serialize(descriptor), cancellationToken).ConfigureAwait(false);
         QueueUpdated?.Invoke(this, descriptor);
 
-        // Keep the DLQ sibling's lock duration in step with the parent, mirroring create.
-        if (!IsDeadLetterQueue(descriptor.Name)
-            && _queues.TryGetValue(descriptor.Name + DeadLetterSuffix, out var dlq)
-            && dlq.LockDuration != descriptor.LockDuration)
+        // Keep the sibling lock durations in step with the parent, mirroring create.
+        if (!IsDeadLetterQueue(descriptor.Name))
         {
-            await UpdateAsync(dlq with { LockDuration = descriptor.LockDuration }, cancellationToken).ConfigureAwait(false);
+            if (_queues.TryGetValue(descriptor.Name + DeadLetterSuffix, out var dlq)
+                && dlq.LockDuration != descriptor.LockDuration)
+            {
+                await UpdateAsync(dlq with { LockDuration = descriptor.LockDuration }, cancellationToken).ConfigureAwait(false);
+            }
+            if (_queues.TryGetValue(descriptor.Name + EntityNames.TransferDeadLetterSuffix, out var transferDlq)
+                && transferDlq.LockDuration != descriptor.LockDuration)
+            {
+                await UpdateAsync(transferDlq with { LockDuration = descriptor.LockDuration }, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         return descriptor;
@@ -157,10 +174,11 @@ public sealed class QueueManager : IQueueRegistry
         await _store.DeleteQueueAsync(name, cancellationToken).ConfigureAwait(false);
         QueueDeleted?.Invoke(this, descriptor);
 
-        // Tear down the DLQ sibling alongside the main queue.
+        // Tear down the DLQ and transfer-DLQ siblings alongside the main queue.
         if (!IsDeadLetterQueue(name))
         {
             await DeleteAsync(name + DeadLetterSuffix, cancellationToken).ConfigureAwait(false);
+            await DeleteAsync(name + EntityNames.TransferDeadLetterSuffix, cancellationToken).ConfigureAwait(false);
         }
 
         return true;

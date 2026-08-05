@@ -56,6 +56,10 @@ export function dlqAddress(sel: Selected): string {
   return entityAddress(sel) + DLQ_SUFFIX;
 }
 
+export function transferDlqAddress(sel: Selected): string {
+  return entityAddress(sel) + "/$Transfer" + DLQ_SUFFIX;
+}
+
 export function displayName(sel: Selected): string {
   return sel.kind === "subscription" ? `${sel.name} / ${sel.sub}` : sel.name;
 }
