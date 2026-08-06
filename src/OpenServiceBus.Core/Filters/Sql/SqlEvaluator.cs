@@ -19,8 +19,17 @@ internal static class SqlEvaluator
             $"SQL filter top-level expression must be boolean; got {value.GetType().Name}: {value}"),
     };
 
-    public static object? CompareEqual(object? left, object? right) =>
-        left is null || right is null ? null : Equals(Normalize(left), Normalize(right));
+    public static object? CompareEqual(object? left, object? right)
+    {
+        if (left is null || right is null) return null;
+        var l = Normalize(left);
+        var r = Normalize(right);
+        // Cross-type numeric equality follows C# implicit conversion semantics like the
+        // real service: 7 = 7.0 is true even though boxed Equals(long, double) is not.
+        if (l is long ll && r is double rd) return (double)ll == rd;
+        if (l is double ld && r is long rl) return ld == (double)rl;
+        return Equals(l, r);
+    }
 
     public static object? CompareNotEqual(object? left, object? right) =>
         CompareEqual(left, right) is bool eq ? !eq : (object?)null;
@@ -171,6 +180,17 @@ internal static class SqlEvaluator
         };
     }
 
+    public static object? UnaryPlus(object? value)
+    {
+        if (value is null) return null;
+        return Normalize(value) switch
+        {
+            long l => l,
+            double d => d,
+            var other => throw new InvalidOperationException($"Unary plus applied to non-numeric value ({other.GetType().Name})."),
+        };
+    }
+
     /// <summary>
     /// Number unification: every integral type widens to long, every fractional type to
     /// double, so cross-type compare and arithmetic work. The unsigned types matter for
@@ -187,6 +207,7 @@ internal static class SqlEvaluator
         ulong ul => ul <= long.MaxValue ? (long)ul : (double)ul,
         float f => (double)f,
         decimal d => (double)d,
+        DateTime dt => new DateTimeOffset(dt.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dt, DateTimeKind.Utc) : dt),
         _ => value,
     };
 

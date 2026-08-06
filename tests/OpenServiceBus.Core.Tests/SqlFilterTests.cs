@@ -275,6 +275,101 @@ public class SqlFilterTests
         compare.Matches(Message(props: new() { ["priority"] = (uint)3 })).ShouldBeFalse();
     }
 
+    [Theory]
+    [InlineData("value > 101.5E5", 10160000.0, true)]
+    [InlineData("value > 101.5E5", 10140000.0, false)]
+    [InlineData("value = 0.5E-2", 0.005, true)]
+    [InlineData("value > 1E3", 1500, true)]
+    public void Matches_ScientificNotationLiterals_Evaluate(string expression, double value, bool expected)
+    {
+        var filter = new SqlFilter(expression);
+
+        filter.Matches(Message(props: new() { ["value"] = value })).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void Matches_QuotedAndDelimitedIdentifiers_ResolveProperties()
+    {
+        new SqlFilter("\"order id\" = 7").Matches(Message(props: new() { ["order id"] = 7 })).ShouldBeTrue();
+        new SqlFilter("[HR-EmployeeID] = 7").Matches(Message(props: new() { ["HR-EmployeeID"] = 7 })).ShouldBeTrue();
+        new SqlFilter("[a]]b] = 1").Matches(Message(props: new() { ["a]b"] = 1 })).ShouldBeTrue();
+        new SqlFilter("\"say \"\"hi\"\"\" = 1").Matches(Message(props: new() { ["say \"hi\""] = 1 })).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Matches_DashBetweenIdentifiers_IsSubtractionNotAnIdentifier()
+    {
+        var filter = new SqlFilter("total-1 = 3");
+
+        filter.Matches(Message(props: new() { ["total"] = 4 })).ShouldBeTrue(
+            "the Service Bus grammar has no '-' in identifiers; total-1 is arithmetic");
+        filter.Matches(Message(props: new() { ["total"] = 5 })).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("priority = 7", 7, true)]
+    [InlineData("priority = 7", 8, false)]
+    [InlineData("priority = 7.0", 7, true)]
+    [InlineData("price = 2.5", 2.5, true)]
+    public void Matches_NumericEquality_CrossesIntegralAndFractionalTypes(string expression, double value, bool expected)
+    {
+        var asInt = new Dictionary<string, object?> { ["priority"] = (int)value, ["price"] = value };
+        var asDouble = new Dictionary<string, object?> { ["priority"] = value, ["price"] = value };
+
+        new SqlFilter(expression).Matches(Message(props: asInt)).ShouldBe(expected,
+            "integer literals must be Int64 and compare across numeric types like C#");
+        new SqlFilter(expression).Matches(Message(props: asDouble)).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void Matches_UnaryPlus_IsNumericIdentity()
+    {
+        new SqlFilter("+priority = 4").Matches(Message(props: new() { ["priority"] = 4 })).ShouldBeTrue();
+        new SqlFilter("-(+priority) = -4").Matches(Message(props: new() { ["priority"] = 4 })).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Matches_LikeWithExpressionPattern_ResolvesPerMessage()
+    {
+        var filter = new SqlFilter("code LIKE prefix + '%'");
+
+        filter.Matches(Message(props: new() { ["code"] = "ord-1", ["prefix"] = "ord" })).ShouldBeTrue();
+        filter.Matches(Message(props: new() { ["code"] = "inv-1", ["prefix"] = "ord" })).ShouldBeFalse();
+        filter.Matches(Message(props: new() { ["code"] = "ord-1" })).ShouldBeFalse("unknown pattern → unknown → no match");
+    }
+
+    [Fact]
+    public void Matches_ParameterizedFilter_BindsValuesAtCreation()
+    {
+        var filter = new SqlFilter("priority >= @threshold AND region = @region", new Dictionary<string, object?>
+        {
+            ["@threshold"] = 5,
+            ["region"] = "eu",
+        });
+
+        filter.Matches(Message(props: new() { ["priority"] = 7, ["region"] = "eu" })).ShouldBeTrue();
+        filter.Matches(Message(props: new() { ["priority"] = 3, ["region"] = "eu" })).ShouldBeFalse();
+        filter.Matches(Message(props: new() { ["priority"] = 7, ["region"] = "us" })).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Matches_DateTimeOffsetParameter_ComparesAgainstEnqueuedTime()
+    {
+        var filter = new SqlFilter("sys.EnqueuedTimeUtc >= @cutoff", new Dictionary<string, object?>
+        {
+            ["@cutoff"] = DateTimeOffset.UnixEpoch.AddDays(-1),
+        });
+
+        filter.Matches(Message()).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Constructor_UndefinedParameter_ThrowsAtCreationTime()
+    {
+        Should.Throw<FormatException>(() => new SqlFilter("priority >= @nope"))
+            .Message.ShouldContain("@nope");
+    }
+
     [Fact]
     public void Matches_NewId_ProducesADistinctGuidPerCall()
     {

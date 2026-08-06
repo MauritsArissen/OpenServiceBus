@@ -200,8 +200,9 @@ try
     await admin.CreateTopicAsync(filterTopic);
     await admin.CreateSubscriptionAsync(filterTopic, "flt");
     await admin.DeleteRuleAsync(filterTopic, "flt", "$Default");
-    await admin.CreateRuleAsync(filterTopic, "flt",
-        new CreateRuleOptions("high", new SqlRuleFilter("priority + 1 >= 5")));
+    var filterRule = new SqlRuleFilter("priority + 1 >= @threshold");
+    filterRule.Parameters.Add("@threshold", 5);
+    await admin.CreateRuleAsync(filterTopic, "flt", new CreateRuleOptions("high", filterRule));
     var filterSender = client.CreateSender(filterTopic);
     var matchMsg = new ServiceBusMessage("match") { MessageId = $"flt-match-{stamp}" };
     matchMsg.ApplicationProperties["priority"] = 4;

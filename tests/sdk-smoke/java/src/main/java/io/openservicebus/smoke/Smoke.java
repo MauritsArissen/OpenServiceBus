@@ -393,7 +393,10 @@ public final class Smoke {
                 HttpResponse.BodyHandlers.ofString());
             HttpResponse<String> ruleResp = http.send(atomPut.apply(filterTopic + "/subscriptions/flt/rules/high",
                 "<RuleDescription xmlns:i=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns=\"" + sbNs + "\">"
-                + "<Filter i:type=\"SqlFilter\"><SqlExpression>priority + 1 &gt;= 5</SqlExpression></Filter></RuleDescription>"),
+                + "<Filter i:type=\"SqlFilter\"><SqlExpression>priority + 1 &gt;= @threshold</SqlExpression>"
+                + "<Parameters><KeyValueOfstringanyType><Key>@threshold</Key>"
+                + "<Value xmlns:d6p1=\"http://www.w3.org/2001/XMLSchema\" i:type=\"d6p1:int\">5</Value>"
+                + "</KeyValueOfstringanyType></Parameters></Filter></RuleDescription>"),
                 HttpResponse.BodyHandlers.ofString());
             try (ServiceBusSenderClient filterSender = new ServiceBusClientBuilder()
                     .connectionString(conn).retryOptions(retry)

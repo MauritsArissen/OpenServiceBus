@@ -244,7 +244,10 @@ const run = async () => {
   await fetch(`${httpBase}/${filterTopic}/subscriptions/flt/rules/$Default?api-version=2021-05`, { method: "DELETE" });
   const ruleResp = await atomPut(`${filterTopic}/subscriptions/flt/rules/high`,
     '<RuleDescription xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
-    '<Filter i:type="SqlFilter"><SqlExpression>priority + 1 >= 5</SqlExpression></Filter></RuleDescription>');
+    '<Filter i:type="SqlFilter"><SqlExpression>priority + 1 >= @threshold</SqlExpression>' +
+    '<Parameters><KeyValueOfstringanyType><Key>@threshold</Key>' +
+    '<Value xmlns:d6p1="http://www.w3.org/2001/XMLSchema" i:type="d6p1:int">5</Value>' +
+    '</KeyValueOfstringanyType></Parameters></Filter></RuleDescription>');
   const filterSender = client.createSender(filterTopic);
   await filterSender.sendMessages({ body: "match", messageId: `flt-match-${stamp}`, applicationProperties: { priority: 4 } });
   await filterSender.sendMessages({ body: "miss", messageId: `flt-miss-${stamp}`, applicationProperties: { priority: 1 } });

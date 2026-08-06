@@ -169,7 +169,7 @@ const SyntaxReference = memo(function SyntaxReference() {
             A system property: MessageId, CorrelationId, Subject (alias Label), To, ReplyTo,
             ReplyToSessionId, SessionId, ContentType, EnqueuedTimeUtc.
           </Syntax>
-          <Syntax code="[order-id]">Bracket-quote names with special characters or reserved words.</Syntax>
+          <Syntax code={'[order-id]  /  "order id"'}>Quote names with special characters or reserved words; ]] or "" escapes the closer.</Syntax>
         </SyntaxGroup>
         <SyntaxGroup title="Comparison & logic">
           <Syntax code="=  !=  <>  <  <=  >  >=">Compare numbers, strings, booleans. A missing property is NULL and never matches.</Syntax>
@@ -182,7 +182,7 @@ const SyntaxReference = memo(function SyntaxReference() {
           <Syntax code="'a' + 'b'">+ concatenates when either side is a string.</Syntax>
         </SyntaxGroup>
         <SyntaxGroup title="Pattern & sets">
-          <Syntax code="LIKE 'ord%'">% matches any run of characters, _ exactly one. Also NOT LIKE.</Syntax>
+          <Syntax code="LIKE 'ord%'">% matches any run of characters, _ exactly one. Also NOT LIKE. Pattern and escape may be any string expression, e.g. LIKE prefix + '%'.</Syntax>
           <Syntax code="LIKE '100!%' ESCAPE '!'">The escape character makes the next character literal - here a real percent sign.</Syntax>
           <Syntax code="IN ('eu', 'us')">Value is (NOT IN: is not) one of the listed values.</Syntax>
           <Syntax code="EXISTS(prop)">The property is present on the message, whatever its value. Also NOT EXISTS.</Syntax>
@@ -192,7 +192,10 @@ const SyntaxReference = memo(function SyntaxReference() {
           <Syntax code="property(name)  /  p(name)">The value of the named property; accepts bare, sys./user.-scoped, or a 'string' name.</Syntax>
         </SyntaxGroup>
         <SyntaxGroup title="Literals">
-          <Syntax code="'text'  42  3.14  TRUE  FALSE  NULL">Strings use single quotes; double the quote ('it''s') to escape one.</Syntax>
+          <Syntax code="'text'  42  3.14  1.5E3  TRUE  FALSE  NULL">Strings use single quotes; double the quote ('it''s') to escape one. Scientific notation is a decimal.</Syntax>
+        </SyntaxGroup>
+        <SyntaxGroup title="Parameters">
+          <Syntax code="priority >= @threshold">@name references a value supplied at rule creation via the SDK's SqlRuleFilter.Parameters / SqlRuleAction.Parameters (admin client only). Undefined parameters are rejected on save.</Syntax>
         </SyntaxGroup>
         <SyntaxGroup title="Actions (on match)">
           <Syntax code="SET prop = expr">Set or overwrite a property on the delivered copy; the value side uses the full grammar above.</Syntax>

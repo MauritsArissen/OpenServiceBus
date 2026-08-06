@@ -16,6 +16,7 @@ internal abstract class SqlExpressionNode
 internal sealed class SqlLiteralNode(object? value) : SqlExpressionNode
 {
     private readonly object? _value = value;
+    public object? Value => _value;
     public override object? Evaluate(MessageFilterContext message) => _value;
     public override bool ProducesBoolean => _value is bool;
 }
@@ -106,15 +107,28 @@ internal sealed class SqlLikeNode : SqlExpressionNode
 {
     private readonly SqlExpressionNode _operand;
     private readonly bool _negate;
-    private readonly System.Text.RegularExpressions.Regex _regex;
+    private readonly System.Text.RegularExpressions.Regex? _staticRegex;
+    private readonly SqlExpressionNode? _patternNode;
+    private readonly SqlExpressionNode? _escapeNode;
 
+    /// <summary>Literal pattern/escape: the regex compiles here so an invalid pattern
+    /// (e.g. a trailing escape character) fails at rule-creation time, and the hot
+    /// evaluation path reuses one regex.</summary>
     public SqlLikeNode(SqlExpressionNode operand, string pattern, char? escapeChar, bool negate)
     {
         _operand = operand;
         _negate = negate;
-        // Compiled here so an invalid pattern (e.g. a trailing escape character) fails at
-        // rule-creation time, and the hot evaluation path reuses one regex.
-        _regex = SqlEvaluator.BuildLikeRegex(pattern, escapeChar);
+        _staticRegex = SqlEvaluator.BuildLikeRegex(pattern, escapeChar);
+    }
+
+    /// <summary>Expression pattern/escape (the Service Bus grammar allows both to be any
+    /// string-valued expression, e.g. <c>code LIKE prefix + '%'</c>): resolved per message.</summary>
+    public SqlLikeNode(SqlExpressionNode operand, SqlExpressionNode patternNode, SqlExpressionNode? escapeNode, bool negate)
+    {
+        _operand = operand;
+        _negate = negate;
+        _patternNode = patternNode;
+        _escapeNode = escapeNode;
     }
 
     public override bool ProducesBoolean => true;
@@ -123,9 +137,39 @@ internal sealed class SqlLikeNode : SqlExpressionNode
     {
         var value = _operand.Evaluate(message);
         if (value is null) return null;
-        var matched = value is string s && _regex.IsMatch(s);
+
+        var regex = _staticRegex;
+        if (regex is null)
+        {
+            var patternValue = _patternNode!.Evaluate(message);
+            if (patternValue is null) return null;
+            if (patternValue is not string pattern)
+            {
+                throw new InvalidOperationException("LIKE pattern must evaluate to a string.");
+            }
+            char? escapeChar = null;
+            if (_escapeNode is not null)
+            {
+                var escapeValue = _escapeNode.Evaluate(message);
+                if (escapeValue is null) return null;
+                if (escapeValue is not string { Length: 1 } escape)
+                {
+                    throw new InvalidOperationException("LIKE ESCAPE must evaluate to a single-character string.");
+                }
+                escapeChar = escape[0];
+            }
+            regex = SqlEvaluator.BuildLikeRegex(pattern, escapeChar);
+        }
+
+        var matched = value is string s && regex.IsMatch(s);
         return _negate ? !matched : matched;
     }
+}
+
+internal sealed class SqlUnaryPlusNode(SqlExpressionNode operand) : SqlExpressionNode
+{
+    public override object? Evaluate(MessageFilterContext message) =>
+        SqlEvaluator.UnaryPlus(operand.Evaluate(message));
 }
 
 internal sealed class SqlNewIdNode : SqlExpressionNode

@@ -17,7 +17,9 @@ namespace OpenServiceBus.Core.Filters.Sql;
 /// </summary>
 internal static class SqlActionParser
 {
-    public static IReadOnlyList<SqlActionStatement> Parse(string expression)
+    public static IReadOnlyList<SqlActionStatement> Parse(
+        string expression,
+        IReadOnlyDictionary<string, object?>? parameters = null)
     {
         var tokens = new SqlLexer(expression).Tokenize();
         var statements = new List<SqlActionStatement>();
@@ -46,7 +48,7 @@ internal static class SqlActionParser
                     throw Error(expression, tokens[index], "Expected '=' after the SET target.");
                 }
                 index++;
-                var value = ParseValueExpression(expression, tokens, ref index);
+                var value = ParseValueExpression(expression, tokens, ref index, parameters);
                 statements.Add(new SqlSetStatement(isSystem, name, value));
             }
             else if (keyword.Text.Equals("REMOVE", StringComparison.OrdinalIgnoreCase))
@@ -131,7 +133,11 @@ internal static class SqlActionParser
                 $"Action: \"{expression}\"."),
         };
 
-    private static SqlExpressionNode ParseValueExpression(string expression, List<SqlToken> tokens, ref int index)
+    private static SqlExpressionNode ParseValueExpression(
+        string expression,
+        List<SqlToken> tokens,
+        ref int index,
+        IReadOnlyDictionary<string, object?>? parameters)
     {
         var slice = new List<SqlToken>();
         var depth = 0;
@@ -150,7 +156,7 @@ internal static class SqlActionParser
             throw Error(expression, tokens[index], "Expected a value expression after '='.");
         }
         slice.Add(new SqlToken(SqlTokenKind.EndOfInput, string.Empty, null, tokens[index].Position));
-        return new SqlParser(slice).ParseExpression();
+        return new SqlParser(slice, parameters).ParseExpression();
     }
 
     private static FormatException Error(string expression, SqlToken token, string message) =>

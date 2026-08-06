@@ -273,7 +273,10 @@ def run() -> None:
         rule_status, _ = http("PUT", f"{base}/{filter_topic}/subscriptions/flt/rules/high?api-version=2021-05", atom_entry(
             '<RuleDescription xmlns:i="http://www.w3.org/2001/XMLSchema-instance" '
             'xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
-            '<Filter i:type="SqlFilter"><SqlExpression>priority + 1 >= 5</SqlExpression></Filter></RuleDescription>'))
+            '<Filter i:type="SqlFilter"><SqlExpression>priority + 1 >= @threshold</SqlExpression>'
+            '<Parameters><KeyValueOfstringanyType><Key>@threshold</Key>'
+            '<Value xmlns:d6p1="http://www.w3.org/2001/XMLSchema" i:type="d6p1:int">5</Value>'
+            '</KeyValueOfstringanyType></Parameters></Filter></RuleDescription>'))
         with client.get_topic_sender(filter_topic) as filter_sender:
             filter_sender.send_messages(ServiceBusMessage(
                 "match", message_id=f"flt-match-{stamp}", application_properties={"priority": 4}))

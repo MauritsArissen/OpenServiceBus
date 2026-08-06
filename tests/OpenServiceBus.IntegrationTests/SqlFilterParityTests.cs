@@ -90,6 +90,58 @@ public class SqlFilterParityTests
     }
 
     [Fact]
+    public async Task ParameterizedFilter_RoutesByParameterAndRoundTripsThroughTheAdminClient()
+    {
+        await using var harness = await IntegrationHarness.StartAsync();
+        var admin = new ServiceBusAdministrationClient(harness.ConnectionString);
+        await admin.CreateTopicAsync("params");
+        await admin.CreateSubscriptionAsync("params", "filtered");
+        await admin.DeleteRuleAsync("params", "filtered", "$Default");
+
+        var filter = new SqlRuleFilter("priority >= @threshold AND region = @region");
+        filter.Parameters.Add("@threshold", 5L);
+        filter.Parameters.Add("@region", "eu");
+        await admin.CreateRuleAsync("params", "filtered", new CreateRuleOptions("param-rule", filter));
+
+        RuleProperties fetched = await admin.GetRuleAsync("params", "filtered", "param-rule");
+        var fetchedFilter = fetched.Filter.ShouldBeOfType<SqlRuleFilter>();
+        fetchedFilter.SqlExpression.ShouldBe("priority >= @threshold AND region = @region");
+        fetchedFilter.Parameters["@threshold"].ShouldBe(5L);
+        fetchedFilter.Parameters["@region"].ShouldBe("eu");
+
+        await using var client = new ServiceBusClient(harness.ConnectionString);
+        var sender = client.CreateSender("params");
+        var match = new ServiceBusMessage("match") { MessageId = "p-match" };
+        match.ApplicationProperties["priority"] = 7;
+        match.ApplicationProperties["region"] = "eu";
+        var miss = new ServiceBusMessage("miss") { MessageId = "p-miss" };
+        miss.ApplicationProperties["priority"] = 3;
+        miss.ApplicationProperties["region"] = "eu";
+        await sender.SendMessageAsync(match);
+        await sender.SendMessageAsync(miss);
+
+        var receiver = client.CreateReceiver("params", "filtered");
+        var received = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        received.ShouldNotBeNull();
+        received.MessageId.ShouldBe("p-match");
+        await receiver.CompleteMessageAsync(received);
+        (await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2))).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task ParameterizedFilter_UndefinedParameter_IsRejectedAtCreation()
+    {
+        await using var harness = await IntegrationHarness.StartAsync();
+        var admin = new ServiceBusAdministrationClient(harness.ConnectionString);
+        await admin.CreateTopicAsync("params-bad");
+        await admin.CreateSubscriptionAsync("params-bad", "sub");
+
+        await Should.ThrowAsync<ArgumentException>(
+            () => admin.CreateRuleAsync("params-bad", "sub",
+                new CreateRuleOptions("bad", new SqlRuleFilter("priority >= @missing"))));
+    }
+
+    [Fact]
     public async Task RuleAction_WithNewId_StampsAFreshGuidPerDeliveredCopy()
     {
         await using var harness = await IntegrationHarness.StartAsync();

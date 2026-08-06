@@ -13,14 +13,28 @@ public sealed class SqlRuleAction
 {
     public string Expression { get; }
 
+    /// <summary>Parameter values referenced as <c>@name</c> in the action's value
+    /// expressions - the SDK's <c>SqlRuleAction.Parameters</c>. Bound at construction.</summary>
+    public IReadOnlyDictionary<string, object?> Parameters { get; }
+
+    private static readonly IReadOnlyDictionary<string, object?> NoParameters =
+        new Dictionary<string, object?>();
+
     private readonly IReadOnlyList<SqlActionStatement> _statements;
 
     /// <exception cref="FormatException">The expression is not a valid action.</exception>
     public SqlRuleAction(string expression)
+        : this(expression, null)
+    {
+    }
+
+    /// <exception cref="FormatException">The expression is not a valid action.</exception>
+    public SqlRuleAction(string expression, IReadOnlyDictionary<string, object?>? parameters)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(expression);
         Expression = expression;
-        _statements = SqlActionParser.Parse(expression);
+        Parameters = parameters is { Count: > 0 } ? parameters : NoParameters;
+        _statements = SqlActionParser.Parse(expression, Parameters);
     }
 
     /// <summary>Apply every statement, in order, to the given message target.</summary>

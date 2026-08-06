@@ -19,13 +19,29 @@ public sealed class SqlFilter : RuleFilter
 {
     public string Expression { get; }
 
+    /// <summary>
+    /// Parameter values referenced from the expression as <c>@name</c> - the SDK's
+    /// <c>SqlRuleFilter.Parameters</c>. Bound at construction: an undefined parameter is a
+    /// creation-time error, like Azure. Kept here so management planes can round-trip them.
+    /// </summary>
+    public IReadOnlyDictionary<string, object?> Parameters { get; }
+
+    private static readonly IReadOnlyDictionary<string, object?> NoParameters =
+        new Dictionary<string, object?>();
+
     private readonly Sql.SqlExpressionNode _root;
 
     public SqlFilter(string expression)
+        : this(expression, null)
+    {
+    }
+
+    public SqlFilter(string expression, IReadOnlyDictionary<string, object?>? parameters)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(expression);
         Expression = expression;
-        _root = new Sql.SqlParser(expression).ParseExpression();
+        Parameters = parameters is { Count: > 0 } ? parameters : NoParameters;
+        _root = new Sql.SqlParser(expression, Parameters).ParseExpression();
 
         // Reject non-boolean expressions here, at construction, the way Service Bus rejects them
         // at rule-creation time. Otherwise a filter like "1" or "user.count" would parse fine and

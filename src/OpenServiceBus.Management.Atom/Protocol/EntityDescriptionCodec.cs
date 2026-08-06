@@ -229,7 +229,8 @@ public static class EntityDescriptionCodec
             : new XElement(Sb + "Action",
                 new XAttribute(AtomXml.Xsi + "type", "SqlRuleAction"),
                 new XElement(Sb + "SqlExpression", rule.Action.Expression),
-                new XElement(Sb + "CompatibilityLevel", 20));
+                new XElement(Sb + "CompatibilityLevel", 20),
+                SqlParametersElement(rule.Action.Parameters));
         return new XElement(Sb + "RuleDescription",
             new XAttribute(XNamespace.Xmlns + "i", AtomXml.Xsi),
             FilterElement(rule.Filter),
@@ -319,6 +320,10 @@ public static class EntityDescriptionCodec
                 element.SetAttributeValue(AtomXml.Xsi + "type", "SqlFilter");
                 element.Add(new XElement(Sb + "SqlExpression", sql.Expression),
                     new XElement(Sb + "CompatibilityLevel", 20));
+                if (SqlParametersElement(sql.Parameters) is { } filterParameters)
+                {
+                    element.Add(filterParameters);
+                }
                 break;
             case CorrelationFilter c:
                 element.SetAttributeValue(AtomXml.Xsi + "type", "CorrelationFilter");
@@ -397,7 +402,7 @@ public static class EntityDescriptionCodec
                 {
                     throw new FormatException("SqlRuleAction requires a SqlExpression element.");
                 }
-                action = new SqlRuleAction(expression);
+                action = new SqlRuleAction(expression, ParseSqlParameters(actionElement));
             }
         }
 
@@ -426,7 +431,7 @@ public static class EntityDescriptionCodec
                 var trimmed = expression.Trim();
                 if (trimmed == "1=1") return TrueFilter.Instance;
                 if (trimmed == "1=0") return FalseFilter.Instance;
-                return new SqlFilter(expression);
+                return new SqlFilter(expression, ParseSqlParameters(filterElement));
             }
             case "CorrelationFilter":
             {
@@ -462,6 +467,35 @@ public static class EntityDescriptionCodec
             default:
                 throw new FormatException($"Unsupported filter type '{filterType}'.");
         }
+    }
+
+    /// <summary>Parse a SqlFilter/SqlRuleAction Parameters element (KeyValueOfstringanyType
+    /// pairs, same typed-value shape as CorrelationFilter Properties). Null when absent.</summary>
+    private static Dictionary<string, object?>? ParseSqlParameters(XElement parent)
+    {
+        var parametersElement = parent.Elements().FirstOrDefault(e => e.Name.LocalName == "Parameters");
+        if (parametersElement is null) return null;
+
+        var parameters = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var pair in parametersElement.Elements().Where(e => e.Name.LocalName == "KeyValueOfstringanyType"))
+        {
+            var key = pair.Elements().FirstOrDefault(e => e.Name.LocalName == "Key")?.Value;
+            var valueElement = pair.Elements().FirstOrDefault(e => e.Name.LocalName == "Value");
+            if (key is null || valueElement is null) continue;
+            parameters[key] = ParseCorrelationValue(valueElement);
+        }
+        return parameters;
+    }
+
+    private static XElement? SqlParametersElement(IReadOnlyDictionary<string, object?> parameters)
+    {
+        if (parameters.Count == 0) return null;
+        var element = new XElement(Sb + "Parameters");
+        foreach (var (key, value) in parameters)
+        {
+            element.Add(CorrelationProperty(key, value));
+        }
+        return element;
     }
 
     private static object? ParseCorrelationValue(XElement valueElement)

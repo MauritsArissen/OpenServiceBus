@@ -26,9 +26,12 @@ internal static class RuleWireCodec
     private static readonly string[] TrueFilterAliases = { TrueFilterKey, "true-rule-filter" };
     private static readonly string[] FalseFilterAliases = { FalseFilterKey, "false-rule-filter" };
 
-    // Filter-payload keys.
+    // Filter-payload keys. The modern Azure.Messaging.ServiceBus rule manager sends only
+    // the expression; legacy Microsoft.Azure.ServiceBus also sent a "parameters" map, so
+    // it is accepted on decode.
     public const string ExpressionKey = "expression";
     public const string CompatibilityLevelKey = "compatibility-level";
+    public const string ParametersKey = "parameters";
 
     // Correlation-filter payload keys.
     public const string CorrelationIdKey = "correlation-id";
@@ -78,7 +81,7 @@ internal static class RuleWireCodec
             var actionExpression = actionMap.TryGetValue(ExpressionKey, out var ae) ? ae as string : null;
             if (!string.IsNullOrWhiteSpace(actionExpression))
             {
-                action = new SqlRuleAction(actionExpression);
+                action = new SqlRuleAction(actionExpression, DecodeParameters(actionMap));
             }
         }
 
@@ -97,7 +100,7 @@ internal static class RuleWireCodec
             var expression = sqlMap.TryGetValue(ExpressionKey, out var e) ? e as string : null;
             if (string.IsNullOrWhiteSpace(expression))
                 throw new ArgumentException("sql-filter requires a non-empty 'expression'.");
-            return new SqlFilter(expression);
+            return new SqlFilter(expression, DecodeParameters(sqlMap));
         }
 
         if (TryGetByAlias(ruleDescription, CorrelationFilterAliases, out var corrObj) && corrObj is Map corrMap)
@@ -135,6 +138,21 @@ internal static class RuleWireCodec
         }
 
         throw new ArgumentException("rule-description must contain one of: sql-filter, correlation-filter, true-filter, false-filter.");
+    }
+
+    private static Dictionary<string, object?>? DecodeParameters(Map map)
+    {
+        if (!map.TryGetValue(ParametersKey, out var p) || p is not Map parametersMap || parametersMap.Count == 0)
+        {
+            return null;
+        }
+        var parameters = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var key in parametersMap.Keys)
+        {
+            if (key is null) continue;
+            parameters[key.ToString()!] = parametersMap[key];
+        }
+        return parameters;
     }
 
     private static bool TryGetByAlias(Map map, string[] aliases, out object? value)

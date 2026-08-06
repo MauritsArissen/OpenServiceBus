@@ -20,20 +20,23 @@ namespace OpenServiceBus.Core.Filters.Sql;
 internal sealed class SqlParser
 {
     private readonly List<SqlToken> _tokens;
+    private readonly IReadOnlyDictionary<string, object?>? _parameters;
     private int _index;
 
-    public SqlParser(string source)
+    public SqlParser(string source, IReadOnlyDictionary<string, object?>? parameters = null)
     {
         _tokens = new SqlLexer(source).Tokenize();
+        _parameters = parameters;
     }
 
     /// <summary>
     /// Parse over a pre-lexed token slice (must end with an <see cref="SqlTokenKind.EndOfInput"/>
     /// token). Used by <see cref="SqlActionParser"/> to parse the value side of a SET statement.
     /// </summary>
-    internal SqlParser(List<SqlToken> tokens)
+    internal SqlParser(List<SqlToken> tokens, IReadOnlyDictionary<string, object?>? parameters = null)
     {
         _tokens = tokens;
+        _parameters = parameters;
     }
 
     public SqlExpressionNode ParseExpression()
@@ -105,24 +108,34 @@ internal sealed class SqlParser
         var prefixNegate = Match(SqlTokenKind.KwNot);
         if (Match(SqlTokenKind.KwLike))
         {
-            var patternToken = Current;
-            if (patternToken.Kind != SqlTokenKind.String)
-            {
-                throw Error("Expected string literal after LIKE.");
-            }
-            _index++;
-            char? escapeChar = null;
+            // The Service Bus grammar allows pattern and escape to be any string-valued
+            // EXPRESSION. When both are string literals (the overwhelmingly common case)
+            // the regex compiles right here, so bad patterns fail at rule creation and
+            // evaluation reuses one regex; otherwise they resolve per message.
+            var patternNode = ParseAdditive();
+            SqlExpressionNode? escapeNode = null;
             if (Match(SqlTokenKind.KwEscape))
             {
-                var escapeToken = Current;
-                if (escapeToken.Kind != SqlTokenKind.String || ((string)escapeToken.Value!).Length != 1)
+                escapeNode = ParseAdditive();
+                if (escapeNode is SqlLiteralNode escLit && escLit.Value is string escString && escString.Length != 1)
                 {
-                    throw Error("ESCAPE requires a single-character string literal.");
+                    throw Error("ESCAPE requires a single-character string.");
                 }
-                _index++;
-                escapeChar = ((string)escapeToken.Value!)[0];
             }
-            return new SqlLikeNode(left, (string)patternToken.Value!, escapeChar, prefixNegate);
+            if (patternNode is SqlLiteralNode patternLit && patternLit.Value is string pattern
+                && (escapeNode is null || (escapeNode is SqlLiteralNode el && el.Value is string { Length: 1 })))
+            {
+                var escapeChar = escapeNode is SqlLiteralNode e ? ((string)e.Value!)[0] : (char?)null;
+                try
+                {
+                    return new SqlLikeNode(left, pattern, escapeChar, prefixNegate);
+                }
+                catch (FormatException ex)
+                {
+                    throw Error(ex.Message);
+                }
+            }
+            return new SqlLikeNode(left, patternNode, escapeNode, prefixNegate);
         }
         if (Match(SqlTokenKind.KwIn))
         {
@@ -208,6 +221,10 @@ internal sealed class SqlParser
         {
             return new SqlNegateNode(ParseUnaryArithmetic());
         }
+        if (Match(SqlTokenKind.Plus))
+        {
+            return new SqlUnaryPlusNode(ParseUnaryArithmetic());
+        }
         return ParsePrimary();
     }
 
@@ -232,6 +249,21 @@ internal sealed class SqlParser
             case SqlTokenKind.KwNull:
                 _index++;
                 return new SqlLiteralNode(null);
+
+            // Parameters bind at parse time (they are per-rule constants supplied via
+            // SqlRuleFilter.Parameters / SqlRuleAction.Parameters), so evaluation pays
+            // nothing and an undefined parameter fails at rule creation.
+            case SqlTokenKind.Parameter:
+            {
+                _index++;
+                if (_parameters is not null
+                    && (_parameters.TryGetValue("@" + token.Text, out var parameterValue)
+                        || _parameters.TryGetValue(token.Text, out parameterValue)))
+                {
+                    return new SqlLiteralNode(parameterValue);
+                }
+                throw Error($"Parameter '@{token.Text}' is not defined. Supply it via the filter's Parameters.");
+            }
 
             case SqlTokenKind.Identifier:
                 if (Peek(1).Kind == SqlTokenKind.LeftParen)
