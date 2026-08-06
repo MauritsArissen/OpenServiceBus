@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -153,8 +153,10 @@ function SyntaxGroup({ title, children }: { title: string; children: ReactNode }
   );
 }
 
-/** Everything the broker's SQL grammar supports, mirroring docs/Topics-and-Subscriptions. */
-function SyntaxReference() {
+/** Everything the broker's SQL grammar supports, mirroring docs/Topics-and-Subscriptions.
+    Memoized: the dialog re-renders on every store update (polling, counts), and this
+    subtree is fully static. */
+const SyntaxReference = memo(function SyntaxReference() {
   return (
     <details className="rounded-md border bg-muted/30 text-xs [&[open]>summary]:border-b">
       <summary className="cursor-pointer select-none px-3 py-2 font-medium text-muted-foreground hover:text-foreground">
@@ -207,4 +209,4 @@ function SyntaxReference() {
       </div>
     </details>
   );
-}
+});
