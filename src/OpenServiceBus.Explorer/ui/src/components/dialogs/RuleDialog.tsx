@@ -167,7 +167,7 @@ const SyntaxReference = memo(function SyntaxReference() {
           <Syntax code="region  /  user.region">A custom (application) property; bare names default to user scope.</Syntax>
           <Syntax code="sys.Subject">
             A system property: MessageId, CorrelationId, Subject (alias Label), To, ReplyTo,
-            ReplyToSessionId, SessionId, ContentType.
+            ReplyToSessionId, SessionId, ContentType, EnqueuedTimeUtc.
           </Syntax>
           <Syntax code="[order-id]">Bracket-quote names with special characters or reserved words.</Syntax>
         </SyntaxGroup>
@@ -204,7 +204,8 @@ const SyntaxReference = memo(function SyntaxReference() {
         </SyntaxGroup>
         <p className="text-[10px] text-muted-foreground/70">
           Invalid expressions are rejected when the rule is saved. Filters that error at
-          evaluation time (e.g. arithmetic on text) count as a non-match.
+          evaluation time (e.g. arithmetic on text) count as a non-match. Not supported:
+          BETWEEN and parameterized filters.
         </p>
       </div>
     </details>
