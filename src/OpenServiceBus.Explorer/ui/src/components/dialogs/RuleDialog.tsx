@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -85,8 +85,8 @@ export function RuleDialog({ topic, sub, edit }: { topic: string; sub: string; e
               className="font-mono text-xs"
             />
             <p className="text-[11px] text-muted-foreground">
-              Supports = != &lt; &gt; &lt;= &gt;=, AND/OR/NOT, IS [NOT] NULL, LIKE (% and _), [NOT] IN (…),
-              [NOT] EXISTS(prop). Reference properties bare, or with sys. / user. prefixes.
+              A message matches when the expression evaluates to true. The full grammar is
+              in the syntax reference below.
             </p>
           </div>
         )}
@@ -122,14 +122,89 @@ export function RuleDialog({ topic, sub, edit }: { topic: string; sub: string; e
           />
           <p className="text-[11px] text-muted-foreground">
             SET/REMOVE statements applied to this subscription's copy when the rule matches.
-            Writable sys properties: Label, CorrelationId, To, ReplyTo, ReplyToSessionId, ContentType.
           </p>
         </div>
+
+        <SyntaxReference />
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={() => store.setDialog(null)}>Cancel</Button>
         <Button onClick={() => void save()} disabled={busy}>Save rule</Button>
       </DialogFooter>
     </DialogContent>
+  );
+}
+
+function Syntax({ code, children }: { code: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[minmax(0,13rem)_1fr] items-baseline gap-x-3 gap-y-0.5">
+      <code className="break-words font-mono text-[11px] text-foreground">{code}</code>
+      <span className="text-muted-foreground">{children}</span>
+    </div>
+  );
+}
+
+function SyntaxGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="space-y-1">
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+/** Everything the broker's SQL grammar supports, mirroring docs/Topics-and-Subscriptions. */
+function SyntaxReference() {
+  return (
+    <details className="rounded-md border bg-muted/30 text-xs [&[open]>summary]:border-b">
+      <summary className="cursor-pointer select-none px-3 py-2 font-medium text-muted-foreground hover:text-foreground">
+        SQL syntax reference - operators, functions &amp; actions
+      </summary>
+      <div className="max-h-64 space-y-3 overflow-y-auto p-3">
+        <SyntaxGroup title="Properties">
+          <Syntax code="region  /  user.region">A custom (application) property; bare names default to user scope.</Syntax>
+          <Syntax code="sys.Subject">
+            A system property: MessageId, CorrelationId, Subject (alias Label), To, ReplyTo,
+            ReplyToSessionId, SessionId, ContentType.
+          </Syntax>
+          <Syntax code="[order-id]">Bracket-quote names with special characters or reserved words.</Syntax>
+        </SyntaxGroup>
+        <SyntaxGroup title="Comparison & logic">
+          <Syntax code="=  !=  <>  <  <=  >  >=">Compare numbers, strings, booleans. A missing property is NULL and never matches.</Syntax>
+          <Syntax code="AND  OR  NOT  ( ... )">Combine predicates; SQL three-valued NULL logic applies.</Syntax>
+          <Syntax code="IS NULL  /  IS NOT NULL">Test whether a value is (not) NULL.</Syntax>
+        </SyntaxGroup>
+        <SyntaxGroup title="Arithmetic">
+          <Syntax code="+  -  *  /  %">On numbers: priority + 1 &gt;= 5, total % 2 = 0. Division always yields a decimal.</Syntax>
+          <Syntax code="-value">Unary minus: -offset &lt; 0.</Syntax>
+          <Syntax code="'a' + 'b'">+ concatenates when either side is a string.</Syntax>
+        </SyntaxGroup>
+        <SyntaxGroup title="Pattern & sets">
+          <Syntax code="LIKE 'ord%'">% matches any run of characters, _ exactly one. Also NOT LIKE.</Syntax>
+          <Syntax code="LIKE '100!%' ESCAPE '!'">The escape character makes the next character literal - here a real percent sign.</Syntax>
+          <Syntax code="IN ('eu', 'us')">Value is (NOT IN: is not) one of the listed values.</Syntax>
+          <Syntax code="EXISTS(prop)">The property is present on the message, whatever its value. Also NOT EXISTS.</Syntax>
+        </SyntaxGroup>
+        <SyntaxGroup title="Functions">
+          <Syntax code="newid()">A fresh random GUID each evaluation.</Syntax>
+          <Syntax code="property(name)  /  p(name)">The value of the named property; accepts bare, sys./user.-scoped, or a 'string' name.</Syntax>
+        </SyntaxGroup>
+        <SyntaxGroup title="Literals">
+          <Syntax code="'text'  42  3.14  TRUE  FALSE  NULL">Strings use single quotes; double the quote ('it''s') to escape one.</Syntax>
+        </SyntaxGroup>
+        <SyntaxGroup title="Actions (on match)">
+          <Syntax code="SET prop = expr">Set or overwrite a property on the delivered copy; the value side uses the full grammar above.</Syntax>
+          <Syntax code="REMOVE prop">Delete a custom property. Separate multiple statements with ;</Syntax>
+          <Syntax code="SET sys.Label = 'tagged'">
+            Writable sys properties: Label, CorrelationId, To, ReplyTo, ReplyToSessionId,
+            ContentType. Clear one with SET sys.X = NULL.
+          </Syntax>
+        </SyntaxGroup>
+        <p className="text-[10px] text-muted-foreground/70">
+          Invalid expressions are rejected when the rule is saved. Filters that error at
+          evaluation time (e.g. arithmetic on text) count as a non-match.
+        </p>
+      </div>
+    </details>
   );
 }
