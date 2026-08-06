@@ -6,13 +6,14 @@ namespace OpenServiceBus.Core.Filters;
 ///   • Comparisons: <c>=</c>, <c>!=</c> or <c>&lt;&gt;</c>, <c>&lt;</c>, <c>&gt;</c>, <c>&lt;=</c>, <c>&gt;=</c>
 ///   • Logical: <c>AND</c>, <c>OR</c>, <c>NOT</c>, parentheses
 ///   • <c>IS NULL</c>, <c>IS NOT NULL</c>
-///   • <c>LIKE 'pattern'</c> with <c>%</c> and <c>_</c> wildcards
+///   • <c>LIKE 'pattern'</c> with <c>%</c> and <c>_</c> wildcards, optional <c>ESCAPE 'char'</c>
 ///   • <c>IN (a, b, c)</c>, <c>NOT IN (...)</c>
 ///   • <c>EXISTS(propertyName)</c>, <c>NOT EXISTS(propertyName)</c>
+///   • Arithmetic: <c>+ - * / %</c>, unary minus, string concatenation via <c>+</c>
+///   • Functions: <c>newid()</c>, <c>property(name)</c> / <c>p(name)</c>
 ///   • Literals: strings (single quotes, with <c>''</c> escape), integers, decimals, <c>TRUE</c>/<c>FALSE</c>/<c>NULL</c>
 ///
-/// Out of scope (deferred): date arithmetic, <c>newid()</c>, parameterised filters,
-/// concatenation/numeric operators on expressions.
+/// Out of scope (deferred): date arithmetic, parameterised filters.
 /// </summary>
 public sealed class SqlFilter : RuleFilter
 {

@@ -3,7 +3,7 @@
 Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
-  -> purge (JSON management API) -> transfer dlq
+  -> purge (JSON management API) -> transfer dlq -> sql filter
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.
@@ -254,6 +254,48 @@ def run() -> None:
             if moved:
                 transfer_receiver.complete_message(moved[0])
         http("DELETE", f"{base}/{fwd_source}?api-version=2021-05")
+
+        # 18. sql filter - an arithmetic SQL rule routes only matching messages (issue #26).
+        filter_topic = f"smoke-filter-{stamp}"
+
+        def atom_entry(description_xml: str) -> bytes:
+            return (
+                '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">'
+                + description_xml
+                + "</content></entry>"
+            ).encode()
+
+        http("PUT", f"{base}/{filter_topic}?api-version=2021-05", atom_entry(
+            '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        http("PUT", f"{base}/{filter_topic}/subscriptions/flt?api-version=2021-05", atom_entry(
+            '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        http("DELETE", f"{base}/{filter_topic}/subscriptions/flt/rules/$Default?api-version=2021-05")
+        rule_status, _ = http("PUT", f"{base}/{filter_topic}/subscriptions/flt/rules/high?api-version=2021-05", atom_entry(
+            '<RuleDescription xmlns:i="http://www.w3.org/2001/XMLSchema-instance" '
+            'xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
+            '<Filter i:type="SqlFilter"><SqlExpression>priority + 1 >= 5</SqlExpression></Filter></RuleDescription>'))
+        with client.get_topic_sender(filter_topic) as filter_sender:
+            filter_sender.send_messages(ServiceBusMessage(
+                "match", message_id=f"flt-match-{stamp}", application_properties={"priority": 4}))
+            filter_sender.send_messages(ServiceBusMessage(
+                "miss", message_id=f"flt-miss-{stamp}", application_properties={"priority": 1}))
+        with client.get_subscription_receiver(filter_topic, "flt", max_wait_time=10) as filter_receiver:
+            filtered = filter_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+            if filtered:
+                filter_receiver.complete_message(filtered[0])
+            extra = filter_receiver.receive_messages(max_message_count=1, max_wait_time=2)
+        filter_ok = (
+            rule_status == 201
+            and len(filtered) == 1
+            and filtered[0].message_id == f"flt-match-{stamp}"
+            and not extra
+        )
+        check(
+            "sql filter",
+            filter_ok,
+            "" if filter_ok else f"rule {rule_status}, got {len(filtered)} msg(s), extra {len(extra)}",
+        )
+        http("DELETE", f"{base}/{filter_topic}?api-version=2021-05")
 
 
 try:

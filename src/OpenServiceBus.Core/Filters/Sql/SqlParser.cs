@@ -8,12 +8,13 @@ namespace OpenServiceBus.Core.Filters.Sql;
 ///   or-expr          := and-expr ( OR and-expr )*
 ///   and-expr         := unary-expr ( AND unary-expr )*
 ///   unary-expr       := NOT unary-expr | predicate
-///   predicate        := comparison ( IS [NOT] NULL | [NOT] LIKE string | [NOT] IN '(' list ')' )?
+///   predicate        := comparison ( IS [NOT] NULL | [NOT] LIKE string [ESCAPE string] | [NOT] IN '(' list ')' )?
 ///   comparison       := additive ( ( '=' | '!=' | '&lt;&gt;' | '&lt;' | '&lt;=' | '&gt;' | '&gt;=' ) additive )?
 ///   additive         := multiplicative ( ( '+' | '-' ) multiplicative )*
 ///   multiplicative   := unary-arith ( ( '*' | '/' | '%' ) unary-arith )*
 ///   unary-arith      := '-' unary-arith | primary
-///   primary          := literal | property-ref | '(' expression ')' | EXISTS '(' identifier ')' | NOT EXISTS '(' identifier ')'
+///   primary          := literal | function-call | property-ref | '(' expression ')' | EXISTS '(' identifier ')' | NOT EXISTS '(' identifier ')'
+///   function-call    := NEWID '(' ')' | ( PROPERTY | P ) '(' property-ref | string ')'
 ///   property-ref     := ( identifier '.' )? identifier
 /// </summary>
 internal sealed class SqlParser
@@ -110,7 +111,18 @@ internal sealed class SqlParser
                 throw Error("Expected string literal after LIKE.");
             }
             _index++;
-            return new SqlLikeNode(left, (string)patternToken.Value!, prefixNegate);
+            char? escapeChar = null;
+            if (Match(SqlTokenKind.KwEscape))
+            {
+                var escapeToken = Current;
+                if (escapeToken.Kind != SqlTokenKind.String || ((string)escapeToken.Value!).Length != 1)
+                {
+                    throw Error("ESCAPE requires a single-character string literal.");
+                }
+                _index++;
+                escapeChar = ((string)escapeToken.Value!)[0];
+            }
+            return new SqlLikeNode(left, (string)patternToken.Value!, escapeChar, prefixNegate);
         }
         if (Match(SqlTokenKind.KwIn))
         {
@@ -222,9 +234,67 @@ internal sealed class SqlParser
                 return new SqlLiteralNode(null);
 
             case SqlTokenKind.Identifier:
+                if (Peek(1).Kind == SqlTokenKind.LeftParen)
+                {
+                    return ParseFunctionCall();
+                }
                 return ParsePropertyRef();
         }
         throw Error($"Unexpected token '{token.Text}'.");
+    }
+
+    private SqlExpressionNode ParseFunctionCall()
+    {
+        var nameToken = Current;
+        switch (nameToken.Text.ToUpperInvariant())
+        {
+            case "NEWID":
+                _index += 2;
+                Expect(SqlTokenKind.RightParen, "newid() takes no arguments.");
+                return new SqlNewIdNode();
+
+            case "PROPERTY":
+            case "P":
+            {
+                _index += 2;
+                string source = string.Empty;
+                string name;
+                if (Current.Kind == SqlTokenKind.String)
+                {
+                    name = (string)Current.Value!;
+                    _index++;
+                }
+                else if (Current.Kind == SqlTokenKind.Identifier)
+                {
+                    var first = Current;
+                    _index++;
+                    if (Match(SqlTokenKind.Dot))
+                    {
+                        var second = Current;
+                        if (second.Kind != SqlTokenKind.Identifier)
+                        {
+                            throw Error($"Expected property name after '.' inside {nameToken.Text}(...).");
+                        }
+                        _index++;
+                        source = first.Text;
+                        name = second.Text;
+                    }
+                    else
+                    {
+                        name = first.Text;
+                    }
+                }
+                else
+                {
+                    throw Error($"Expected a property name inside {nameToken.Text}(...).");
+                }
+                Expect(SqlTokenKind.RightParen, $"Expected ')' to close {nameToken.Text}(...).");
+                return new SqlPropertyRefNode(source, name);
+            }
+
+            default:
+                throw Error($"Unknown function '{nameToken.Text}'. Supported: newid(), property(name), p(name).");
+        }
     }
 
     private SqlExpressionNode ParsePropertyRef()
@@ -293,6 +363,9 @@ internal sealed class SqlParser
     }
 
     private SqlToken Current => _tokens[_index];
+
+    private SqlToken Peek(int offset) =>
+        _index + offset < _tokens.Count ? _tokens[_index + offset] : _tokens[^1];
 
     private bool Match(SqlTokenKind kind)
     {

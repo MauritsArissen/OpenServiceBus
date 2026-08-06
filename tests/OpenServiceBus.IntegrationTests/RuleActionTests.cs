@@ -128,7 +128,7 @@ public class RuleActionTests
 
         var ruleManager = client.CreateRuleManager("events", "acted");
 
-        var ex = await Should.ThrowAsync<InvalidOperationException>(() => ruleManager.CreateRuleAsync(
+        var ex = await Should.ThrowAsync<ArgumentException>(() => ruleManager.CreateRuleAsync(
             new CreateRuleOptions("bad", new TrueRuleFilter())
             {
                 Action = new SqlRuleAction("SET sys.MessageId = 'nope'"),

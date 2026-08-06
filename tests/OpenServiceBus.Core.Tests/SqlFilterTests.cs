@@ -208,4 +208,94 @@ public class SqlFilterTests
 
         filter.Matches(Message()).ShouldBeFalse();
     }
+
+    [Theory]
+    [InlineData("priority + 1 >= 5", 4, true)]
+    [InlineData("priority + 1 >= 5", 3, false)]
+    [InlineData("total % 2 = 0", 4, true)]
+    [InlineData("total % 2 = 0", 5, false)]
+    [InlineData("-offset < 0", 3, true)]
+    [InlineData("-offset < 0", -3, false)]
+    public void Matches_IssueAcceptanceExpressions_Evaluate(string expression, int value, bool expected)
+    {
+        var filter = new SqlFilter(expression);
+        var props = new Dictionary<string, object?> { ["priority"] = value, ["total"] = value, ["offset"] = value };
+
+        filter.Matches(Message(props: props)).ShouldBe(expected);
+    }
+
+    [Theory]
+    [InlineData("code LIKE 'a!_b' ESCAPE '!'", "a_b", true)]
+    [InlineData("code LIKE 'a!_b' ESCAPE '!'", "axb", false)]
+    [InlineData("code LIKE '100!%' ESCAPE '!'", "100%", true)]
+    [InlineData("code LIKE '100!%' ESCAPE '!'", "1000", false)]
+    [InlineData("code LIKE '!!%' ESCAPE '!'", "!anything", true)]
+    [InlineData("code NOT LIKE 'a!_b' ESCAPE '!'", "axb", true)]
+    public void Matches_LikeWithEscape_TreatsEscapedWildcardsAsLiterals(string expression, string value, bool expected)
+    {
+        var filter = new SqlFilter(expression);
+
+        filter.Matches(Message(props: new() { ["code"] = value })).ShouldBe(expected);
+    }
+
+    [Theory]
+    [InlineData("property(region) = 'eu'")]
+    [InlineData("p(region) = 'eu'")]
+    [InlineData("PROPERTY('region') = 'eu'")]
+    [InlineData("property(user.region) = 'eu'")]
+    public void Matches_PropertyFunction_ResolvesLikeABareReference(string expression)
+    {
+        var filter = new SqlFilter(expression);
+
+        filter.Matches(Message(props: new() { ["region"] = "eu" })).ShouldBeTrue();
+        filter.Matches(Message(props: new() { ["region"] = "us" })).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Matches_PropertyFunctionWithSysScope_ResolvesSystemProperties()
+    {
+        var filter = new SqlFilter("property(sys.Subject) = 'urgent'");
+
+        filter.Matches(Message(subject: "urgent")).ShouldBeTrue();
+        filter.Matches(Message(subject: "calm")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Matches_UnsignedAmqpNumberTypes_CoerceLikeSignedOnes()
+    {
+        var arithmetic = new SqlFilter("priority + 1 >= 5");
+        var compare = new SqlFilter("priority >= 4");
+
+        arithmetic.Matches(Message(props: new() { ["priority"] = (uint)4 })).ShouldBeTrue(
+            "rhea (the JS SDK) sends numbers as AMQP uint");
+        arithmetic.Matches(Message(props: new() { ["priority"] = (ulong)4 })).ShouldBeTrue();
+        arithmetic.Matches(Message(props: new() { ["priority"] = (ushort)4 })).ShouldBeTrue();
+        arithmetic.Matches(Message(props: new() { ["priority"] = 4.0 })).ShouldBeTrue();
+        compare.Matches(Message(props: new() { ["priority"] = (uint)4 })).ShouldBeTrue();
+        compare.Matches(Message(props: new() { ["priority"] = (uint)3 })).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Matches_NewId_ProducesADistinctGuidPerCall()
+    {
+        var filter = new SqlFilter("newid() <> newid()");
+
+        filter.Matches(Message()).ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData("priority +")]
+    [InlineData("priority + 1")]
+    [InlineData("newid()")]
+    [InlineData("code LIKE 'a%' ESCAPE '!!'")]
+    [InlineData("code LIKE 'a!' ESCAPE '!'")]
+    [InlineData("unknownfn(region) = 1")]
+    [InlineData("newid(1) IS NOT NULL")]
+    [InlineData("property() = 1")]
+    public void Constructor_InvalidExpressions_ThrowAtCreationTime(string expression)
+    {
+        var ex = Should.Throw<Exception>(() => new SqlFilter(expression));
+        (ex is FormatException or ArgumentException).ShouldBeTrue(
+            $"expected a creation-time parse/validation error, got {ex.GetType().Name}");
+    }
 }

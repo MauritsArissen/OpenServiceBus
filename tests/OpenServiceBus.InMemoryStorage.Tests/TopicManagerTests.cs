@@ -180,4 +180,26 @@ public class TopicManagerTests
         (await queues.GetAsync(EntityNames.SubscriptionAddress("events", "a"))).ShouldBeNull();
         (await queues.GetAsync(EntityNames.SubscriptionAddress("events", "b"))).ShouldBeNull();
     }
+
+    [Fact]
+    public async Task EvaluateSubscribers_FilterThrowsAtEvaluation_CountsAsNonMatchWithoutFailingFanOut()
+    {
+        // Arrange - one sub whose filter does arithmetic on a string property (throws at
+        // evaluation), one healthy sub. The publish must reach the healthy sub only.
+        var (topics, _, _) = NewFixture();
+        await topics.CreateTopicAsync(new TopicDescriptor { Name = "events" });
+        await topics.CreateSubscriptionAsync(new SubscriptionDescriptor { TopicName = "events", Name = "broken" });
+        await topics.CreateSubscriptionAsync(new SubscriptionDescriptor { TopicName = "events", Name = "healthy" });
+        await topics.CreateOrReplaceRuleAsync(new RuleDescriptor
+        {
+            TopicName = "events", SubscriptionName = "broken", Name = "$Default",
+            Filter = new SqlFilter("region + 1 > 0"),
+        });
+
+        // Act
+        var matched = topics.EvaluateSubscribers("events", Msg(props: new() { ["region"] = "eu" }));
+
+        // Assert
+        matched.ShouldBe(new[] { EntityNames.SubscriptionAddress("events", "healthy") });
+    }
 }

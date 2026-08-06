@@ -63,12 +63,39 @@ internal static class SqlEvaluator
         _ => throw new InvalidOperationException("NOT applied to non-boolean value."),
     };
 
-    public static object? MatchLike(object? value, string pattern)
+    /// <summary>
+    /// Translate a SQL LIKE pattern (with optional <c>ESCAPE</c> character) to a regex.
+    /// An escape character makes the FOLLOWING character literal - the standard way to
+    /// match a literal <c>%</c> or <c>_</c>. A pattern that ends on a dangling escape is
+    /// rejected, mirroring rule-creation validation in Azure.
+    /// </summary>
+    public static Regex BuildLikeRegex(string pattern, char? escapeChar)
     {
-        if (value is null) return null;
-        if (value is not string s) return false;
-        var regex = LikeToRegex(pattern);
-        return regex.IsMatch(s);
+        var sb = new System.Text.StringBuilder("^");
+        for (var i = 0; i < pattern.Length; i++)
+        {
+            var c = pattern[i];
+            if (escapeChar is { } esc && c == esc)
+            {
+                if (i + 1 >= pattern.Length)
+                {
+                    throw new FormatException($"LIKE pattern \"{pattern}\" ends with the escape character '{esc}'.");
+                }
+                i++;
+                sb.Append(Regex.Escape(pattern[i].ToString(CultureInfo.InvariantCulture)));
+                continue;
+            }
+            switch (c)
+            {
+                case '%': sb.Append(".*"); break;
+                case '_': sb.Append('.'); break;
+                default:
+                    sb.Append(Regex.Escape(c.ToString(CultureInfo.InvariantCulture)));
+                    break;
+            }
+        }
+        sb.Append('$');
+        return new Regex(sb.ToString(), RegexOptions.Singleline);
     }
 
     public static object? MatchIn(object? value, IReadOnlyList<object?> candidates)
@@ -144,32 +171,23 @@ internal static class SqlEvaluator
         };
     }
 
-    /// <summary>Number unification: ints widen to long, decimals to double, so cross-type compare works.</summary>
+    /// <summary>
+    /// Number unification: every integral type widens to long, every fractional type to
+    /// double, so cross-type compare and arithmetic work. The unsigned types matter for
+    /// cross-SDK parity - rhea (the JS SDK) encodes plain numbers as AMQP uint/ulong.
+    /// </summary>
     private static object Normalize(object value) => value switch
     {
         int i => (long)i,
         short s => (long)s,
         byte b => (long)b,
+        sbyte sb => (long)sb,
+        ushort us => (long)us,
+        uint ui => (long)ui,
+        ulong ul => ul <= long.MaxValue ? (long)ul : (double)ul,
         float f => (double)f,
         decimal d => (double)d,
         _ => value,
     };
 
-    private static Regex LikeToRegex(string pattern)
-    {
-        var sb = new System.Text.StringBuilder("^");
-        foreach (var c in pattern)
-        {
-            switch (c)
-            {
-                case '%': sb.Append(".*"); break;
-                case '_': sb.Append('.'); break;
-                default:
-                    sb.Append(Regex.Escape(c.ToString(CultureInfo.InvariantCulture)));
-                    break;
-            }
-        }
-        sb.Append('$');
-        return new Regex(sb.ToString(), RegexOptions.Singleline);
-    }
 }

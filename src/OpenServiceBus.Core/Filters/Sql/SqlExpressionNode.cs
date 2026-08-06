@@ -102,15 +102,35 @@ internal sealed class SqlIsNullNode(SqlExpressionNode operand, bool negate) : Sq
     }
 }
 
-internal sealed class SqlLikeNode(SqlExpressionNode operand, string pattern, bool negate) : SqlExpressionNode
+internal sealed class SqlLikeNode : SqlExpressionNode
 {
+    private readonly SqlExpressionNode _operand;
+    private readonly bool _negate;
+    private readonly System.Text.RegularExpressions.Regex _regex;
+
+    public SqlLikeNode(SqlExpressionNode operand, string pattern, char? escapeChar, bool negate)
+    {
+        _operand = operand;
+        _negate = negate;
+        // Compiled here so an invalid pattern (e.g. a trailing escape character) fails at
+        // rule-creation time, and the hot evaluation path reuses one regex.
+        _regex = SqlEvaluator.BuildLikeRegex(pattern, escapeChar);
+    }
+
     public override bool ProducesBoolean => true;
+
     public override object? Evaluate(MessageFilterContext message)
     {
-        var matched = SqlEvaluator.MatchLike(operand.Evaluate(message), pattern);
-        if (matched is null) return null;
-        return negate ? !(bool)matched : matched;
+        var value = _operand.Evaluate(message);
+        if (value is null) return null;
+        var matched = value is string s && _regex.IsMatch(s);
+        return _negate ? !matched : matched;
     }
+}
+
+internal sealed class SqlNewIdNode : SqlExpressionNode
+{
+    public override object? Evaluate(MessageFilterContext message) => Guid.NewGuid();
 }
 
 internal sealed class SqlInNode(SqlExpressionNode operand, IReadOnlyList<SqlExpressionNode> values, bool negate) : SqlExpressionNode

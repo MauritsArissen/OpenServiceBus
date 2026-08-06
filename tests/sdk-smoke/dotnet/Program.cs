@@ -3,7 +3,7 @@
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
-//   -> purge (JSON management API) -> transfer dlq
+//   -> purge (JSON management API) -> transfer dlq -> sql filter
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -194,6 +194,31 @@ try
     Check("transfer dlq", transferOk,
         transferOk ? "" : movedMsg is null ? "no message" : movedMsg.DeadLetterReason ?? "no reason");
     await admin.DeleteQueueAsync(fwdSource);
+
+    // 18. sql filter - an arithmetic SQL rule routes only matching messages (issue #26).
+    var filterTopic = $"smoke-filter-{stamp}";
+    await admin.CreateTopicAsync(filterTopic);
+    await admin.CreateSubscriptionAsync(filterTopic, "flt");
+    await admin.DeleteRuleAsync(filterTopic, "flt", "$Default");
+    await admin.CreateRuleAsync(filterTopic, "flt",
+        new CreateRuleOptions("high", new SqlRuleFilter("priority + 1 >= 5")));
+    var filterSender = client.CreateSender(filterTopic);
+    var matchMsg = new ServiceBusMessage("match") { MessageId = $"flt-match-{stamp}" };
+    matchMsg.ApplicationProperties["priority"] = 4;
+    var missMsg = new ServiceBusMessage("miss") { MessageId = $"flt-miss-{stamp}" };
+    missMsg.ApplicationProperties["priority"] = 1;
+    await filterSender.SendMessageAsync(matchMsg);
+    await filterSender.SendMessageAsync(missMsg);
+    await filterSender.CloseAsync();
+    var filterReceiver = client.CreateReceiver(filterTopic, "flt");
+    var filtered = await filterReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    if (filtered is not null) await filterReceiver.CompleteMessageAsync(filtered);
+    var extra = await filterReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2));
+    await filterReceiver.CloseAsync();
+    var filterOk = filtered?.MessageId == $"flt-match-{stamp}" && extra is null;
+    Check("sql filter", filterOk,
+        filterOk ? "" : filtered is null ? "no message" : extra is null ? filtered.MessageId! : "non-matching message leaked");
+    await admin.DeleteTopicAsync(filterTopic);
 }
 catch (Exception e)
 {
