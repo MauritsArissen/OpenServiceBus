@@ -44,6 +44,32 @@ public class SqlRuleActionTests
     }
 
     [Fact]
+    public void Apply_SetToNewId_WritesAFreshGuidPerApplication()
+    {
+        var first = new FakeTarget();
+        var second = new FakeTarget();
+        var action = new SqlRuleAction("SET trackingId = newid()");
+
+        action.Apply(first);
+        action.Apply(second);
+
+        first.ApplicationProperties["trackingId"].ShouldBeOfType<Guid>();
+        second.ApplicationProperties["trackingId"].ShouldBeOfType<Guid>();
+        first.ApplicationProperties["trackingId"].ShouldNotBe(second.ApplicationProperties["trackingId"]);
+    }
+
+    [Fact]
+    public void Apply_SetToPropertyFunction_CopiesTheReferencedProperty()
+    {
+        var target = new FakeTarget();
+        target.ApplicationProperties["region"] = "eu";
+
+        new SqlRuleAction("SET zone = property(region)").Apply(target);
+
+        target.ApplicationProperties["zone"].ShouldBe("eu");
+    }
+
+    [Fact]
     public void Apply_StatementsRunSequentially_LaterOnesSeeEarlierResults()
     {
         var target = new FakeTarget();

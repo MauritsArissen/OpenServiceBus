@@ -39,7 +39,19 @@ public sealed class MessageFilterContext
                 return TryResolveSystem(name, out value);
             case "user":
             case "":
-                return ApplicationProperties.TryGetValue(name, out value);
+                // "Property names are case-insensitive" per the Service Bus SQL filter
+                // docs. Exact match first (free), then a case-insensitive scan.
+                if (ApplicationProperties.TryGetValue(name, out value)) return true;
+                foreach (var pair in ApplicationProperties)
+                {
+                    if (string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        value = pair.Value;
+                        return true;
+                    }
+                }
+                value = null;
+                return false;
         }
         value = null;
         return false;

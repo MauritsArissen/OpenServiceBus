@@ -19,8 +19,17 @@ internal static class SqlEvaluator
             $"SQL filter top-level expression must be boolean; got {value.GetType().Name}: {value}"),
     };
 
-    public static object? CompareEqual(object? left, object? right) =>
-        left is null || right is null ? null : Equals(Normalize(left), Normalize(right));
+    public static object? CompareEqual(object? left, object? right)
+    {
+        if (left is null || right is null) return null;
+        var l = Normalize(left);
+        var r = Normalize(right);
+        // Cross-type numeric equality follows C# implicit conversion semantics like the
+        // real service: 7 = 7.0 is true even though boxed Equals(long, double) is not.
+        if (l is long ll && r is double rd) return (double)ll == rd;
+        if (l is double ld && r is long rl) return ld == (double)rl;
+        return Equals(l, r);
+    }
 
     public static object? CompareNotEqual(object? left, object? right) =>
         CompareEqual(left, right) is bool eq ? !eq : (object?)null;
@@ -63,12 +72,39 @@ internal static class SqlEvaluator
         _ => throw new InvalidOperationException("NOT applied to non-boolean value."),
     };
 
-    public static object? MatchLike(object? value, string pattern)
+    /// <summary>
+    /// Translate a SQL LIKE pattern (with optional <c>ESCAPE</c> character) to a regex.
+    /// An escape character makes the FOLLOWING character literal - the standard way to
+    /// match a literal <c>%</c> or <c>_</c>. A pattern that ends on a dangling escape is
+    /// rejected, mirroring rule-creation validation in Azure.
+    /// </summary>
+    public static Regex BuildLikeRegex(string pattern, char? escapeChar)
     {
-        if (value is null) return null;
-        if (value is not string s) return false;
-        var regex = LikeToRegex(pattern);
-        return regex.IsMatch(s);
+        var sb = new System.Text.StringBuilder("^");
+        for (var i = 0; i < pattern.Length; i++)
+        {
+            var c = pattern[i];
+            if (escapeChar is { } esc && c == esc)
+            {
+                if (i + 1 >= pattern.Length)
+                {
+                    throw new FormatException($"LIKE pattern \"{pattern}\" ends with the escape character '{esc}'.");
+                }
+                i++;
+                sb.Append(Regex.Escape(pattern[i].ToString(CultureInfo.InvariantCulture)));
+                continue;
+            }
+            switch (c)
+            {
+                case '%': sb.Append(".*"); break;
+                case '_': sb.Append('.'); break;
+                default:
+                    sb.Append(Regex.Escape(c.ToString(CultureInfo.InvariantCulture)));
+                    break;
+            }
+        }
+        sb.Append('$');
+        return new Regex(sb.ToString(), RegexOptions.Singleline);
     }
 
     public static object? MatchIn(object? value, IReadOnlyList<object?> candidates)
@@ -144,32 +180,35 @@ internal static class SqlEvaluator
         };
     }
 
-    /// <summary>Number unification: ints widen to long, decimals to double, so cross-type compare works.</summary>
+    public static object? UnaryPlus(object? value)
+    {
+        if (value is null) return null;
+        return Normalize(value) switch
+        {
+            long l => l,
+            double d => d,
+            var other => throw new InvalidOperationException($"Unary plus applied to non-numeric value ({other.GetType().Name})."),
+        };
+    }
+
+    /// <summary>
+    /// Number unification: every integral type widens to long, every fractional type to
+    /// double, so cross-type compare and arithmetic work. The unsigned types matter for
+    /// cross-SDK parity - rhea (the JS SDK) encodes plain numbers as AMQP uint/ulong.
+    /// </summary>
     private static object Normalize(object value) => value switch
     {
         int i => (long)i,
         short s => (long)s,
         byte b => (long)b,
+        sbyte sb => (long)sb,
+        ushort us => (long)us,
+        uint ui => (long)ui,
+        ulong ul => ul <= long.MaxValue ? (long)ul : (double)ul,
         float f => (double)f,
         decimal d => (double)d,
+        DateTime dt => new DateTimeOffset(dt.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dt, DateTimeKind.Utc) : dt),
         _ => value,
     };
 
-    private static Regex LikeToRegex(string pattern)
-    {
-        var sb = new System.Text.StringBuilder("^");
-        foreach (var c in pattern)
-        {
-            switch (c)
-            {
-                case '%': sb.Append(".*"); break;
-                case '_': sb.Append('.'); break;
-                default:
-                    sb.Append(Regex.Escape(c.ToString(CultureInfo.InvariantCulture)));
-                    break;
-            }
-        }
-        sb.Append('$');
-        return new Regex(sb.ToString(), RegexOptions.Singleline);
-    }
 }

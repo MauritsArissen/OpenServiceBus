@@ -6,6 +6,7 @@ namespace OpenServiceBus.Core.Filters.Sql;
 internal enum SqlTokenKind
 {
     Identifier,
+    Parameter,
     Number,
     String,
     LeftParen,
@@ -30,6 +31,7 @@ internal enum SqlTokenKind
     KwIs,
     KwNull,
     KwLike,
+    KwEscape,
     KwIn,
     KwExists,
     KwTrue,
@@ -120,18 +122,32 @@ internal sealed class SqlLexer
                 return new SqlToken(SqlTokenKind.Gt, ">", null, start);
             case '\'':
                 return ScanString(start);
+            case '@':
+                return ScanParameter(start);
         }
 
         if (char.IsDigit(ch))
         {
             return ScanNumber(start);
         }
-        if (char.IsLetter(ch) || ch == '_' || ch == '[')
+        if (char.IsLetter(ch) || ch == '_' || ch == '[' || ch == '"')
         {
             return ScanIdentifier(start);
         }
 
         throw Error($"Unexpected character '{ch}'.", start);
+    }
+
+    private SqlToken ScanParameter(int start)
+    {
+        _index++; // '@'
+        var nameStart = _index;
+        while (_index < _source.Length && (char.IsLetterOrDigit(_source[_index]) || _source[_index] == '_'))
+        {
+            _index++;
+        }
+        if (_index == nameStart) throw Error("Expected a parameter name after '@'.", start);
+        return new SqlToken(SqlTokenKind.Parameter, _source[nameStart.._index], null, start);
     }
 
     private SqlToken ScanString(int start)
@@ -168,31 +184,77 @@ internal sealed class SqlLexer
             _index++;
             while (_index < _source.Length && char.IsDigit(_source[_index])) _index++;
         }
+        // Scientific notation (approximate_number_constant in the Service Bus grammar):
+        // 101.5E5, 0.5E-2. Always a double, matching Azure.
+        if (_index < _source.Length && (_source[_index] is 'e' or 'E'))
+        {
+            var exponentStart = _index;
+            _index++;
+            if (_index < _source.Length && (_source[_index] is '+' or '-')) _index++;
+            if (_index < _source.Length && char.IsDigit(_source[_index]))
+            {
+                isReal = true;
+                while (_index < _source.Length && char.IsDigit(_source[_index])) _index++;
+            }
+            else
+            {
+                // Not an exponent after all (e.g. "5east") - back off and let the next
+                // token start at the 'e'.
+                _index = exponentStart;
+            }
+        }
         var text = _source[start.._index];
-        object value = isReal
-            ? double.Parse(text, CultureInfo.InvariantCulture)
-            : long.Parse(text, CultureInfo.InvariantCulture);
+        // Box each branch separately: a `bool ? double : long` conditional TYPES as double,
+        // which silently boxed every integer literal as a double and broke long-vs-long
+        // equality. Integer constants must be Int64, like the Service Bus grammar says.
+        object value;
+        if (isReal)
+        {
+            value = double.Parse(text, CultureInfo.InvariantCulture);
+        }
+        else
+        {
+            value = long.Parse(text, CultureInfo.InvariantCulture);
+        }
         return new SqlToken(SqlTokenKind.Number, text, value, start);
     }
 
     private SqlToken ScanIdentifier(int start)
     {
         string identifier;
-        if (_source[_index] == '[')
+        if (_source[_index] is '[' or '"')
         {
+            // Delimited ([...], with ]] escaping a literal ]) and quoted ("...", with ""
+            // escaping) identifiers, per the Service Bus grammar. Either quoting form is
+            // always an identifier, never a keyword - that is the whole point: a property
+            // literally named "true", "like", "not", etc. stays referenceable.
+            var close = _source[_index] == '[' ? ']' : '"';
             _index++;
-            var nameStart = _index;
-            while (_index < _source.Length && _source[_index] != ']') _index++;
-            if (_index >= _source.Length) throw Error("Unterminated bracketed identifier.", start);
-            identifier = _source[nameStart.._index];
-            _index++; // closing ]
-            // A bracket-quoted name is always an identifier, never a keyword - that is the
-            // whole point of the quoting. Returning it directly lets a property literally
-            // named "true", "like", "not", etc. be referenced.
-            return new SqlToken(SqlTokenKind.Identifier, identifier, null, start);
+            var sb = new StringBuilder();
+            while (_index < _source.Length)
+            {
+                var c = _source[_index];
+                if (c == close)
+                {
+                    if (_index + 1 < _source.Length && _source[_index + 1] == close)
+                    {
+                        sb.Append(close);
+                        _index += 2;
+                        continue;
+                    }
+                    _index++;
+                    return new SqlToken(SqlTokenKind.Identifier, sb.ToString(), null, start);
+                }
+                sb.Append(c);
+                _index++;
+            }
+            throw Error(close == ']' ? "Unterminated bracketed identifier." : "Unterminated quoted identifier.", start);
         }
 
-        while (_index < _source.Length && (char.IsLetterOrDigit(_source[_index]) || _source[_index] == '_' || _source[_index] == '-'))
+        // Regular identifiers are letter followed by letters/digits/underscores, exactly
+        // the Service Bus grammar. Notably NO '-': "total-1" must lex as a subtraction;
+        // dashed property names need [brackets].
+        while (_index < _source.Length && (char.IsLetterOrDigit(_source[_index]) || _source[_index] == '_'))
         {
             _index++;
         }
@@ -206,6 +268,7 @@ internal sealed class SqlLexer
             "IS" => new SqlToken(SqlTokenKind.KwIs, identifier, null, start),
             "NULL" => new SqlToken(SqlTokenKind.KwNull, identifier, null, start),
             "LIKE" => new SqlToken(SqlTokenKind.KwLike, identifier, null, start),
+            "ESCAPE" => new SqlToken(SqlTokenKind.KwEscape, identifier, null, start),
             "IN" => new SqlToken(SqlTokenKind.KwIn, identifier, null, start),
             "EXISTS" => new SqlToken(SqlTokenKind.KwExists, identifier, null, start),
             "TRUE" => new SqlToken(SqlTokenKind.KwTrue, identifier, true, start),

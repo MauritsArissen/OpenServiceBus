@@ -287,7 +287,19 @@ public sealed class TopicManager : ITopicRegistry
             // several rules match (the dictionary itself has no stable order).
             foreach (var rule in rules.Values.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
             {
-                if (rule.Filter.Matches(message))
+                // A filter that throws at evaluation time (e.g. arithmetic on a string
+                // property) counts as a non-match for this subscription, like real
+                // Service Bus - it must never fail the publish itself.
+                bool matches;
+                try
+                {
+                    matches = rule.Filter.Matches(message);
+                }
+                catch (InvalidOperationException)
+                {
+                    matches = false;
+                }
+                if (matches)
                 {
                     matched.Add(new SubscriberMatch(sub, rule.Action));
                     break;

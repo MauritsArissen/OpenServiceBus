@@ -8,31 +8,35 @@ namespace OpenServiceBus.Core.Filters.Sql;
 ///   or-expr          := and-expr ( OR and-expr )*
 ///   and-expr         := unary-expr ( AND unary-expr )*
 ///   unary-expr       := NOT unary-expr | predicate
-///   predicate        := comparison ( IS [NOT] NULL | [NOT] LIKE string | [NOT] IN '(' list ')' )?
+///   predicate        := comparison ( IS [NOT] NULL | [NOT] LIKE string [ESCAPE string] | [NOT] IN '(' list ')' )?
 ///   comparison       := additive ( ( '=' | '!=' | '&lt;&gt;' | '&lt;' | '&lt;=' | '&gt;' | '&gt;=' ) additive )?
 ///   additive         := multiplicative ( ( '+' | '-' ) multiplicative )*
 ///   multiplicative   := unary-arith ( ( '*' | '/' | '%' ) unary-arith )*
 ///   unary-arith      := '-' unary-arith | primary
-///   primary          := literal | property-ref | '(' expression ')' | EXISTS '(' identifier ')' | NOT EXISTS '(' identifier ')'
+///   primary          := literal | function-call | property-ref | '(' expression ')' | EXISTS '(' identifier ')' | NOT EXISTS '(' identifier ')'
+///   function-call    := NEWID '(' ')' | ( PROPERTY | P ) '(' property-ref | string ')'
 ///   property-ref     := ( identifier '.' )? identifier
 /// </summary>
 internal sealed class SqlParser
 {
     private readonly List<SqlToken> _tokens;
+    private readonly IReadOnlyDictionary<string, object?>? _parameters;
     private int _index;
 
-    public SqlParser(string source)
+    public SqlParser(string source, IReadOnlyDictionary<string, object?>? parameters = null)
     {
         _tokens = new SqlLexer(source).Tokenize();
+        _parameters = parameters;
     }
 
     /// <summary>
     /// Parse over a pre-lexed token slice (must end with an <see cref="SqlTokenKind.EndOfInput"/>
     /// token). Used by <see cref="SqlActionParser"/> to parse the value side of a SET statement.
     /// </summary>
-    internal SqlParser(List<SqlToken> tokens)
+    internal SqlParser(List<SqlToken> tokens, IReadOnlyDictionary<string, object?>? parameters = null)
     {
         _tokens = tokens;
+        _parameters = parameters;
     }
 
     public SqlExpressionNode ParseExpression()
@@ -104,13 +108,34 @@ internal sealed class SqlParser
         var prefixNegate = Match(SqlTokenKind.KwNot);
         if (Match(SqlTokenKind.KwLike))
         {
-            var patternToken = Current;
-            if (patternToken.Kind != SqlTokenKind.String)
+            // The Service Bus grammar allows pattern and escape to be any string-valued
+            // EXPRESSION. When both are string literals (the overwhelmingly common case)
+            // the regex compiles right here, so bad patterns fail at rule creation and
+            // evaluation reuses one regex; otherwise they resolve per message.
+            var patternNode = ParseAdditive();
+            SqlExpressionNode? escapeNode = null;
+            if (Match(SqlTokenKind.KwEscape))
             {
-                throw Error("Expected string literal after LIKE.");
+                escapeNode = ParseAdditive();
+                if (escapeNode is SqlLiteralNode escLit && escLit.Value is string escString && escString.Length != 1)
+                {
+                    throw Error("ESCAPE requires a single-character string.");
+                }
             }
-            _index++;
-            return new SqlLikeNode(left, (string)patternToken.Value!, prefixNegate);
+            if (patternNode is SqlLiteralNode patternLit && patternLit.Value is string pattern
+                && (escapeNode is null || (escapeNode is SqlLiteralNode el && el.Value is string { Length: 1 })))
+            {
+                var escapeChar = escapeNode is SqlLiteralNode e ? ((string)e.Value!)[0] : (char?)null;
+                try
+                {
+                    return new SqlLikeNode(left, pattern, escapeChar, prefixNegate);
+                }
+                catch (FormatException ex)
+                {
+                    throw Error(ex.Message);
+                }
+            }
+            return new SqlLikeNode(left, patternNode, escapeNode, prefixNegate);
         }
         if (Match(SqlTokenKind.KwIn))
         {
@@ -196,6 +221,10 @@ internal sealed class SqlParser
         {
             return new SqlNegateNode(ParseUnaryArithmetic());
         }
+        if (Match(SqlTokenKind.Plus))
+        {
+            return new SqlUnaryPlusNode(ParseUnaryArithmetic());
+        }
         return ParsePrimary();
     }
 
@@ -221,10 +250,89 @@ internal sealed class SqlParser
                 _index++;
                 return new SqlLiteralNode(null);
 
+            // Parameters bind at parse time (they are per-rule constants supplied via
+            // SqlRuleFilter.Parameters / SqlRuleAction.Parameters), so evaluation pays
+            // nothing and an undefined parameter fails at rule creation.
+            case SqlTokenKind.Parameter:
+            {
+                _index++;
+                if (_parameters is not null
+                    && (_parameters.TryGetValue("@" + token.Text, out var parameterValue)
+                        || _parameters.TryGetValue(token.Text, out parameterValue)))
+                {
+                    return new SqlLiteralNode(parameterValue);
+                }
+                throw Error($"Parameter '@{token.Text}' is not defined. Supply it via the filter's Parameters.");
+            }
+
             case SqlTokenKind.Identifier:
+                if (Peek(1).Kind == SqlTokenKind.LeftParen)
+                {
+                    return ParseFunctionCall();
+                }
                 return ParsePropertyRef();
         }
         throw Error($"Unexpected token '{token.Text}'.");
+    }
+
+    private SqlExpressionNode ParseFunctionCall()
+    {
+        var nameToken = Current;
+        switch (nameToken.Text.ToUpperInvariant())
+        {
+            case "NEWID":
+                _index += 2;
+                Expect(SqlTokenKind.RightParen, "newid() takes no arguments.");
+                return new SqlNewIdNode();
+
+            case "PROPERTY":
+            case "P":
+            {
+                _index += 2;
+                // Fast path: a (possibly scoped) identifier resolves statically. Anything
+                // else is, per the grammar, "any valid expression that returns a string" -
+                // resolved per message.
+                if (Current.Kind == SqlTokenKind.Identifier)
+                {
+                    var first = Current;
+                    _index++;
+                    string source = string.Empty;
+                    string name;
+                    if (Match(SqlTokenKind.Dot))
+                    {
+                        var second = Current;
+                        if (second.Kind != SqlTokenKind.Identifier)
+                        {
+                            throw Error($"Expected property name after '.' inside {nameToken.Text}(...).");
+                        }
+                        _index++;
+                        source = first.Text;
+                        name = second.Text;
+                    }
+                    else
+                    {
+                        name = first.Text;
+                    }
+                    Expect(SqlTokenKind.RightParen, $"Expected ')' to close {nameToken.Text}(...).");
+                    return new SqlPropertyRefNode(source, name);
+                }
+
+                var nameExpression = ParseAdditive();
+                Expect(SqlTokenKind.RightParen, $"Expected ')' to close {nameToken.Text}(...).");
+                if (nameExpression is SqlLiteralNode literal)
+                {
+                    if (literal.Value is not string literalName)
+                    {
+                        throw Error($"{nameToken.Text}(...) requires a string-valued name.");
+                    }
+                    return new SqlPropertyRefNode(string.Empty, literalName);
+                }
+                return new SqlPropertyFunctionNode(nameExpression);
+            }
+
+            default:
+                throw Error($"Unknown function '{nameToken.Text}'. Supported: newid(), property(name), p(name).");
+        }
     }
 
     private SqlExpressionNode ParsePropertyRef()
@@ -293,6 +401,9 @@ internal sealed class SqlParser
     }
 
     private SqlToken Current => _tokens[_index];
+
+    private SqlToken Peek(int offset) =>
+        _index + offset < _tokens.Count ? _tokens[_index + offset] : _tokens[^1];
 
     private bool Match(SqlTokenKind kind)
     {

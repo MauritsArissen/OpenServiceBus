@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
  * Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
- *   -> purge (JSON management API) -> transfer dlq
+ *   -> purge (JSON management API) -> transfer dlq -> sql filter
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -372,6 +372,66 @@ public final class Smoke {
                 : "FAIL transfer dlq: reason " + movedReason);
             http.send(
                 HttpRequest.newBuilder(fwdSourceUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+
+            // 18. sql filter - an arithmetic SQL rule routes only matching messages (issue #26).
+            String filterTopic = "smoke-filter-" + stamp;
+            String sbNs = "http://schemas.microsoft.com/netservices/2010/10/servicebus/connect";
+            java.util.function.BiFunction<String, String, HttpRequest> atomPut = (path, descriptionXml) ->
+                HttpRequest.newBuilder(URI.create(base + "/" + path + "?api-version=2021-05"))
+                    .header("Content-Type", "application/atom+xml")
+                    .PUT(HttpRequest.BodyPublishers.ofString(
+                        "<entry xmlns=\"http://www.w3.org/2005/Atom\"><content type=\"application/xml\">"
+                        + descriptionXml + "</content></entry>"))
+                    .build();
+            http.send(atomPut.apply(filterTopic,
+                "<TopicDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            http.send(atomPut.apply(filterTopic + "/subscriptions/flt",
+                "<SubscriptionDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + filterTopic + "/subscriptions/flt/rules/$Default?api-version=2021-05"))
+                    .DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> ruleResp = http.send(atomPut.apply(filterTopic + "/subscriptions/flt/rules/high",
+                "<RuleDescription xmlns:i=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns=\"" + sbNs + "\">"
+                + "<Filter i:type=\"SqlFilter\"><SqlExpression>priority + 1 &gt;= @threshold</SqlExpression>"
+                + "<Parameters><KeyValueOfstringanyType><Key>@threshold</Key>"
+                + "<Value xmlns:d6p1=\"http://www.w3.org/2001/XMLSchema\" i:type=\"d6p1:int\">5</Value>"
+                + "</KeyValueOfstringanyType></Parameters></Filter></RuleDescription>"),
+                HttpResponse.BodyHandlers.ofString());
+            try (ServiceBusSenderClient filterSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().topicName(filterTopic).buildClient()) {
+                ServiceBusMessage match = new ServiceBusMessage("match");
+                match.setMessageId("flt-match-" + stamp);
+                match.getApplicationProperties().put("priority", 4);
+                filterSender.sendMessage(match);
+                ServiceBusMessage miss = new ServiceBusMessage("miss");
+                miss.setMessageId("flt-miss-" + stamp);
+                miss.getApplicationProperties().put("priority", 1);
+                filterSender.sendMessage(miss);
+            }
+            String filteredId = null;
+            int filteredCount = 0;
+            try (ServiceBusReceiverClient filterReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().topicName(filterTopic).subscriptionName("flt")
+                    .disableAutoComplete().buildClient()) {
+                for (ServiceBusReceivedMessage m : filterReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    filteredId = m.getMessageId();
+                    filteredCount++;
+                    filterReceiver.complete(m);
+                }
+                for (ServiceBusReceivedMessage m : filterReceiver.receiveMessages(1, Duration.ofSeconds(2))) {
+                    filteredCount++;
+                    filterReceiver.complete(m);
+                }
+            }
+            results.add(ruleResp.statusCode() == 201 && filteredCount == 1 && ("flt-match-" + stamp).equals(filteredId)
+                ? "PASS sql filter"
+                : "FAIL sql filter: rule " + ruleResp.statusCode() + ", got " + filteredCount + " msg(s), id " + filteredId);
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + filterTopic + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);
         }

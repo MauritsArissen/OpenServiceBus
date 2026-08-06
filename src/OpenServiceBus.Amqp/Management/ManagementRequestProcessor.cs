@@ -174,6 +174,15 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
                 _ => BuildResponse(request, statusCode: 501, statusDescription: $"NotImplemented: {operation}"),
             };
         }
+        catch (Exception ex) when (ex is FormatException or ArgumentException)
+        {
+            // Invalid client input (e.g. a SQL filter that does not parse) is a 400 with the
+            // com.microsoft:argument-error condition, which the SDK maps to ArgumentException -
+            // the same surface real Service Bus produces when it rejects a rule at creation.
+            return BuildResponse(request, statusCode: 400,
+                statusDescription: "BadRequest: " + ex.Message,
+                errorCondition: "com.microsoft:argument-error");
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "$management {Op} failed on {Entity}", operation, _entityName);
@@ -512,14 +521,13 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         {
             (filter, action) = RuleWireCodec.DecodeRule(descObj!);
         }
-        catch (ArgumentException ex)
+        catch (Exception ex) when (ex is ArgumentException or FormatException)
         {
-            return BuildResponse(request, 400, "BadRequest: " + ex.Message);
-        }
-        catch (FormatException ex)
-        {
-            // SqlFilter / SqlRuleAction parse errors surface here.
-            return BuildResponse(request, 400, "BadRequest: " + ex.Message);
+            // SqlFilter / SqlRuleAction parse errors surface here. The argument-error
+            // condition makes the SDK throw ArgumentException, like real Service Bus
+            // rejecting a rule at creation time.
+            return BuildResponse(request, 400, "BadRequest: " + ex.Message,
+                errorCondition: "com.microsoft:argument-error");
         }
 
         // Service Bus's add-rule is upsert-style - if the rule already exists with the same
@@ -740,7 +748,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         _ => Array.Empty<long>(),
     };
 
-    private static Message BuildResponse(Message request, int statusCode, string statusDescription)
+    private static Message BuildResponse(Message request, int statusCode, string statusDescription, string? errorCondition = null)
     {
         var response = new Message
         {
@@ -753,6 +761,10 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
 
         response.ApplicationProperties[StatusCodeKey] = statusCode;
         response.ApplicationProperties[StatusDescriptionKey] = statusDescription;
+        if (errorCondition is not null)
+        {
+            response.ApplicationProperties["errorCondition"] = new Symbol(errorCondition);
+        }
         return response;
     }
 }

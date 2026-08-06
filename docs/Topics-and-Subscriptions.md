@@ -79,13 +79,30 @@ Supports:
 | Boolean          | `AND` `OR` `NOT`                                                             |
 | Arithmetic       | `+` `-` `*` `/` `%`, unary minus; `+` doubles as string concatenation        |
 | Membership       | `IN (a, b, c)` / `NOT IN (...)`                                              |
-| Pattern          | `LIKE 'foo%'`, `LIKE 'a_c'`, `NOT LIKE ...`                                  |
+| Pattern          | `LIKE 'foo%'`, `LIKE 'a_c'`, `NOT LIKE ...`, `LIKE '100!%' ESCAPE '!'`       |
 | Existence        | `IS NULL`, `IS NOT NULL`, `EXISTS(prop)` / `NOT EXISTS(prop)`                |
-| Property scoping | `sys.MessageId`, `user.region`, or bare `region` (defaults to user-property) |
-| Functions        | (none in v1 - keep it predictable)                                           |
+| Property scoping | `sys.MessageId`, `user.region`, bare `region` (defaults to user-property), `[quoted-name]` / `"quoted name"` |
+| Functions        | `newid()`, `property(name)` / `p(name)` (both also usable in rule actions)   |
+| Parameters       | `priority >= @threshold` with values from `SqlRuleFilter.Parameters` / `SqlRuleAction.Parameters` |
 
-Not supported (rejected or unavailable): `BETWEEN`, the `ESCAPE` clause on `LIKE`,
-functions (`newid()`, `UPPER`, ...), and parameterized filters.
+Invalid expressions (parse errors, non-boolean top level, unknown functions, malformed
+`ESCAPE`) are rejected at rule-creation time - the SDK surfaces `ArgumentException`, the
+same shape real Service Bus produces - instead of being accepted and never matching.
+A filter that throws at evaluation time (arithmetic on a string property, or - like
+Azure - referencing a nonexistent `sys.` property) counts as a non-match for that
+subscription; it never fails the publish. Property names are case-insensitive, and
+`property(...)`/`p(...)` accepts any string-valued expression as the name. Numeric coercion covers
+every AMQP integral and fractional type, so a `4` sent from any SDK (long from .NET,
+uint from Node.js, int from Java) compares and computes identically.
+
+Literals cover strings (`''` escapes a quote), integers, decimals, scientific notation
+(`1.5E3`), and TRUE/FALSE/NULL. `LIKE` patterns and escapes may be any string-valued
+expression. Numeric comparison and equality follow C# implicit-conversion semantics
+across every AMQP numeric type. Parameterized filters bind at rule creation and reach
+the broker through the admin client (ATOM); the SDK's AMQP `ServiceBusRuleManager` does
+not transmit parameters - an SDK limitation that applies identically against real Azure.
+
+`BETWEEN` is not part of the Service Bus SQL grammar and is rejected, same as Azure.
 
 Property scoping note: `sys.*` refers to AMQP system properties (MessageId, CorrelationId,
 Subject, To, ReplyTo, etc.); `user.*` and unscoped names look up `ApplicationProperties`.

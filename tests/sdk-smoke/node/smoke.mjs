@@ -3,7 +3,7 @@
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
-//   -> purge (JSON management API) -> transfer dlq
+//   -> purge (JSON management API) -> transfer dlq -> sql filter
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -225,6 +225,49 @@ const run = async () => {
     transferOk ? "" : movedMsgs.length === 0 ? "no message" : movedMsgs[0].deadLetterReason ?? "no reason",
   );
   await fetch(`${httpBase}/${fwdSource}?api-version=2021-05`, { method: "DELETE" });
+
+  // 18. sql filter - an arithmetic SQL rule routes only matching messages (issue #26).
+  const filterTopic = `smoke-filter-${stamp}`;
+  const atomPut = (path, descriptionXml) =>
+    fetch(`${httpBase}/${path}?api-version=2021-05`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/atom+xml" },
+      body:
+        '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">' +
+        descriptionXml +
+        "</content></entry>",
+    });
+  await atomPut(filterTopic,
+    '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  await atomPut(`${filterTopic}/subscriptions/flt`,
+    '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  await fetch(`${httpBase}/${filterTopic}/subscriptions/flt/rules/$Default?api-version=2021-05`, { method: "DELETE" });
+  const ruleResp = await atomPut(`${filterTopic}/subscriptions/flt/rules/high`,
+    '<RuleDescription xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
+    '<Filter i:type="SqlFilter"><SqlExpression>priority + 1 >= @threshold</SqlExpression>' +
+    '<Parameters><KeyValueOfstringanyType><Key>@threshold</Key>' +
+    '<Value xmlns:d6p1="http://www.w3.org/2001/XMLSchema" i:type="d6p1:int">5</Value>' +
+    '</KeyValueOfstringanyType></Parameters></Filter></RuleDescription>');
+  const filterSender = client.createSender(filterTopic);
+  await filterSender.sendMessages({ body: "match", messageId: `flt-match-${stamp}`, applicationProperties: { priority: 4 } });
+  await filterSender.sendMessages({ body: "miss", messageId: `flt-miss-${stamp}`, applicationProperties: { priority: 1 } });
+  await filterSender.close();
+  const filterReceiver = client.createReceiver(filterTopic, "flt");
+  const filtered = await filterReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  if (filtered.length === 1) await filterReceiver.completeMessage(filtered[0]);
+  const extra = await filterReceiver.receiveMessages(1, { maxWaitTimeInMs: 2_000 });
+  await filterReceiver.close();
+  const filterOk =
+    ruleResp.status === 201 &&
+    filtered.length === 1 &&
+    filtered[0].messageId === `flt-match-${stamp}` &&
+    extra.length === 0;
+  check(
+    "sql filter",
+    filterOk,
+    filterOk ? "" : `rule ${ruleResp.status}, got ${filtered.length} msg(s), extra ${extra.length}`,
+  );
+  await fetch(`${httpBase}/${filterTopic}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>
