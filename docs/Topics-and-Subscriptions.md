@@ -88,8 +88,10 @@ Supports:
 Invalid expressions (parse errors, non-boolean top level, unknown functions, malformed
 `ESCAPE`) are rejected at rule-creation time - the SDK surfaces `ArgumentException`, the
 same shape real Service Bus produces - instead of being accepted and never matching.
-A filter that throws at evaluation time (e.g. arithmetic on a string property) counts as
-a non-match for that subscription; it never fails the publish. Numeric coercion covers
+A filter that throws at evaluation time (arithmetic on a string property, or - like
+Azure - referencing a nonexistent `sys.` property) counts as a non-match for that
+subscription; it never fails the publish. Property names are case-insensitive, and
+`property(...)`/`p(...)` accepts any string-valued expression as the name. Numeric coercion covers
 every AMQP integral and fractional type, so a `4` sent from any SDK (long from .NET,
 uint from Node.js, int from Java) compares and computes identically.
 

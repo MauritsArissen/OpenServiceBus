@@ -25,13 +25,48 @@ internal sealed class SqlPropertyRefNode(string source, string name) : SqlExpres
 {
     private readonly string _source = source;
     private readonly string _name = name;
+    private readonly bool _isSystem = string.Equals(source, "sys", StringComparison.OrdinalIgnoreCase);
 
     public string Source => _source;
     public string Name => _name;
 
     public override object? Evaluate(MessageFilterContext message)
     {
-        message.TryResolve(_source, _name, out var value);
+        var resolved = message.TryResolve(_source, _name, out var value);
+        if (!resolved && _isSystem)
+        {
+            // Per the Service Bus docs, evaluating a NONEXISTENT system property is an
+            // error (a missing user property is merely unknown). The error surfaces as a
+            // non-match for the subscription, never as a failed publish.
+            throw new InvalidOperationException($"The system property 'sys.{_name}' does not exist.");
+        }
+        return value;
+    }
+}
+
+internal sealed class SqlPropertyFunctionNode(SqlExpressionNode nameExpression) : SqlExpressionNode
+{
+    public override object? Evaluate(MessageFilterContext message)
+    {
+        var nameValue = nameExpression.Evaluate(message);
+        if (nameValue is null) return null;
+        if (nameValue is not string name)
+        {
+            throw new InvalidOperationException("property(name) requires a string-valued name expression.");
+        }
+        var dot = name.IndexOf('.');
+        string source = string.Empty;
+        if (dot > 0)
+        {
+            var prefix = name[..dot];
+            if (prefix.Equals("sys", StringComparison.OrdinalIgnoreCase)
+                || prefix.Equals("user", StringComparison.OrdinalIgnoreCase))
+            {
+                source = prefix;
+                name = name[(dot + 1)..];
+            }
+        }
+        message.TryResolve(source, name, out var value);
         return value;
     }
 }
@@ -199,15 +234,9 @@ internal sealed class SqlExistsNode(string source, string name, bool negate) : S
         // EXISTS is true iff the property is *defined* on the message (not just truthy/non-null).
         // For sys properties we use the resolver and treat a hit as "defined".
         // For user properties, "defined" means key-present in the dictionary, regardless of value.
-        bool exists;
-        if (string.Equals(source, "user", StringComparison.OrdinalIgnoreCase) || source.Length == 0)
-        {
-            exists = message.ApplicationProperties.ContainsKey(name);
-        }
-        else
-        {
-            exists = message.TryResolve(source, name, out _);
-        }
+        // TryResolve is key-presence for user properties (a present-but-null key counts,
+        // and lookup is case-insensitive) and known-name for sys properties.
+        var exists = message.TryResolve(source, name, out _);
         return negate ? !exists : exists;
     }
 }

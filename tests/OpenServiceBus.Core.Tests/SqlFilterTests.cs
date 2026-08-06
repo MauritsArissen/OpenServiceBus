@@ -371,6 +371,34 @@ public class SqlFilterTests
     }
 
     [Fact]
+    public void Matches_UserPropertyNames_AreCaseInsensitive()
+    {
+        var props = new Dictionary<string, object?> { ["region"] = "eu" };
+
+        new SqlFilter("Region = 'eu'").Matches(Message(props: props)).ShouldBeTrue(
+            "the Service Bus docs say property names are case-insensitive");
+        new SqlFilter("EXISTS(REGION)").Matches(Message(props: props)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Matches_PropertyFunctionWithExpressionName_ResolvesPerMessage()
+    {
+        var filter = new SqlFilter("property('re' + 'gion') = 'eu'");
+
+        filter.Matches(Message(props: new() { ["region"] = "eu" })).ShouldBeTrue();
+        filter.Matches(Message(props: new() { ["region"] = "us" })).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Matches_NonexistentSystemProperty_IsAnEvaluationError()
+    {
+        var filter = new SqlFilter("sys.Bogus IS NULL");
+
+        Should.Throw<InvalidOperationException>(() => filter.Matches(Message()))
+            .Message.ShouldContain("sys.Bogus");
+    }
+
+    [Fact]
     public void Matches_NewId_ProducesADistinctGuidPerCall()
     {
         var filter = new SqlFilter("newid() <> newid()");

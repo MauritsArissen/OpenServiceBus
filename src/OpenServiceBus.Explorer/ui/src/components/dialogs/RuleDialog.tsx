@@ -189,7 +189,7 @@ const SyntaxReference = memo(function SyntaxReference() {
         </SyntaxGroup>
         <SyntaxGroup title="Functions">
           <Syntax code="newid()">A fresh random GUID each evaluation.</Syntax>
-          <Syntax code="property(name)  /  p(name)">The value of the named property; accepts bare, sys./user.-scoped, or a 'string' name.</Syntax>
+          <Syntax code="property(name)  /  p(name)">The value of the named property; the name may be bare, sys./user.-scoped, or any string expression. Names are case-insensitive.</Syntax>
         </SyntaxGroup>
         <SyntaxGroup title="Literals">
           <Syntax code="'text'  42  3.14  1.5E3  TRUE  FALSE  NULL">Strings use single quotes; double the quote ('it''s') to escape one. Scientific notation is a decimal.</Syntax>

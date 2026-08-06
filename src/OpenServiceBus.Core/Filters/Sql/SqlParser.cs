@@ -289,17 +289,15 @@ internal sealed class SqlParser
             case "P":
             {
                 _index += 2;
-                string source = string.Empty;
-                string name;
-                if (Current.Kind == SqlTokenKind.String)
-                {
-                    name = (string)Current.Value!;
-                    _index++;
-                }
-                else if (Current.Kind == SqlTokenKind.Identifier)
+                // Fast path: a (possibly scoped) identifier resolves statically. Anything
+                // else is, per the grammar, "any valid expression that returns a string" -
+                // resolved per message.
+                if (Current.Kind == SqlTokenKind.Identifier)
                 {
                     var first = Current;
                     _index++;
+                    string source = string.Empty;
+                    string name;
                     if (Match(SqlTokenKind.Dot))
                     {
                         var second = Current;
@@ -315,13 +313,21 @@ internal sealed class SqlParser
                     {
                         name = first.Text;
                     }
+                    Expect(SqlTokenKind.RightParen, $"Expected ')' to close {nameToken.Text}(...).");
+                    return new SqlPropertyRefNode(source, name);
                 }
-                else
-                {
-                    throw Error($"Expected a property name inside {nameToken.Text}(...).");
-                }
+
+                var nameExpression = ParseAdditive();
                 Expect(SqlTokenKind.RightParen, $"Expected ')' to close {nameToken.Text}(...).");
-                return new SqlPropertyRefNode(source, name);
+                if (nameExpression is SqlLiteralNode literal)
+                {
+                    if (literal.Value is not string literalName)
+                    {
+                        throw Error($"{nameToken.Text}(...) requires a string-valued name.");
+                    }
+                    return new SqlPropertyRefNode(string.Empty, literalName);
+                }
+                return new SqlPropertyFunctionNode(nameExpression);
             }
 
             default:
