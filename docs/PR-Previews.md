@@ -25,6 +25,7 @@ live topology and traffic, wiping and reseeding on the usual reset boundaries.
 | Opened / reopened | Image built, pushed to a private GHCR package, deployed |
 | New push to the branch | Rebuilt and redeployed in place (superseded builds are cancelled) |
 | Closed or merged | Containers, nginx config, and image tags removed |
+| Manual (`Run workflow` with a PR number) | Same teardown, for when a `closed` event was never delivered |
 
 The `PR preview` workflow (`.github/workflows/pr-preview.yml`) posts and maintains a
 comment on the PR with the preview URL and the deployed commit. It is fully separate
