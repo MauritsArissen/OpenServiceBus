@@ -11,6 +11,7 @@ public static class ExplorerEndpoints
     // can exhaust the co-located broker or pin a request slot - a trivial DoS on the hosted demo.
     private const int MaxSendCount = 1000;
     private const int MaxReceiveTimeoutSeconds = 60;
+    private const int MaxBulkTokens = 1000;
 
     // In the hosted live demo the broker addresses are fixed by the environment and the UI locks
     // its connection inputs. The proxy endpoints must ignore any client-supplied broker address in
@@ -147,14 +148,18 @@ public static class ExplorerEndpoints
             return Results.Ok(ToDto(msg));
         });
 
-        // Browse mode: returns a snapshot from the head of the queue without taking any locks.
-        // Each call anchors at sequenceNumber 0 so the result is stable across repeated peeks.
+        // Browse mode: returns a snapshot without taking any locks. The client owns the peek
+        // cursor: it passes fromSequenceNumber explicitly (0 = head of the queue) and continues
+        // with lastPeekedSequenceNumber + 1, mirroring how the real Service Bus SDKs enumerate.
+        // The receiver is pooled across HTTP requests, so relying on the SDK's implicit
+        // per-receiver cursor would make results depend on unrelated earlier calls.
         api.MapPost("/peek", async (PeekRequest req, SessionManager sessions, CancellationToken ct) =>
         {
             var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
             var receiver = session.Receiver(req.Queue);
             var max = Math.Clamp(req.MaxMessages ?? 1, 1, 100);
-            var msgs = await receiver.PeekMessagesAsync(max, fromSequenceNumber: 0, ct);
+            var from = Math.Max(0, req.FromSequenceNumber ?? 0);
+            var msgs = await receiver.PeekMessagesAsync(max, fromSequenceNumber: from, ct);
             var items = msgs.Select(m => ToDto(m, peekOnly: true)).ToList();
             return Results.Ok(new { count = items.Count, messages = items });
         });
@@ -242,32 +247,104 @@ public static class ExplorerEndpoints
                 return Results.BadRequest(new { error = $"Cannot derive requeue target from '{req.Queue}'." });
             }
 
-            var copy = new ServiceBusMessage(msg.Body)
-            {
-                MessageId = msg.MessageId,
-            };
-            if (!string.IsNullOrEmpty(msg.CorrelationId)) copy.CorrelationId = msg.CorrelationId;
-            if (!string.IsNullOrEmpty(msg.Subject)) copy.Subject = msg.Subject;
-            if (!string.IsNullOrEmpty(msg.ContentType)) copy.ContentType = msg.ContentType;
-            if (!string.IsNullOrEmpty(msg.ReplyTo)) copy.ReplyTo = msg.ReplyTo;
-            if (!string.IsNullOrEmpty(msg.To)) copy.To = msg.To;
-            if (!string.IsNullOrEmpty(msg.SessionId)) copy.SessionId = msg.SessionId;
-            if (!string.IsNullOrEmpty(msg.PartitionKey)) copy.PartitionKey = msg.PartitionKey;
-            // TimeToLive is TimeSpan.MaxValue when the broker treats it as "infinite" -
-            // forwarding that to a sender raises. Skip it; the destination queue's default applies.
-            if (msg.TimeToLive != default && msg.TimeToLive < TimeSpan.FromDays(1000)) copy.TimeToLive = msg.TimeToLive;
-            foreach (var kv in msg.ApplicationProperties)
-            {
-                // Strip broker-stamped DLQ markers - the new copy starts clean.
-                if (kv.Key is "DeadLetterReason" or "DeadLetterErrorDescription" or "Diagnostic-Id") continue;
-                copy.ApplicationProperties[kv.Key] = kv.Value;
-            }
+            var copy = BuildRequeueCopy(msg);
 
             await using var sender = session.Sender(target);
             await sender.SendMessageAsync(copy, ct);
             await receiver.CompleteMessageAsync(msg, ct);
             session.TryTakeLocked(req.LockToken, out _, out _);
             return Results.Ok(new { requeued = true, target, messageId = copy.MessageId });
+        });
+
+        // Bulk dispositions: one request settles many tracked locks. Deliberately NOT atomic -
+        // each lock token is settled independently and reported per token, so one expired lock
+        // never aborts the rest of the batch.
+        api.MapPost("/bulk", async (BulkRequest req, SessionManager sessions, CancellationToken ct) =>
+        {
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
+            var action = (req.Action ?? string.Empty).ToLowerInvariant();
+            if (action is not ("complete" or "abandon" or "deadletter" or "defer" or "requeue"))
+            {
+                return Results.BadRequest(new { error = $"Unknown bulk action '{req.Action}'. Expected complete, abandon, deadletter, defer or requeue." });
+            }
+            if (req.LockTokens is not { Count: > 0 })
+            {
+                return Results.BadRequest(new { error = "lockTokens must contain at least one lock token." });
+            }
+            if (req.LockTokens.Count > MaxBulkTokens)
+            {
+                return Results.BadRequest(new { error = $"At most {MaxBulkTokens} lock tokens per bulk request." });
+            }
+
+            string? requeueTarget = null;
+            if (action == "requeue")
+            {
+                requeueTarget = ComputeRequeueTarget(req.Queue);
+                if (requeueTarget is null)
+                {
+                    return Results.BadRequest(new { error = $"Cannot derive requeue target from '{req.Queue}'." });
+                }
+            }
+
+            var results = new List<BulkItemResult>(req.LockTokens.Count);
+            foreach (var token in req.LockTokens)
+            {
+                if (!session.TryPeekLocked(token, out var msg, out var receiver) || msg is null || receiver is null)
+                {
+                    results.Add(new BulkItemResult(token, false, true,
+                        "Unknown lock token (already settled or never tracked by this explorer session)."));
+                    continue;
+                }
+                try
+                {
+                    switch (action)
+                    {
+                        case "complete":
+                            await receiver.CompleteMessageAsync(msg, ct);
+                            break;
+                        case "abandon":
+                            await receiver.AbandonMessageAsync(msg, cancellationToken: ct);
+                            break;
+                        case "deadletter":
+                            await receiver.DeadLetterMessageAsync(msg, req.Reason, req.Description, ct);
+                            break;
+                        case "defer":
+                            await receiver.DeferMessageAsync(msg, cancellationToken: ct);
+                            break;
+                        case "requeue":
+                            var copy = BuildRequeueCopy(msg);
+                            await using (var sender = session.Sender(requeueTarget!))
+                            {
+                                await sender.SendMessageAsync(copy, ct);
+                            }
+                            await receiver.CompleteMessageAsync(msg, ct);
+                            break;
+                    }
+                    session.TryTakeLocked(token, out _, out _);
+                    results.Add(new BulkItemResult(token, true, false, null));
+                }
+                catch (ServiceBusException ex) when (ex.Reason is ServiceBusFailureReason.MessageLockLost or ServiceBusFailureReason.SessionLockLost)
+                {
+                    // A lost lock can never be retried - drop the stale tracking entry so the
+                    // client removes the row instead of offering a settle that must fail.
+                    session.TryTakeLocked(token, out _, out _);
+                    results.Add(new BulkItemResult(token, false, true, "Lock lost - the message became available to other receivers again."));
+                }
+                catch (Exception ex)
+                {
+                    results.Add(new BulkItemResult(token, false, false, ex.Message));
+                }
+            }
+
+            var succeeded = results.Count(r => r.Ok);
+            return Results.Ok(new
+            {
+                action,
+                total = results.Count,
+                succeeded,
+                failed = results.Count - succeeded,
+                results,
+            });
         });
 
         // --- Connectivity check ---
@@ -392,6 +469,31 @@ public static class ExplorerEndpoints
     private static string Combine(string baseUrl, string suffix)
         => baseUrl.TrimEnd('/') + suffix;
 
+    // A requeue re-publishes a clean copy of a DLQ message: same identity and payload, but
+    // TimeToLive is skipped when the broker reported it as effectively infinite (forwarding
+    // TimeSpan.MaxValue to a sender raises) and broker-stamped DLQ markers are stripped.
+    private static ServiceBusMessage BuildRequeueCopy(ServiceBusReceivedMessage msg)
+    {
+        var copy = new ServiceBusMessage(msg.Body)
+        {
+            MessageId = msg.MessageId,
+        };
+        if (!string.IsNullOrEmpty(msg.CorrelationId)) copy.CorrelationId = msg.CorrelationId;
+        if (!string.IsNullOrEmpty(msg.Subject)) copy.Subject = msg.Subject;
+        if (!string.IsNullOrEmpty(msg.ContentType)) copy.ContentType = msg.ContentType;
+        if (!string.IsNullOrEmpty(msg.ReplyTo)) copy.ReplyTo = msg.ReplyTo;
+        if (!string.IsNullOrEmpty(msg.To)) copy.To = msg.To;
+        if (!string.IsNullOrEmpty(msg.SessionId)) copy.SessionId = msg.SessionId;
+        if (!string.IsNullOrEmpty(msg.PartitionKey)) copy.PartitionKey = msg.PartitionKey;
+        if (msg.TimeToLive != default && msg.TimeToLive < TimeSpan.FromDays(1000)) copy.TimeToLive = msg.TimeToLive;
+        foreach (var kv in msg.ApplicationProperties)
+        {
+            if (kv.Key is "DeadLetterReason" or "DeadLetterErrorDescription" or "Diagnostic-Id") continue;
+            copy.ApplicationProperties[kv.Key] = kv.Value;
+        }
+        return copy;
+    }
+
     // For "<queue>/$DeadLetterQueue" the target is the parent queue.
     // For "<topic>/Subscriptions/<sub>/$DeadLetterQueue" the target is the topic (so the broker
     // re-evaluates subscription filters and fans the message out again).
@@ -478,8 +580,10 @@ public sealed record SendRequest(
     int? Count,
     string? Strategy);
 public sealed record ReceiveRequest(string ConnectionString, string Queue, int? TimeoutSeconds, string? SessionId);
-public sealed record PeekRequest(string ConnectionString, string Queue, int? MaxMessages);
+public sealed record PeekRequest(string ConnectionString, string Queue, int? MaxMessages, long? FromSequenceNumber);
 public sealed record DispositionRequest(string ConnectionString, string Queue, string LockToken);
+public sealed record BulkRequest(string ConnectionString, string Queue, string? Action, List<string>? LockTokens, string? Reason, string? Description);
+public sealed record BulkItemResult(string LockToken, bool Ok, bool LockLost, string? Error);
 public sealed record DeadLetterRequest(string ConnectionString, string Queue, string LockToken, string? Reason, string? Description);
 public sealed record PingRequest(string ConnectionString, string ManagementUrl);
 public sealed record PurgeRequest(string? ManagementUrl, string? Queue, string? Topic, string? Subscription, bool? DeadLetterOnly);

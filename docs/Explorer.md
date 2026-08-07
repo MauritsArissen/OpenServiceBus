@@ -55,6 +55,23 @@ port) and messaging through the real `ServiceBusClient` - the JSON REST API (def
   application properties. Disposition buttons grouped by intent: Complete (success),
   Abandon / Renew / Defer (neutral), DLQ (danger). Session ID input surfaces on
   session-enabled entities only.
+- **Peek cursor** - browsing works the way the real Service Bus SDKs enumerate a queue:
+  the first Peek anchors at the head, and a **Peek next** button continues from the last
+  peeked sequence number + 1, appending each page to the list so you can walk an entire
+  queue without receiving anything. Peek restarts from the head; Clear resets the browse
+  list and the cursor. Peek returns active, locked, deferred and scheduled messages,
+  matching Azure's documented browse semantics.
+- **Multi-select + bulk actions** - every message row has a checkbox (shift-click selects
+  a range, the header checkbox selects the whole page). With a selection active a bulk
+  toolbar offers Complete / Abandon / Defer / Dead-letter (with a shared reason) on
+  regular entities and Requeue / Delete on dead-letter queues. Bulk operations are not
+  atomic: each lock is settled independently and the result reports
+  `n succeeded / m failed` per batch, so one expired lock never aborts the rest. Bulk
+  actions need locks, so they enable only when the selection holds locked messages; on
+  phones the toolbar collapses into a dropdown.
+- **Export** - download the selected messages (or the whole browsed list) as a JSON file:
+  sequence number, ids, subject, timing, dead-letter metadata, application properties
+  and body per message.
 - **Dead-letter tab** (queues and subscriptions) - the same receive UI pointed at the
   entity's `$DeadLetterQueue`: peek or lock DLQ messages, **Requeue** a cleaned copy back
   to the parent (or through the topic so rules re-evaluate), or **Delete** it off the DLQ.

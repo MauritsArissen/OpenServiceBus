@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Checkbox } from "@/components/ui/checkbox";
 import { type MessageDto } from "@/lib/api";
 import { explorerApi } from "@/lib/api";
 import { formatTime } from "@/lib/format";
@@ -15,8 +16,15 @@ import { cn } from "@/lib/utils";
 import { msgKey, useStore } from "@/store";
 
 export function MessageCard({
-  msg, target, locked, isDlq,
-}: { msg: MessageDto; target: string; locked: boolean; isDlq: boolean }) {
+  msg, target, locked, isDlq, checked, onToggleSelect,
+}: {
+  msg: MessageDto;
+  target: string;
+  locked: boolean;
+  isDlq: boolean;
+  checked?: boolean;
+  onToggleSelect?: (shiftKey: boolean) => void;
+}) {
   const store = useStore();
   const [open, setOpen] = useState(false);
   const key = msgKey(msg);
@@ -66,7 +74,7 @@ export function MessageCard({
       toast.success(`Requeued to ${r.target}`);
       await store.refresh();
     });
-  const deadletter = () => store.setDialog({ type: "deadletter", target, lockToken: token });
+  const deadletter = () => store.setDialog({ type: "deadletter", target, lockTokens: [token] });
   const deleteDlq = () =>
     store.setDialog({
       type: "confirm",
@@ -82,6 +90,14 @@ export function MessageCard({
         className="flex cursor-pointer items-center gap-2 px-3 py-2"
         onClick={() => setOpen((o) => !o)}
       >
+        {onToggleSelect && (
+          <Checkbox
+            checked={!!checked}
+            aria-label="Select message"
+            className="-ml-1.5 -my-1"
+            onToggle={(e) => onToggleSelect(e.shiftKey)}
+          />
+        )}
         <span className="min-w-0 max-w-[220px] truncate font-mono text-xs" title={msg.messageId ?? ""}>
           {msg.messageId ?? "(no id)"}
         </span>
