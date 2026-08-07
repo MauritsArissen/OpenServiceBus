@@ -6,12 +6,16 @@ import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 import { StoreProvider } from "@/store";
 
 export default function App() {
   // On phones the sidebar becomes an off-canvas drawer; on md+ it's a static column
   // and this flag is irrelevant (the sidebar is always shown there).
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Toasts anchor bottom-right on desktop, but on phones that corner sits under the
+  // thumb and the browser chrome - pop them from the top there instead.
+  const desktopToasts = useMediaQuery("(min-width: 640px)");
 
   return (
     <StoreProvider>
@@ -35,7 +39,7 @@ export default function App() {
         </div>
         <DialogHost />
         <UpdateBanner />
-        <Toaster richColors position="bottom-right" closeButton />
+        <Toaster richColors position={desktopToasts ? "bottom-right" : "top-center"} closeButton />
       </TooltipProvider>
     </StoreProvider>
   );

@@ -89,8 +89,9 @@ port) and messaging through the real `ServiceBusClient` - the JSON REST API (def
   30 min - 24 h window selector. History is in-memory only and resets with the Explorer.
 - **Auto-refresh** - topbar interval selector (off / 1-60s) that re-polls entity lists
   and counts. Message lists and rules refresh on explicit actions, not on the timer.
-- **Responsive layout** - below tablet width the sidebar becomes an off-canvas drawer;
-  the whole UI works on a phone.
+- **Responsive layout** - below tablet width the sidebar becomes an off-canvas drawer
+  and toasts pop from the top of the screen instead of the bottom-right corner; the
+  whole UI works on a phone.
 - **Light/dark theme** with persisted preference.
 
 ## Connection panel
