@@ -223,22 +223,29 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  const untrack = useCallback((target: string, key: string) => {
-    setLocked((l) => {
-      const next = { ...(l[target] ?? {}) };
-      delete next[key];
-      return { ...l, [target]: next };
-    });
-  }, []);
-
+  // Settling a message removes it from the view entirely: both the locked entry and any
+  // stale copy in the peeked browse snapshot (same msgKey). Without the latter, settling a
+  // message that was also peeked earlier resurfaces it as an unlocked "peek" row - and,
+  // because selection is keyed by msgKey, it comes back still selected.
   const untrackMany = useCallback((target: string, keys: string[]) => {
     if (keys.length === 0) return;
+    const drop = new Set(keys);
     setLocked((l) => {
       const next = { ...(l[target] ?? {}) };
       for (const key of keys) delete next[key];
       return { ...l, [target]: next };
     });
+    setPeeked((p) => {
+      const cur = p[target];
+      if (!cur) return p;
+      const next = cur.filter((m) => !drop.has(msgKey(m)));
+      return next.length === cur.length ? p : { ...p, [target]: next };
+    });
   }, []);
+
+  const untrack = useCallback((target: string, key: string) => {
+    untrackMany(target, [key]);
+  }, [untrackMany]);
 
   const updateLockedUntil = useCallback((target: string, key: string, until: string) => {
     setLocked((l) => {

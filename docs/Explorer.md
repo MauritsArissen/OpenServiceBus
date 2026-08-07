@@ -68,7 +68,9 @@ port) and messaging through the real `ServiceBusClient` - the JSON REST API (def
   atomic: each lock is settled independently and the result reports
   `n succeeded / m failed` per batch, so one expired lock never aborts the rest. Bulk
   actions need locks, so they enable only when the selection holds locked messages; on
-  phones the toolbar collapses into a dropdown.
+  phones the toolbar collapses into a dropdown. Settling a message (single or bulk)
+  removes it from the list entirely, including any stale copy of it in the browse
+  snapshot from an earlier peek.
 - **Export** - download the selected messages (or the whole browsed list) as a JSON file:
   sequence number, ids, subject, timing, dead-letter metadata, application properties
   and body per message.
