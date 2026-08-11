@@ -25,7 +25,7 @@ export type DialogState =
   | { type: "createTopic" }
   | { type: "createSubscription"; topic?: string }
   | { type: "rule"; topic: string; sub: string; edit?: import("@/lib/api").RuleInfo }
-  | { type: "deadletter"; target: string; lockToken: string }
+  | { type: "deadletter"; target: string; lockTokens: string[] }
   | { type: "confirm"; title: string; description: string; destructive?: boolean; action: () => Promise<void> | void }
   | null;
 
@@ -61,10 +61,14 @@ type Store = {
 
   locked: Record<string, Record<string, TrackedMessage>>;
   peeked: Record<string, MessageDto[]>;
+  /** Next sequence number a "Peek next" continues from (absent = no browse in progress). */
+  peekCursor: Record<string, number>;
   lockedCount: (target: string) => number;
-  setPeekedFor: (target: string, msgs: MessageDto[]) => void;
+  setPeekedFor: (target: string, msgs: MessageDto[], opts?: { append?: boolean }) => void;
+  setPeekCursor: (target: string, next: number | null) => void;
   trackLocked: (target: string, msg: MessageDto) => void;
   untrack: (target: string, key: string) => void;
+  untrackMany: (target: string, keys: string[]) => void;
   updateLockedUntil: (target: string, key: string, until: string) => void;
   clearEntityLocal: (address: string) => void;
 
@@ -87,6 +91,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [selected, setSelected] = useState<Selected | null>(null);
   const [locked, setLocked] = useState<Record<string, Record<string, TrackedMessage>>>({});
   const [peeked, setPeeked] = useState<Record<string, MessageDto[]>>({});
+  const [peekCursor, setPeekCursorState] = useState<Record<string, number>>({});
   const [dialog, setDialog] = useState<DialogState>(null);
   const [demoMode, setDemoMode] = useState(false);
   const [resetIntervalSeconds, setResetIntervalSeconds] = useState(1800);
@@ -191,8 +196,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [locked],
   );
 
-  const setPeekedFor = useCallback((target: string, msgs: MessageDto[]) => {
-    setPeeked((p) => ({ ...p, [target]: msgs }));
+  const setPeekedFor = useCallback((target: string, msgs: MessageDto[], opts?: { append?: boolean }) => {
+    setPeeked((p) => {
+      if (!opts?.append) return { ...p, [target]: msgs };
+      const existing = p[target] ?? [];
+      const seen = new Set(existing.map(msgKey));
+      return { ...p, [target]: [...existing, ...msgs.filter((m) => !seen.has(msgKey(m)))] };
+    });
+  }, []);
+
+  const setPeekCursor = useCallback((target: string, next: number | null) => {
+    setPeekCursorState((c) => {
+      if (next == null) {
+        const rest = { ...c };
+        delete rest[target];
+        return rest;
+      }
+      return { ...c, [target]: next };
+    });
   }, []);
 
   const trackLocked = useCallback((target: string, msg: MessageDto) => {
@@ -202,13 +223,29 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  const untrack = useCallback((target: string, key: string) => {
+  // Settling a message removes it from the view entirely: both the locked entry and any
+  // stale copy in the peeked browse snapshot (same msgKey). Without the latter, settling a
+  // message that was also peeked earlier resurfaces it as an unlocked "peek" row - and,
+  // because selection is keyed by msgKey, it comes back still selected.
+  const untrackMany = useCallback((target: string, keys: string[]) => {
+    if (keys.length === 0) return;
+    const drop = new Set(keys);
     setLocked((l) => {
       const next = { ...(l[target] ?? {}) };
-      delete next[key];
+      for (const key of keys) delete next[key];
       return { ...l, [target]: next };
     });
+    setPeeked((p) => {
+      const cur = p[target];
+      if (!cur) return p;
+      const next = cur.filter((m) => !drop.has(msgKey(m)));
+      return next.length === cur.length ? p : { ...p, [target]: next };
+    });
   }, []);
+
+  const untrack = useCallback((target: string, key: string) => {
+    untrackMany(target, [key]);
+  }, [untrackMany]);
 
   const updateLockedUntil = useCallback((target: string, key: string, until: string) => {
     setLocked((l) => {
@@ -232,6 +269,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       delete next[dlq];
       return next;
     });
+    setPeekCursorState((c) => {
+      const next = { ...c };
+      delete next[address];
+      delete next[dlq];
+      return next;
+    });
   }, []);
 
   const select = useCallback((s: Selected | null) => setSelected(s), []);
@@ -244,12 +287,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       queues: queues.filter((q) => isMainQueue(q.name)),
       topics, subsByTopic, loading, refresh,
       selected, select, descriptorFor, dlqCount,
-      locked, peeked, lockedCount, setPeekedFor, trackLocked, untrack, updateLockedUntil, clearEntityLocal,
+      locked, peeked, peekCursor, lockedCount, setPeekedFor, setPeekCursor, trackLocked, untrack, untrackMany,
+      updateLockedUntil, clearEntityLocal,
       dialog, setDialog,
     }),
     [conn, mgmt, setConn, setMgmt, status, pingResult, connect, demoMode, resetIntervalSeconds, version, queues, topics, subsByTopic, loading,
-     refresh, selected, select, descriptorFor, dlqCount, locked, peeked, lockedCount, setPeekedFor, trackLocked,
-     untrack, updateLockedUntil, clearEntityLocal, dialog],
+     refresh, selected, select, descriptorFor, dlqCount, locked, peeked, peekCursor, lockedCount, setPeekedFor, setPeekCursor, trackLocked,
+     untrack, untrackMany, updateLockedUntil, clearEntityLocal, dialog],
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

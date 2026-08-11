@@ -16,7 +16,7 @@ export function DialogHost() {
       {dialog?.type === "createTopic" && <CreateTopicDialog />}
       {dialog?.type === "createSubscription" && <CreateSubscriptionDialog presetTopic={dialog.topic} />}
       {dialog?.type === "rule" && <RuleDialog topic={dialog.topic} sub={dialog.sub} edit={dialog.edit} />}
-      {dialog?.type === "deadletter" && <DeadLetterDialog target={dialog.target} lockToken={dialog.lockToken} />}
+      {dialog?.type === "deadletter" && <DeadLetterDialog target={dialog.target} lockTokens={dialog.lockTokens} />}
       {dialog?.type === "confirm" && (
         <ConfirmDialog
           title={dialog.title}

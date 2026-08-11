@@ -181,8 +181,11 @@ export const explorerApi = {
       "/api/send",
       post(payload),
     ),
-  peek: (connectionString: string, queue: string, maxMessages: number) =>
-    api<{ count: number; messages: MessageDto[] }>("/api/peek", post({ connectionString, queue, maxMessages })),
+  peek: (connectionString: string, queue: string, maxMessages: number, fromSequenceNumber = 0) =>
+    api<{ count: number; messages: MessageDto[] }>(
+      "/api/peek",
+      post({ connectionString, queue, maxMessages, fromSequenceNumber }),
+    ),
   receive: (connectionString: string, queue: string, sessionId: string | null) =>
     api<MessageDto | { received: false }>(
       "/api/receive",
@@ -200,6 +203,15 @@ export const explorerApi = {
     api<{ deferred: boolean; sequenceNumber: number }>("/api/defer", post({ connectionString, queue, lockToken })),
   requeue: (connectionString: string, queue: string, lockToken: string) =>
     api<{ requeued: boolean; target: string; messageId: string }>("/api/requeue", post({ connectionString, queue, lockToken })),
+  bulk: (
+    connectionString: string,
+    queue: string,
+    action: BulkAction,
+    lockTokens: string[],
+    reason: string | null = null,
+    description: string | null = null,
+  ) =>
+    api<BulkResult>("/api/bulk", post({ connectionString, queue, action, lockTokens, reason, description })),
 
   metrics: (entity: string, windowSeconds: number) =>
     api<{ entity: MetricSample[]; dlq: MetricSample[] }>(
@@ -208,3 +220,13 @@ export const explorerApi = {
 };
 
 export type MetricSample = { t: number; active: number; enqueued: number; completed: number };
+
+export type BulkAction = "complete" | "abandon" | "deadletter" | "defer" | "requeue";
+export type BulkItemResult = { lockToken: string; ok: boolean; lockLost: boolean; error: string | null };
+export type BulkResult = {
+  action: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: BulkItemResult[];
+};
