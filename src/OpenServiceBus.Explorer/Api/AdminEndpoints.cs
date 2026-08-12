@@ -79,6 +79,9 @@ public static class AdminEndpoints
                         defaultMessageTimeToLive = Finite(topic.DefaultMessageTimeToLive),
                         status = topic.Status.ToString(),
                         autoDeleteOnIdle = Finite(topic.AutoDeleteOnIdle),
+                        requiresDuplicateDetection = topic.RequiresDuplicateDetection,
+                        duplicateDetectionHistoryTimeWindow = topic.RequiresDuplicateDetection
+                            ? (TimeSpan?)topic.DuplicateDetectionHistoryTimeWindow : null,
                     });
                 }
                 return Results.Ok(list);
@@ -90,6 +93,8 @@ public static class AdminEndpoints
                 var options = new CreateTopicOptions(name);
                 if (body.Options?.DefaultMessageTimeToLive is { } ttl) options.DefaultMessageTimeToLive = ttl;
                 if (body.Options?.AutoDeleteOnIdle is { } idle) options.AutoDeleteOnIdle = idle;
+                if (body.Options?.RequiresDuplicateDetection is { } dedup) options.RequiresDuplicateDetection = dedup;
+                if (body.Options?.DuplicateDetectionHistoryTimeWindow is { } window) options.DuplicateDetectionHistoryTimeWindow = window;
                 var created = (await Admin(sessions, body.ConnectionString).CreateTopicAsync(options, ct)).Value;
                 return Results.Ok(new
                 {
@@ -97,6 +102,7 @@ public static class AdminEndpoints
                     defaultMessageTimeToLive = Finite(created.DefaultMessageTimeToLive),
                     status = created.Status.ToString(),
                     autoDeleteOnIdle = Finite(created.AutoDeleteOnIdle),
+                    requiresDuplicateDetection = created.RequiresDuplicateDetection,
                 });
             }));
 

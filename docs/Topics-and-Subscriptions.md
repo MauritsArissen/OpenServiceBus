@@ -173,6 +173,11 @@ Subscriptions are real queues under the hood (named `<topic>/Subscriptions/<name
 all the standard `IMessageStore` operations work - dead-letter, abandon, defer, peek,
 sessions, dedup, transactions.
 
+Topics also support their own duplicate detection: with `RequiresDuplicateDetection` on
+the topic, a repeated `MessageId` inside the window is dropped at the topic BEFORE
+fan-out, so every subscription receives exactly one copy - see
+[Duplicate Detection](Duplicate-Detection).
+
 ## DLQ for a subscription
 
 Same shape as queue DLQs, just nested:

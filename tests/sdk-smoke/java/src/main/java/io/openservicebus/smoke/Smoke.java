@@ -28,6 +28,7 @@ import java.util.regex.Pattern;
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
  *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
+ *   -> queue dedup -> topic dedup -> batch dedup
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -502,6 +503,114 @@ public final class Smoke {
             }
             http.send(
                 HttpRequest.newBuilder(resendQueueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+
+            // 20. queue dedup - a duplicate-detection queue silently drops a repeated
+            // MessageId within the window (issue #29 hardening): three sends, one shared
+            // id, two survivors.
+            String dedupQueue = "smoke-dedup-" + stamp;
+            URI dedupQueueUri = URI.create(base + "/" + dedupQueue + "?api-version=2021-05");
+            http.send(atomPut.apply(dedupQueue,
+                "<QueueDescription xmlns=\"" + sbNs + "\">"
+                + "<RequiresDuplicateDetection>true</RequiresDuplicateDetection>"
+                + "<DuplicateDetectionHistoryTimeWindow>PT10M</DuplicateDetectionHistoryTimeWindow>"
+                + "</QueueDescription>"), HttpResponse.BodyHandlers.ofString());
+            int dedupSeen = 0;
+            try (ServiceBusSenderClient dedupSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(dedupQueue).buildClient();
+                 ServiceBusReceiverClient dedupReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(dedupQueue).disableAutoComplete().buildClient()) {
+                ServiceBusMessage firstSend = new ServiceBusMessage("first");
+                firstSend.setMessageId("dupq-" + stamp);
+                dedupSender.sendMessage(firstSend);
+                ServiceBusMessage retrySend = new ServiceBusMessage("retry");
+                retrySend.setMessageId("dupq-" + stamp);
+                dedupSender.sendMessage(retrySend);
+                ServiceBusMessage uniqueSend = new ServiceBusMessage("unique");
+                uniqueSend.setMessageId("dupq-other-" + stamp);
+                dedupSender.sendMessage(uniqueSend);
+                for (ServiceBusReceivedMessage m : dedupReceiver.receiveMessages(5, Duration.ofSeconds(2))) {
+                    dedupReceiver.complete(m);
+                    dedupSeen++;
+                }
+            }
+            results.add(dedupSeen == 2
+                ? "PASS queue dedup"
+                : "FAIL queue dedup: got " + dedupSeen + " message(s)");
+
+            // 21. topic dedup - duplicate detection runs at the TOPIC before fan-out
+            // (issue #29): a duplicate publish reaches zero subscriptions; each
+            // subscription sees exactly one copy.
+            String dedupTopic = "smoke-dedup-topic-" + stamp;
+            http.send(atomPut.apply(dedupTopic,
+                "<TopicDescription xmlns=\"" + sbNs + "\">"
+                + "<RequiresDuplicateDetection>true</RequiresDuplicateDetection></TopicDescription>"),
+                HttpResponse.BodyHandlers.ofString());
+            http.send(atomPut.apply(dedupTopic + "/subscriptions/s1",
+                "<SubscriptionDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            http.send(atomPut.apply(dedupTopic + "/subscriptions/s2",
+                "<SubscriptionDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            try (ServiceBusSenderClient topicDedupSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().topicName(dedupTopic).buildClient()) {
+                ServiceBusMessage evt = new ServiceBusMessage("evt");
+                evt.setMessageId("dupt-" + stamp);
+                topicDedupSender.sendMessage(evt);
+                ServiceBusMessage evtRetry = new ServiceBusMessage("evt-retry");
+                evtRetry.setMessageId("dupt-" + stamp);
+                topicDedupSender.sendMessage(evtRetry);
+            }
+            boolean topicDedupOk = true;
+            String topicDedupDetail = "";
+            for (String sub : new String[] { "s1", "s2" }) {
+                int subSeen = 0;
+                try (ServiceBusReceiverClient subReceiver = new ServiceBusClientBuilder()
+                        .connectionString(conn).retryOptions(retry)
+                        .receiver().topicName(dedupTopic).subscriptionName(sub)
+                        .disableAutoComplete().buildClient()) {
+                    for (ServiceBusReceivedMessage m : subReceiver.receiveMessages(5, Duration.ofSeconds(2))) {
+                        subReceiver.complete(m);
+                        subSeen++;
+                    }
+                }
+                if (subSeen != 1) {
+                    topicDedupOk = false;
+                    topicDedupDetail = "subscription " + sub + " got " + subSeen + " message(s)";
+                }
+            }
+            results.add(topicDedupOk ? "PASS topic dedup" : "FAIL topic dedup: " + topicDedupDetail);
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + dedupTopic + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+            // 22. batch dedup - one batched envelope with an in-batch duplicate: each
+            // inner message is checked individually, so the duplicate is dropped and
+            // distinct ids land.
+            int batchSeen = 0;
+            try (ServiceBusSenderClient batchSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(dedupQueue).buildClient();
+                 ServiceBusReceiverClient batchReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(dedupQueue).disableAutoComplete().buildClient()) {
+                ServiceBusMessage one = new ServiceBusMessage("one");
+                one.setMessageId("dupb-" + stamp);
+                ServiceBusMessage dupOfOne = new ServiceBusMessage("dup-of-one");
+                dupOfOne.setMessageId("dupb-" + stamp);
+                ServiceBusMessage two = new ServiceBusMessage("two");
+                two.setMessageId("dupb2-" + stamp);
+                batchSender.sendMessages(java.util.List.of(one, dupOfOne, two));
+                for (ServiceBusReceivedMessage m : batchReceiver.receiveMessages(5, Duration.ofSeconds(2))) {
+                    batchReceiver.complete(m);
+                    batchSeen++;
+                }
+            }
+            results.add(batchSeen == 2
+                ? "PASS batch dedup"
+                : "FAIL batch dedup: got " + batchSeen + " message(s)");
+            http.send(
+                HttpRequest.newBuilder(dedupQueueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);
         }

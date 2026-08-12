@@ -187,6 +187,119 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    public async Task SaveTopicDescriptorAsync(string topicName, string descriptorJson, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO topic_descriptors(topic_name, descriptor_json) VALUES ($name, $json)
+                ON CONFLICT(topic_name) DO UPDATE SET descriptor_json = excluded.descriptor_json;
+                """;
+            cmd.Parameters.AddWithValue("$name", topicName);
+            cmd.Parameters.AddWithValue("$json", descriptorJson);
+            cmd.ExecuteNonQuery();
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task DeleteTopicDescriptorAsync(string topicName, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM topic_descriptors WHERE topic_name = $name";
+            cmd.Parameters.AddWithValue("$name", topicName);
+            cmd.ExecuteNonQuery();
+        }
+        finally { _gate.Release(); }
+    }
+
+    public IReadOnlyDictionary<string, string> LoadTopicDescriptors()
+    {
+        _gate.Wait();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT topic_name, descriptor_json FROM topic_descriptors";
+            using var rdr = cmd.ExecuteReader();
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            while (rdr.Read()) result[rdr.GetString(0)] = rdr.GetString(1);
+            return result;
+        }
+        finally { _gate.Release(); }
+    }
+
+    // Sweep + check + upsert in one transaction, mirroring the queue path's crash-safety:
+    // the recorded id and the drop decision can never diverge. A repeat slides the window
+    // forward, same as the queue-level ON CONFLICT update.
+    public async Task<bool> CheckTopicDuplicateAsync(string topicName, string messageId, TimeSpan window, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(messageId)) return false;
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var now = _timeProvider.GetUtcNow();
+            return WithTransaction(tx =>
+            {
+                using (var sweep = _connection.CreateCommand())
+                {
+                    sweep.Transaction = tx;
+                    sweep.CommandText = "DELETE FROM topic_dedup_history WHERE topic_name = $t AND expires_at <= $now";
+                    sweep.Parameters.AddWithValue("$t", topicName);
+                    sweep.Parameters.AddWithValue("$now", ToUnixMs(now));
+                    sweep.ExecuteNonQuery();
+                }
+
+                bool duplicate;
+                using (var check = _connection.CreateCommand())
+                {
+                    check.Transaction = tx;
+                    check.CommandText = """
+                        SELECT 1 FROM topic_dedup_history
+                        WHERE topic_name = $t AND message_id = $mid AND expires_at > $now
+                        """;
+                    check.Parameters.AddWithValue("$t", topicName);
+                    check.Parameters.AddWithValue("$mid", messageId);
+                    check.Parameters.AddWithValue("$now", ToUnixMs(now));
+                    duplicate = check.ExecuteScalar() is not null;
+                }
+
+                using (var record = _connection.CreateCommand())
+                {
+                    record.Transaction = tx;
+                    record.CommandText = """
+                        INSERT INTO topic_dedup_history(topic_name, message_id, expires_at)
+                        VALUES ($t, $mid, $exp)
+                        ON CONFLICT(topic_name, message_id) DO UPDATE SET expires_at = excluded.expires_at
+                        """;
+                    record.Parameters.AddWithValue("$t", topicName);
+                    record.Parameters.AddWithValue("$mid", messageId);
+                    record.Parameters.AddWithValue("$exp", ToUnixMs(now + window));
+                    record.ExecuteNonQuery();
+                }
+
+                return duplicate;
+            });
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task ClearTopicDedupHistoryAsync(string topicName, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM topic_dedup_history WHERE topic_name = $t";
+            cmd.Parameters.AddWithValue("$t", topicName);
+            cmd.ExecuteNonQuery();
+        }
+        finally { _gate.Release(); }
+    }
+
     // ── Enqueue / dedup / sequence ────────────────────────────────────
 
     public async Task<StoredMessage> EnqueueAsync(

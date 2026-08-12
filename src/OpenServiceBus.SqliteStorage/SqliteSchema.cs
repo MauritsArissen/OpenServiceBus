@@ -107,6 +107,25 @@ internal static class SqliteSchema
 
         CREATE INDEX IF NOT EXISTS idx_dedup_expiry
             ON dedup_history (queue_name, expires_at);
+
+        -- Topic descriptor snapshots (JSON). Topics have no row in `queues` (they store no
+        -- messages), so this table stands alone and rows are removed explicitly on delete.
+        CREATE TABLE IF NOT EXISTS topic_descriptors (
+            topic_name      TEXT PRIMARY KEY COLLATE NOCASE,
+            descriptor_json TEXT NOT NULL
+        );
+
+        -- Topic-level dedup history: one check per publish, before fan-out. No original
+        -- sequence number - topics store no messages, only the drop decision matters.
+        CREATE TABLE IF NOT EXISTS topic_dedup_history (
+            topic_name  TEXT NOT NULL COLLATE NOCASE,
+            message_id  TEXT NOT NULL,
+            expires_at  INTEGER NOT NULL,
+            PRIMARY KEY (topic_name, message_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_topic_dedup_expiry
+            ON topic_dedup_history (topic_name, expires_at);
         """;
 
     /// <summary>

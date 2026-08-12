@@ -5,13 +5,15 @@ import { DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/compon
 import { explorerApi } from "@/lib/api";
 import { secondsToTimeSpan } from "@/lib/format";
 import { useStore } from "@/store";
-import { NumberField, TextField } from "./FormControls";
+import { NumberField, SwitchField, TextField } from "./FormControls";
 
 export function CreateTopicDialog() {
   const store = useStore();
   const [name, setName] = useState("");
   const [ttl, setTtl] = useState("");
   const [idleDelete, setIdleDelete] = useState("");
+  const [requiresDedup, setRequiresDedup] = useState(false);
+  const [dedupWindow, setDedupWindow] = useState("");
   const [busy, setBusy] = useState(false);
 
   const create = async () => {
@@ -23,6 +25,11 @@ export function CreateTopicDialog() {
       if (ttlN > 0) options.defaultMessageTimeToLive = secondsToTimeSpan(ttlN);
       const idleN = parseInt(idleDelete, 10);
       if (idleN > 0) options.autoDeleteOnIdle = secondsToTimeSpan(idleN);
+      if (requiresDedup) {
+        options.requiresDuplicateDetection = true;
+        const dwN = parseInt(dedupWindow, 10);
+        if (dwN > 0) options.duplicateDetectionHistoryTimeWindow = secondsToTimeSpan(dwN);
+      }
       await explorerApi.createTopic(store.conn, name.trim(), options);
       toast.success(`Created topic '${name.trim()}'`);
       store.setDialog(null);
@@ -43,7 +50,11 @@ export function CreateTopicDialog() {
       <div className="space-y-3">
         <TextField label="Topic name" value={name} onChange={setName} mono placeholder="events" />
         <NumberField label="Default TTL (seconds)" value={ttl} onChange={setTtl} placeholder="∞" min={1} />
-          <NumberField label="Auto-delete when idle (seconds)" value={idleDelete} onChange={setIdleDelete} placeholder="never (min 300)" min={300} />
+        <NumberField label="Auto-delete when idle (seconds)" value={idleDelete} onChange={setIdleDelete} placeholder="never (min 300)" min={300} />
+        <SwitchField label="Duplicate detection" checked={requiresDedup} onChange={setRequiresDedup} />
+        {requiresDedup && (
+          <NumberField label="Dedup window (seconds)" value={dedupWindow} onChange={setDedupWindow} placeholder="600" min={1} />
+        )}
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={() => store.setDialog(null)}>Cancel</Button>

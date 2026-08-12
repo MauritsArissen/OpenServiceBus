@@ -37,6 +37,36 @@ public interface IMessageStore
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Persist an opaque descriptor snapshot (JSON) for a topic, replacing any previous
+    /// snapshot. Persistent stores keep it so <see cref="LoadTopicDescriptors"/> can restore
+    /// full topic descriptors (status, TTL, duplicate detection) after a restart; the
+    /// in-memory default is a no-op.
+    /// </summary>
+    Task SaveTopicDescriptorAsync(string topicName, string descriptorJson, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
+    /// <summary>Remove a topic's persisted descriptor snapshot (topic deletion).</summary>
+    Task DeleteTopicDescriptorAsync(string topicName, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
+    /// <summary>Descriptor snapshots by topic name, as persisted by <see cref="SaveTopicDescriptorAsync"/>.</summary>
+    IReadOnlyDictionary<string, string> LoadTopicDescriptors() =>
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Topic-level duplicate detection: atomically checks whether <paramref name="messageId"/>
+    /// was published to <paramref name="topicName"/> within the sliding
+    /// <paramref name="window"/> and records/refreshes the id. Returns true when the id is a
+    /// duplicate - the caller must silently drop the publish BEFORE fan-out, so a duplicate
+    /// reaches zero subscriptions. Unlike queue dedup this is keyed on the topic itself, not
+    /// on a queue with messages, hence the dedicated entry point.
+    /// </summary>
+    Task<bool> CheckTopicDuplicateAsync(string topicName, string messageId, TimeSpan window, CancellationToken cancellationToken = default);
+
+    /// <summary>Discard a topic's duplicate-detection history (topic deletion and purge).</summary>
+    Task ClearTopicDedupHistoryAsync(string topicName, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Enqueue an encoded message. The returned record carries the assigned sequence number.
     /// </summary>
     /// <param name="expiresAt">

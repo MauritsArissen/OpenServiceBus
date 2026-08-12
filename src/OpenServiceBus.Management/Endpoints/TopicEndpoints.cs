@@ -42,6 +42,8 @@ public static class TopicEndpoints
                 AutoDeleteOnIdle = body?.AutoDeleteOnIdle,
                 MaxSizeInMegabytes = body?.MaxSizeInMegabytes ?? 1024,
                 MaxMessageSizeInKilobytes = body?.MaxMessageSizeInKilobytes ?? 256,
+                RequiresDuplicateDetection = body?.RequiresDuplicateDetection ?? false,
+                DuplicateDetectionHistoryTimeWindow = body?.DuplicateDetectionHistoryTimeWindow,
             };
             // Idempotent re-declaration is fine; an attempt to change settings on an existing
             // topic is rejected rather than silently ignored (create is GetOrAdd - it returns the
@@ -53,7 +55,9 @@ public static class TopicEndpoints
                     || existing.Status != descriptor.Status
                     || existing.AutoDeleteOnIdle != descriptor.AutoDeleteOnIdle
                     || existing.MaxSizeInMegabytes != descriptor.MaxSizeInMegabytes
-                    || existing.MaxMessageSizeInKilobytes != descriptor.MaxMessageSizeInKilobytes)
+                    || existing.MaxMessageSizeInKilobytes != descriptor.MaxMessageSizeInKilobytes
+                    || existing.RequiresDuplicateDetection != descriptor.RequiresDuplicateDetection
+                    || existing.DuplicateDetectionHistoryTimeWindow != descriptor.DuplicateDetectionHistoryTimeWindow)
                 {
                     return Results.Conflict(new
                     {
@@ -208,6 +212,8 @@ public sealed record CreateTopicRequest
     public TimeSpan? AutoDeleteOnIdle { get; init; }
     public long MaxSizeInMegabytes { get; init; } = 1024;
     public long MaxMessageSizeInKilobytes { get; init; } = 256;
+    public bool RequiresDuplicateDetection { get; init; }
+    public TimeSpan? DuplicateDetectionHistoryTimeWindow { get; init; }
 }
 
 public sealed record CreateSubscriptionRequest
@@ -284,9 +290,19 @@ public sealed record CorrelationFilterFields(
     string? ContentType,
     Dictionary<string, string?>? Properties);
 
-public sealed record TopicResponse(string Name, TimeSpan? DefaultMessageTimeToLive, EntityStatus Status, TimeSpan? AutoDeleteOnIdle, long MaxSizeInMegabytes, long MaxMessageSizeInKilobytes)
+public sealed record TopicResponse(
+    string Name,
+    TimeSpan? DefaultMessageTimeToLive,
+    EntityStatus Status,
+    TimeSpan? AutoDeleteOnIdle,
+    long MaxSizeInMegabytes,
+    long MaxMessageSizeInKilobytes,
+    bool RequiresDuplicateDetection = false,
+    TimeSpan? DuplicateDetectionHistoryTimeWindow = null)
 {
-    public static TopicResponse From(TopicDescriptor d) => new(d.Name, d.DefaultMessageTimeToLive, d.Status, d.AutoDeleteOnIdle, d.MaxSizeInMegabytes, d.MaxMessageSizeInKilobytes);
+    public static TopicResponse From(TopicDescriptor d) => new(
+        d.Name, d.DefaultMessageTimeToLive, d.Status, d.AutoDeleteOnIdle, d.MaxSizeInMegabytes,
+        d.MaxMessageSizeInKilobytes, d.RequiresDuplicateDetection, d.DuplicateDetectionHistoryTimeWindow);
 }
 
 public sealed record SubscriptionResponse(

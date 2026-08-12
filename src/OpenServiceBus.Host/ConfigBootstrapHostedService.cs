@@ -92,8 +92,9 @@ public sealed class ConfigBootstrapHostedService : IHostedService
                 try
                 {
                     await _topics.CreateTopicAsync(topic, cancellationToken).ConfigureAwait(false);
-                    _logger.LogInformation("Bootstrapped topic '{Name}' (ttl={Ttl})",
-                        topic.Name, topic.DefaultMessageTimeToLive?.ToString() ?? "(none)");
+                    _logger.LogInformation("Bootstrapped topic '{Name}' (ttl={Ttl}, dedup={Dedup})",
+                        topic.Name, topic.DefaultMessageTimeToLive?.ToString() ?? "(none)",
+                        topic.RequiresDuplicateDetection);
                 }
                 catch (InvalidOperationException ex)
                 {

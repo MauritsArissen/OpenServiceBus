@@ -115,6 +115,13 @@ public sealed class TopicProperties
 
     [JsonPropertyName("DefaultMessageTimeToLive")]
     public string? DefaultMessageTimeToLive { get; set; }
+
+    [JsonPropertyName("RequiresDuplicateDetection")]
+    public bool? RequiresDuplicateDetection { get; set; }
+
+    /// <summary>ISO 8601 duration; null defaults to 10 minutes when dedup is enabled.</summary>
+    [JsonPropertyName("DuplicateDetectionHistoryTimeWindow")]
+    public string? DuplicateDetectionHistoryTimeWindow { get; set; }
 }
 
 public sealed class SubscriptionConfig

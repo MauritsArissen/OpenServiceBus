@@ -94,6 +94,9 @@ public sealed class SessionReceiverSource : IMessageSource
             while (locked is null)
             {
                 if (link.IsDraining) return null!;
+                // See the matching note in QueueReceiverSource: a closed link's in-flight poll
+                // must exit, or it lives on as a zombie consumer stealing the session's messages.
+                if (link.IsClosed) return null!;
                 if (_registry is not null)
                 {
                     var current = _registry.GetAsync(_entityName).GetAwaiter().GetResult();
@@ -129,6 +132,12 @@ public sealed class SessionReceiverSource : IMessageSource
                     _logger.LogDebug("Session lock lost for '{Session}' on '{Entity}'; ending receiver pump.", SessionId, _entityName);
                     return null!;
                 }
+            }
+
+            if (link.IsClosed)
+            {
+                await _store.TryAbandonAsync(_entityName, locked.LockToken).ConfigureAwait(false);
+                return null!;
             }
 
             _activity?.Touch(_entityName);

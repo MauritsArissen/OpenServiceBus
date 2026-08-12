@@ -149,7 +149,7 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
             ? opts.StoreFactory(opts.TimeProvider)
             : new InMemoryMessageStore(opts.TimeProvider);
         var queues = new QueueManager(storeAsIface);
-        var topics = new TopicManager(queues);
+        var topics = new TopicManager(queues, storeAsIface);
         var activity = new EntityActivityTracker(opts.TimeProvider);
         var router = new MessageRouter(queues, storeAsIface, NullLogger<MessageRouter>.Instance, topics,
             new AmqpRuleActionApplier(opts.TimeProvider), activity, new AmqpDeadLetterAnnotator());
@@ -334,6 +334,14 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
     /// <summary>Create a queue from a pre-built descriptor. Returns the resulting descriptor.</summary>
     public Task<QueueDescriptor> CreateQueueAsync(QueueDescriptor descriptor) =>
         Queues.CreateAsync(descriptor);
+
+    /// <summary>Create a topic with default settings. Returns the resulting descriptor.</summary>
+    public Task<TopicDescriptor> CreateTopicAsync(string name) =>
+        Topics.CreateTopicAsync(new TopicDescriptor { Name = name });
+
+    /// <summary>Create a topic from a pre-built descriptor. Returns the resulting descriptor.</summary>
+    public Task<TopicDescriptor> CreateTopicAsync(TopicDescriptor descriptor) =>
+        Topics.CreateTopicAsync(descriptor);
 
     /// <summary>
     /// Purge every message from every queue and subscription on this broker (including

@@ -105,8 +105,9 @@ public static class EntityDescriptionCodec
             new XAttribute(XNamespace.Xmlns + "i", AtomXml.Xsi),
             new XElement(Sb + "DefaultMessageTimeToLive", AtomXml.DurationOrUnlimited(topic.DefaultMessageTimeToLive)),
             new XElement(Sb + "MaxSizeInMegabytes", topic.MaxSizeInMegabytes),
-            new XElement(Sb + "RequiresDuplicateDetection", false),
-            new XElement(Sb + "DuplicateDetectionHistoryTimeWindow", AtomXml.Duration(TimeSpan.FromMinutes(10))),
+            new XElement(Sb + "RequiresDuplicateDetection", topic.RequiresDuplicateDetection),
+            new XElement(Sb + "DuplicateDetectionHistoryTimeWindow",
+                AtomXml.Duration(topic.DuplicateDetectionHistoryTimeWindow ?? DuplicateDetection.DefaultWindow)),
             new XElement(Sb + "EnableBatchedOperations", true),
             new XElement(Sb + "SizeInBytes", 0),
             new XElement(Sb + "FilteringMessagesBeforePublishing", false),
@@ -136,6 +137,8 @@ public static class EntityDescriptionCodec
             topic = element.Name.LocalName switch
             {
                 "DefaultMessageTimeToLive" => topic with { DefaultMessageTimeToLive = AtomXml.ParseOptionalDuration(value) },
+                "RequiresDuplicateDetection" => topic with { RequiresDuplicateDetection = XmlConvert.ToBoolean(value) },
+                "DuplicateDetectionHistoryTimeWindow" => topic with { DuplicateDetectionHistoryTimeWindow = AtomXml.ParseOptionalDuration(value) },
                 "UserMetadata" => topic with { UserMetadata = value },
                 "Status" => topic with { Status = EntityStatusExtensions.Parse(value) },
                 "AutoDeleteOnIdle" => topic with { AutoDeleteOnIdle = AtomXml.ParseOptionalDuration(value) },

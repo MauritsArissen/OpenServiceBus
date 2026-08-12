@@ -13,6 +13,20 @@ public sealed record TopicDescriptor
     public TimeSpan? DefaultMessageTimeToLive { get; init; }
 
     /// <summary>
+    /// When true, a publish whose MessageId was already seen within
+    /// <see cref="DuplicateDetectionHistoryTimeWindow"/> is silently dropped BEFORE fan-out -
+    /// one check per publish at the topic, so a duplicate reaches zero subscriptions, matching
+    /// Azure. Immutable after creation.
+    /// </summary>
+    public bool RequiresDuplicateDetection { get; init; }
+
+    /// <summary>
+    /// Sliding window for <see cref="RequiresDuplicateDetection"/>. Null defaults to 10 minutes,
+    /// same as the queue-level default.
+    /// </summary>
+    public TimeSpan? DuplicateDetectionHistoryTimeWindow { get; init; }
+
+    /// <summary>
     /// Free-form metadata attached by management clients (the SDK's <c>UserMetadata</c>).
     /// Carried and returned verbatim; no broker semantics.
     /// </summary>

@@ -135,6 +135,9 @@ public static class EmulatorConfigLoader
             AutoDeleteOnIdle = ParseDuration(t.Properties?.AutoDeleteOnIdle, $"Topic '{t.Name}'.AutoDeleteOnIdle", warnings),
             MaxSizeInMegabytes = t.Properties?.MaxSizeInMegabytes ?? 1024,
             MaxMessageSizeInKilobytes = t.Properties?.MaxMessageSizeInKilobytes ?? 256,
+            RequiresDuplicateDetection = t.Properties?.RequiresDuplicateDetection ?? false,
+            DuplicateDetectionHistoryTimeWindow = ParseDuration(t.Properties?.DuplicateDetectionHistoryTimeWindow,
+                $"Topic '{t.Name}'.DuplicateDetectionHistoryTimeWindow", warnings),
         };
 
     private static SubscriptionDescriptor ProjectSubscription(string topicName, SubscriptionConfig s, List<string> warnings)

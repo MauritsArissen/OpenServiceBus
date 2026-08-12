@@ -236,6 +236,10 @@ public sealed class AtomManagementHandler
                     {
                         return Error(404, $"Topic '{name}' does not exist. SubCode=40400.");
                     }
+                    if (parsed.RequiresDuplicateDetection != existing.RequiresDuplicateDetection)
+                    {
+                        return Error(400, "RequiresDuplicateDetection cannot be changed after the topic is created. SubCode=40000.");
+                    }
                     var updated = await _topics.UpdateTopicAsync(
                         parsed with { CreatedAt = existing.CreatedAt, UpdatedAt = now }, ct).ConfigureAwait(false);
                     var count = (await _topics.ListSubscriptionsAsync(name, ct).ConfigureAwait(false)).Count;

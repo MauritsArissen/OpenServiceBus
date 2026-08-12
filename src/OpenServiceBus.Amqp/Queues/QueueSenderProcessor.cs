@@ -143,10 +143,9 @@ public sealed class QueueSenderProcessor : IMessageProcessor
                 return;
             }
             // When dedup is required, pass messageId + window to the store so repeats are dropped.
-            var messageId = _descriptor.RequiresDuplicateDetection ? msg.Properties?.MessageId?.ToString() : null;
-            var dedupWindow = _descriptor.RequiresDuplicateDetection
-                ? _descriptor.DuplicateDetectionHistoryTimeWindow ?? TimeSpan.FromMinutes(10)
-                : (TimeSpan?)null;
+            var dedupWindow = DuplicateDetection.EffectiveWindow(
+                _descriptor.RequiresDuplicateDetection, _descriptor.DuplicateDetectionHistoryTimeWindow);
+            var messageId = dedupWindow is not null ? msg.Properties?.MessageId?.ToString() : null;
             // Forward target may be a topic - build a filter context unconditionally so
             // the router can fan-out if the chain hits one. Cheap when not forwarded.
             var filterContext = BuildFilterContext(msg, _timeProvider.GetUtcNow());
@@ -212,10 +211,9 @@ public sealed class QueueSenderProcessor : IMessageProcessor
                     });
                     return;
                 }
-                var messageId = _descriptor.RequiresDuplicateDetection ? inner.Properties?.MessageId?.ToString() : null;
-                var dedupWindow = _descriptor.RequiresDuplicateDetection
-                    ? _descriptor.DuplicateDetectionHistoryTimeWindow ?? TimeSpan.FromMinutes(10)
-                    : (TimeSpan?)null;
+                var dedupWindow = DuplicateDetection.EffectiveWindow(
+                    _descriptor.RequiresDuplicateDetection, _descriptor.DuplicateDetectionHistoryTimeWindow);
+                var messageId = dedupWindow is not null ? inner.Properties?.MessageId?.ToString() : null;
                 var filterContext = BuildFilterContext(inner, _timeProvider.GetUtcNow());
 
                 if (txnId is { Length: > 0 })

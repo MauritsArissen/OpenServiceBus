@@ -4,6 +4,7 @@
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
+//   -> queue dedup -> topic dedup -> batch dedup
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -322,10 +323,84 @@ const run = async () => {
   await resendReceiver.close();
   await resendDlq.close();
   await fetch(`${httpBase}/${resendQueue}?api-version=2021-05`, { method: "DELETE" });
+
+  // 20. queue dedup - a duplicate-detection queue silently drops a repeated MessageId
+  // within the window (issue #29 hardening): three sends, one shared id, two survivors.
+  const dedupQueue = `smoke-dedup-${stamp}`;
+  await atomPut(dedupQueue,
+    '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
+    "<RequiresDuplicateDetection>true</RequiresDuplicateDetection>" +
+    "<DuplicateDetectionHistoryTimeWindow>PT10M</DuplicateDetectionHistoryTimeWindow></QueueDescription>");
+  const dedupSender = client.createSender(dedupQueue);
+  await dedupSender.sendMessages({ body: "first", messageId: `dupq-${stamp}` });
+  await dedupSender.sendMessages({ body: "retry", messageId: `dupq-${stamp}` });
+  await dedupSender.sendMessages({ body: "unique", messageId: `dupq-other-${stamp}` });
+  const dedupReceiver = client.createReceiver(dedupQueue);
+  let dedupSeen = 0;
+  for (;;) {
+    const got = await dedupReceiver.receiveMessages(1, { maxWaitTimeInMs: 2000 });
+    if (got.length === 0) break;
+    await dedupReceiver.completeMessage(got[0]);
+    dedupSeen++;
+  }
+  check("queue dedup", dedupSeen === 2, dedupSeen === 2 ? "" : `got ${dedupSeen} message(s)`);
+
+  // 21. topic dedup - duplicate detection runs at the TOPIC before fan-out (issue #29):
+  // a duplicate publish reaches zero subscriptions; each subscription sees exactly one copy.
+  const dedupTopic = `smoke-dedup-topic-${stamp}`;
+  await atomPut(dedupTopic,
+    '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
+    "<RequiresDuplicateDetection>true</RequiresDuplicateDetection></TopicDescription>");
+  await atomPut(`${dedupTopic}/subscriptions/s1`,
+    '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  await atomPut(`${dedupTopic}/subscriptions/s2`,
+    '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  const topicDedupSender = client.createSender(dedupTopic);
+  await topicDedupSender.sendMessages({ body: "evt", messageId: `dupt-${stamp}` });
+  await topicDedupSender.sendMessages({ body: "evt-retry", messageId: `dupt-${stamp}` });
+  await topicDedupSender.close();
+  let topicDedupOk = true;
+  let topicDedupDetail = "";
+  for (const sub of ["s1", "s2"]) {
+    const subReceiver = client.createReceiver(dedupTopic, sub);
+    let got = 0;
+    for (;;) {
+      const batch = await subReceiver.receiveMessages(1, { maxWaitTimeInMs: 2000 });
+      if (batch.length === 0) break;
+      await subReceiver.completeMessage(batch[0]);
+      got++;
+    }
+    await subReceiver.close();
+    if (got !== 1) {
+      topicDedupOk = false;
+      topicDedupDetail = `subscription ${sub} got ${got} message(s)`;
+    }
+  }
+  check("topic dedup", topicDedupOk, topicDedupDetail);
+  await fetch(`${httpBase}/${dedupTopic}?api-version=2021-05`, { method: "DELETE" });
+
+  // 22. batch dedup - one batched envelope with an in-batch duplicate: each inner
+  // message is checked individually, so the duplicate is dropped and distinct ids land.
+  await dedupSender.sendMessages([
+    { body: "one", messageId: `dupb-${stamp}` },
+    { body: "dup-of-one", messageId: `dupb-${stamp}` },
+    { body: "two", messageId: `dupb2-${stamp}` },
+  ]);
+  let batchSeen = 0;
+  for (;;) {
+    const got = await dedupReceiver.receiveMessages(1, { maxWaitTimeInMs: 2000 });
+    if (got.length === 0) break;
+    await dedupReceiver.completeMessage(got[0]);
+    batchSeen++;
+  }
+  check("batch dedup", batchSeen === 2, batchSeen === 2 ? "" : `got ${batchSeen} message(s)`);
+  await dedupSender.close();
+  await dedupReceiver.close();
+  await fetch(`${httpBase}/${dedupQueue}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>
-  setTimeout(() => rej(new Error("smoke test timed out after 60s")), 60_000));
+  setTimeout(() => rej(new Error("smoke test timed out after 90s")), 90_000));
 
 try {
   await Promise.race([run(), timeout]);

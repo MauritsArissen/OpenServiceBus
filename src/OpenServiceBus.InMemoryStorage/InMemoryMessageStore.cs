@@ -19,6 +19,7 @@ public sealed class InMemoryMessageStore : IMessageStore
 {
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, QueueState> _queues = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, TopicDedupState> _topicDedup = new(StringComparer.OrdinalIgnoreCase);
 
     public InMemoryMessageStore() : this(TimeProvider.System) { }
 
@@ -71,6 +72,39 @@ public sealed class InMemoryMessageStore : IMessageStore
             }
         }
         return Task.FromResult(purged);
+    }
+
+    // Topic-level dedup mirrors the queue path's semantics (atomic check, lazy sweep,
+    // TimeProvider-driven) but is keyed on the topic name - topics store no messages, so
+    // there is no original StoredMessage to return, only the drop decision. A repeat
+    // slides the window forward, matching the SQLite queue implementation.
+    public Task<bool> CheckTopicDuplicateAsync(string topicName, string messageId, TimeSpan window, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(messageId)) return Task.FromResult(false);
+        var state = _topicDedup.GetOrAdd(topicName, _ => new TopicDedupState());
+        var now = _timeProvider.GetUtcNow();
+        lock (state.Sync)
+        {
+            List<string>? expired = null;
+            foreach (var (key, deadline) in state.Seen)
+            {
+                if (deadline <= now) (expired ??= []).Add(key);
+            }
+            if (expired is not null)
+            {
+                foreach (var key in expired) state.Seen.Remove(key);
+            }
+
+            var duplicate = state.Seen.TryGetValue(messageId, out var existingDeadline) && existingDeadline > now;
+            state.Seen[messageId] = now + window;
+            return Task.FromResult(duplicate);
+        }
+    }
+
+    public Task ClearTopicDedupHistoryAsync(string topicName, CancellationToken cancellationToken = default)
+    {
+        _topicDedup.TryRemove(topicName, out _);
+        return Task.CompletedTask;
     }
 
     public Task<StoredMessage> EnqueueAsync(
@@ -747,6 +781,12 @@ public sealed class InMemoryMessageStore : IMessageStore
             }
             return true;
         }
+    }
+
+    private sealed class TopicDedupState
+    {
+        public readonly object Sync = new();
+        public readonly Dictionary<string, DateTimeOffset> Seen = new(StringComparer.Ordinal);
     }
 
     private sealed class QueueState

@@ -4,6 +4,7 @@
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
+//   -> queue dedup -> topic dedup -> batch dedup
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -262,6 +263,77 @@ try
     await resendReceiver.CloseAsync();
     await resendDlq.CloseAsync();
     await admin.DeleteQueueAsync(resendQueue);
+
+    // 20. queue dedup - a duplicate-detection queue silently drops a repeated MessageId
+    // within the window (issue #29 hardening): three sends, one shared id, two survivors.
+    var dedupQueue = $"smoke-dedup-{stamp}";
+    await admin.CreateQueueAsync(new CreateQueueOptions(dedupQueue)
+    {
+        RequiresDuplicateDetection = true,
+        DuplicateDetectionHistoryTimeWindow = TimeSpan.FromMinutes(10),
+    });
+    var dedupSender = client.CreateSender(dedupQueue);
+    await dedupSender.SendMessageAsync(new ServiceBusMessage("first") { MessageId = $"dupq-{stamp}" });
+    await dedupSender.SendMessageAsync(new ServiceBusMessage("retry") { MessageId = $"dupq-{stamp}" });
+    await dedupSender.SendMessageAsync(new ServiceBusMessage("unique") { MessageId = $"dupq-other-{stamp}" });
+    var dedupReceiver = client.CreateReceiver(dedupQueue);
+    var dedupSeen = 0;
+    while (await dedupReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2)) is { } dedupMsg)
+    {
+        await dedupReceiver.CompleteMessageAsync(dedupMsg);
+        dedupSeen++;
+    }
+    Check("queue dedup", dedupSeen == 2, dedupSeen == 2 ? "" : $"got {dedupSeen} message(s)");
+
+    // 21. topic dedup - duplicate detection runs at the TOPIC before fan-out (issue #29):
+    // a duplicate publish reaches zero subscriptions; each subscription sees exactly one copy.
+    var dedupTopic = $"smoke-dedup-topic-{stamp}";
+    await admin.CreateTopicAsync(new CreateTopicOptions(dedupTopic) { RequiresDuplicateDetection = true });
+    await admin.CreateSubscriptionAsync(dedupTopic, "s1");
+    await admin.CreateSubscriptionAsync(dedupTopic, "s2");
+    var topicDedupSender = client.CreateSender(dedupTopic);
+    await topicDedupSender.SendMessageAsync(new ServiceBusMessage("evt") { MessageId = $"dupt-{stamp}" });
+    await topicDedupSender.SendMessageAsync(new ServiceBusMessage("evt-retry") { MessageId = $"dupt-{stamp}" });
+    await topicDedupSender.CloseAsync();
+    var topicDedupOk = true;
+    var topicDedupDetail = "";
+    foreach (var sub in new[] { "s1", "s2" })
+    {
+        var subReceiver = client.CreateReceiver(dedupTopic, sub);
+        var got = 0;
+        while (await subReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2)) is { } subMsg)
+        {
+            await subReceiver.CompleteMessageAsync(subMsg);
+            got++;
+        }
+        await subReceiver.CloseAsync();
+        if (got != 1)
+        {
+            topicDedupOk = false;
+            topicDedupDetail = $"subscription {sub} got {got} message(s)";
+        }
+    }
+    Check("topic dedup", topicDedupOk, topicDedupDetail);
+    await admin.DeleteTopicAsync(dedupTopic);
+
+    // 22. batch dedup - one batched envelope with an in-batch duplicate: each inner
+    // message is checked individually, so the duplicate is dropped and distinct ids land.
+    await dedupSender.SendMessagesAsync(new List<ServiceBusMessage>
+    {
+        new("one") { MessageId = $"dupb-{stamp}" },
+        new("dup-of-one") { MessageId = $"dupb-{stamp}" },
+        new("two") { MessageId = $"dupb2-{stamp}" },
+    });
+    var batchSeen = 0;
+    while (await dedupReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2)) is { } batchMsg)
+    {
+        await dedupReceiver.CompleteMessageAsync(batchMsg);
+        batchSeen++;
+    }
+    Check("batch dedup", batchSeen == 2, batchSeen == 2 ? "" : $"got {batchSeen} message(s)");
+    await dedupSender.CloseAsync();
+    await dedupReceiver.CloseAsync();
+    await admin.DeleteQueueAsync(dedupQueue);
 }
 catch (Exception e)
 {
