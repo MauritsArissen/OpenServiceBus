@@ -5,9 +5,26 @@ const FAQS: QA[] = [
     q: "Is OpenServiceBus production-ready?",
     a: (
       <>
-        No - it's designed for local development, unit tests, and CI. Use the real
-        Azure Service Bus in production. OpenServiceBus's positioning is "real AMQP
-        1.0 behavior without the Docker + SQL Server + EULA overhead."
+        No - it's built for the inner loop: unit tests, CI, and running your
+        application locally against a faithful broker while you develop. Use the
+        real Azure Service Bus in production. OpenServiceBus's positioning is
+        "real AMQP 1.0 behavior without the Docker + SQL Server + EULA overhead."
+      </>
+    ),
+  },
+  {
+    q: "Can I run my application against it during local development?",
+    a: (
+      <>
+        Yes - that's half the point. Start the container next to your app (a{" "}
+        <code>docker compose</code> service works great), point your connection
+        string at <code>localhost</code>, and develop against a broker that
+        behaves like Azure: queues, topics with SQL filters, sessions,
+        scheduling, dead-lettering. The Docker image persists to SQLite by
+        default so messages survive restarts, <code>config.json</code> declares
+        your entities so every developer boots the same topology, and the
+        Explorer on port <code>5400</code> lets you watch and manipulate
+        everything your app is doing while you debug.
       </>
     ),
   },

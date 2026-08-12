@@ -12,7 +12,8 @@ export default function Quickstart() {
       <div className="mb-8">
         <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">Up and running in seconds</h2>
         <p className="mt-3 text-neutral-400">
-          One Docker command. The broker, management REST API, and Explorer UI are bundled.
+          One Docker command. The broker, management REST API, and Explorer UI are bundled -
+          leave it running and develop your application against it like it's Azure.
         </p>
       </div>
 
