@@ -376,7 +376,7 @@ with ServiceBusClient.from_connection_string(conn) as client:
     id: "topics",
     label: "Topics & SQL filters",
     blurb:
-      "Publish once, let the broker fan out. Subscription rules run server-side, so each worker only ever receives what its SQL filter matches. Entities and rules come from config.json (all SDKs) or the .NET Testing host.",
+      "Publish once, let the broker fan out. Subscription rules run server-side with the full Azure SQL filter grammar (arithmetic, LIKE...ESCAPE, parameters, built-in functions), so each worker only ever receives what its filter matches. Rules come from config.json, the admin client / rule manager, the Explorer's rule editor, or the .NET Testing host.",
     variants: [
       {
         sdk: "dotnet",
@@ -481,6 +481,255 @@ with ServiceBusClient.from_connection_string(conn) as client:
         for alert in fraud.receive_messages(max_message_count=1):
             print("fraud alert:", str(alert))
             fraud.complete_message(alert)`,
+      },
+    ],
+  },
+  {
+    id: "deadletter",
+    label: "Dead-lettering",
+    blurb:
+      "Reject poison messages with a reason, then read them back off the $DeadLetterQueue sub-queue with the reason intact - in every SDK. From the Explorer you can also bulk dead-letter a selection, requeue, or Resend a clean copy back onto the entity.",
+    variants: [
+      {
+        sdk: "dotnet",
+        language: "csharp",
+        code: `var receiver = client.CreateReceiver("orders");
+var msg = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(5));
+
+// Reject with a reason - the broker moves it to orders/$DeadLetterQueue.
+await receiver.DeadLetterMessageAsync(msg, "invalid-payload", "amount must be positive");
+
+// Read it back from the DLQ sub-queue, reason intact.
+var dlq = client.CreateReceiver("orders", new ServiceBusReceiverOptions
+{
+    SubQueue = SubQueue.DeadLetter,
+});
+var dead = await dlq.ReceiveMessageAsync(TimeSpan.FromSeconds(5));
+Console.WriteLine(dead.DeadLetterReason);           // invalid-payload
+Console.WriteLine(dead.DeadLetterErrorDescription); // amount must be positive
+
+// Complete deletes it off the DLQ - or hit "Resend" in the Explorer
+// to submit a clean copy back onto the queue instead.
+await dlq.CompleteMessageAsync(dead);`,
+      },
+      {
+        sdk: "node",
+        language: "javascript",
+        code: `const receiver = client.createReceiver("orders");
+const [msg] = await receiver.receiveMessages(1, { maxWaitTimeInMs: 5000 });
+
+// Reject with a reason - the broker moves it to orders/$DeadLetterQueue.
+await receiver.deadLetterMessage(msg, {
+  deadLetterReason: "invalid-payload",
+  deadLetterErrorDescription: "amount must be positive",
+});
+
+// Read it back from the DLQ sub-queue, reason intact.
+const dlq = client.createReceiver("orders", { subQueueType: "deadLetter" });
+const [dead] = await dlq.receiveMessages(1, { maxWaitTimeInMs: 5000 });
+console.log(dead.deadLetterReason);           // invalid-payload
+console.log(dead.deadLetterErrorDescription); // amount must be positive
+
+// Complete deletes it off the DLQ - or hit "Resend" in the Explorer.
+await dlq.completeMessage(dead);`,
+      },
+      {
+        sdk: "java",
+        language: "java",
+        code: `ServiceBusReceiverClient receiver = new ServiceBusClientBuilder()
+    .connectionString(conn)
+    .receiver().queueName("orders").disableAutoComplete().buildClient();
+
+for (ServiceBusReceivedMessage msg : receiver.receiveMessages(1, Duration.ofSeconds(5))) {
+    // Reject with a reason - the broker moves it to orders/$DeadLetterQueue.
+    receiver.deadLetter(msg, new DeadLetterOptions()
+        .setDeadLetterReason("invalid-payload")
+        .setDeadLetterErrorDescription("amount must be positive"));
+}
+
+// Read it back from the DLQ sub-queue, reason intact.
+ServiceBusReceiverClient dlq = new ServiceBusClientBuilder()
+    .connectionString(conn)
+    .receiver().queueName("orders").subQueue(SubQueue.DEAD_LETTER_QUEUE)
+    .disableAutoComplete().buildClient();
+
+for (ServiceBusReceivedMessage dead : dlq.receiveMessages(1, Duration.ofSeconds(5))) {
+    System.out.println(dead.getDeadLetterReason());           // invalid-payload
+    System.out.println(dead.getDeadLetterErrorDescription()); // amount must be positive
+    dlq.complete(dead);
+}`,
+      },
+      {
+        sdk: "python",
+        language: "python",
+        code: `from azure.servicebus import ServiceBusClient, ServiceBusSubQueue
+
+with ServiceBusClient.from_connection_string(conn) as client:
+    with client.get_queue_receiver("orders", max_wait_time=5) as receiver:
+        for msg in receiver.receive_messages(max_message_count=1):
+            # Reject with a reason - moved to orders/$DeadLetterQueue.
+            receiver.dead_letter_message(
+                msg,
+                reason="invalid-payload",
+                error_description="amount must be positive")
+
+    # Read it back from the DLQ sub-queue, reason intact.
+    with client.get_queue_receiver(
+        "orders", sub_queue=ServiceBusSubQueue.DEAD_LETTER, max_wait_time=5
+    ) as dlq:
+        for dead in dlq.receive_messages(max_message_count=1):
+            print(dead.dead_letter_reason)             # invalid-payload
+            print(dead.dead_letter_error_description)  # amount must be positive
+            dlq.complete_message(dead)`,
+      },
+    ],
+  },
+  {
+    id: "dedup",
+    label: "Duplicate detection",
+    blurb:
+      "Enable duplicate detection on a queue and the broker drops any message whose MessageId was already seen inside the window - an at-least-once producer becomes exactly-once without any consumer bookkeeping. Declare the queue in config.json, the admin client, the Explorer, or the Testing host.",
+    variants: [
+      {
+        sdk: "dotnet",
+        language: "csharp",
+        code: `using Azure.Messaging.ServiceBus.Administration;
+
+var admin = new ServiceBusAdministrationClient(conn);
+await admin.CreateQueueAsync(new CreateQueueOptions("transfers")
+{
+    RequiresDuplicateDetection = true,
+    DuplicateDetectionHistoryTimeWindow = TimeSpan.FromMinutes(10),
+});
+
+var sender = client.CreateSender("transfers");
+
+// An at-least-once producer retries the same logical message...
+await sender.SendMessageAsync(new ServiceBusMessage("pay rent") { MessageId = "tx-1001" });
+await sender.SendMessageAsync(new ServiceBusMessage("pay rent") { MessageId = "tx-1001" });
+
+// ...but the queue holds exactly one copy.
+var receiver = client.CreateReceiver("transfers");
+var first  = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2)); // tx-1001
+var second = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2)); // null`,
+      },
+      {
+        sdk: "node",
+        language: "javascript",
+        code: `// Queue "transfers" declared with duplicate detection
+// (config.json, the Explorer, or the ATOM management API):
+//   requiresDuplicateDetection: true, 10 minute window
+
+const sender = client.createSender("transfers");
+
+// An at-least-once producer retries the same logical message...
+await sender.sendMessages({ body: "pay rent", messageId: "tx-1001" });
+await sender.sendMessages({ body: "pay rent", messageId: "tx-1001" });
+
+// ...but the queue holds exactly one copy.
+const receiver = client.createReceiver("transfers");
+const msgs = await receiver.receiveMessages(2, { maxWaitTimeInMs: 2000 });
+console.log(msgs.length); // 1`,
+      },
+      {
+        sdk: "java",
+        language: "java",
+        code: `// Queue "transfers" declared with duplicate detection
+// (config.json, the Explorer, or the ATOM management API).
+
+ServiceBusSenderClient sender = new ServiceBusClientBuilder()
+    .connectionString(conn)
+    .sender().queueName("transfers").buildClient();
+
+// An at-least-once producer retries the same logical message...
+ServiceBusMessage payment = new ServiceBusMessage("pay rent");
+payment.setMessageId("tx-1001");
+sender.sendMessage(payment);
+sender.sendMessage(payment);
+
+// ...but the queue holds exactly one copy.
+ServiceBusReceiverClient receiver = new ServiceBusClientBuilder()
+    .connectionString(conn)
+    .receiver().queueName("transfers").disableAutoComplete().buildClient();
+
+int count = 0;
+for (ServiceBusReceivedMessage msg : receiver.receiveMessages(2, Duration.ofSeconds(2))) {
+    receiver.complete(msg);
+    count++;
+}
+System.out.println(count); // 1`,
+      },
+      {
+        sdk: "python",
+        language: "python",
+        code: `# Queue "transfers" declared with duplicate detection
+# (config.json, the Explorer, or the ATOM management API).
+
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+
+with ServiceBusClient.from_connection_string(conn) as client:
+    with client.get_queue_sender("transfers") as sender:
+        # An at-least-once producer retries the same logical message...
+        sender.send_messages(ServiceBusMessage("pay rent", message_id="tx-1001"))
+        sender.send_messages(ServiceBusMessage("pay rent", message_id="tx-1001"))
+
+    # ...but the queue holds exactly one copy.
+    with client.get_queue_receiver("transfers", max_wait_time=2) as receiver:
+        msgs = receiver.receive_messages(max_message_count=2)
+        print(len(msgs))  # 1`,
+      },
+    ],
+  },
+  {
+    id: "admin",
+    label: "Admin API",
+    blurb:
+      "OpenServiceBus serves the real ATOM management API on the AMQP port, so the .NET ServiceBusAdministrationClient manages entities at runtime - no config file needed. The Java/JS/Python admin clients can't target a plaintext local endpoint yet (they hardcode https), so from those stacks speak the same protocol over plain HTTP, use config.json, or the Explorer.",
+    variants: [
+      {
+        sdk: "dotnet",
+        language: "csharp",
+        code: `using Azure.Messaging.ServiceBus.Administration;
+
+var admin = new ServiceBusAdministrationClient(conn);
+
+// Entities at runtime - same client, same calls as against Azure.
+await admin.CreateQueueAsync(new CreateQueueOptions("orders")
+{
+    MaxDeliveryCount = 5,
+    LockDuration = TimeSpan.FromSeconds(30),
+});
+await admin.CreateTopicAsync("bank-events");
+await admin.CreateSubscriptionAsync("bank-events", "fraud");
+await admin.CreateRuleAsync("bank-events", "fraud",
+    new CreateRuleOptions("high-value", new SqlRuleFilter("amount >= 10000")));
+
+// Pause producers while consumers keep draining, then re-enable.
+QueueProperties q = await admin.GetQueueAsync("orders");
+q.Status = EntityStatus.SendDisabled;
+await admin.UpdateQueueAsync(q);
+
+await admin.DeleteQueueAsync("orders");`,
+      },
+      {
+        sdk: "shell",
+        language: "bash",
+        code: `# The same ATOM management protocol, hand-rolled over plain HTTP - handy
+# from stacks whose admin client cannot target a local plaintext endpoint.
+
+# Create a queue
+curl -X PUT "http://localhost:5672/orders?api-version=2021-05" \\
+  -H "Content-Type: application/atom+xml" \\
+  -d '<entry xmlns="http://www.w3.org/2005/Atom"><content type="application/xml">
+        <QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">
+          <MaxDeliveryCount>5</MaxDeliveryCount>
+        </QueueDescription></content></entry>'
+
+# Inspect it
+curl "http://localhost:5672/orders?api-version=2021-05"
+
+# Delete it
+curl -X DELETE "http://localhost:5672/orders?api-version=2021-05"`,
       },
     ],
   },

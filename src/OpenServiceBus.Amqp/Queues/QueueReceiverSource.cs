@@ -285,10 +285,17 @@ public sealed class QueueReceiverSource : IMessageSource
         finally
         {
             // Only complete here for the non-tx path; the tx branch already settled the delivery
-            // with a TransactionalState outcome above.
+            // with a TransactionalState outcome above. Settle by ECHOING the receiver's outcome:
+            // DispositionContext.Complete() settles every delivery as Accepted, but proton-j
+            // (the Java SDK) verifies the remote state matches the outcome it sent, so settling
+            // a Rejected (dead-letter) disposition as Accepted makes deadLetter() throw
+            // client-side. Real Service Bus echoes the receiver's outcome. Echo a FRESH
+            // instance, never the received one - proton-j populates Rejected.Error.Info with
+            // string keys that AMQPNetLite cannot re-encode into a Fields map.
             if (dispositionContext.DeliveryState is not TransactionalState)
             {
-                dispositionContext.Complete();
+                dispositionContext.Link.DisposeMessage(
+                    dispositionContext.Message, EchoOutcome(dispositionContext.DeliveryState), settled: true);
             }
         }
     }
@@ -384,12 +391,35 @@ public sealed class QueueReceiverSource : IMessageSource
             removed.SequenceNumber, _entityName, dlqTarget, reason ?? "(unspecified)");
     }
 
+    private static DeliveryState EchoOutcome(DeliveryState received) => received switch
+    {
+        Rejected => new Rejected(),
+        Released => new Released(),
+        Modified m => new Modified { DeliveryFailed = m.DeliveryFailed, UndeliverableHere = m.UndeliverableHere },
+        _ => new Accepted(),
+    };
+
+    // The .NET SDK stamps Rejected.Error.Info with Symbol keys; proton-j (Java) uses plain
+    // string keys for the same names. Enumerate entries instead of indexing: the Fields
+    // map's typed indexer rejects non-Symbol keys (decode fills it unvalidated).
     private static (string? Reason, string? Description) ExtractDeadLetterInfo(Rejected rejected)
     {
         if (rejected.Error?.Info is null) return (null, null);
-        rejected.Error.Info.TryGetValue(DeadLetterReasonSymbol, out var reason);
-        rejected.Error.Info.TryGetValue(DeadLetterErrorDescriptionSymbol, out var description);
-        return (reason as string, description as string);
+        string? reason = null;
+        string? description = null;
+        foreach (KeyValuePair<object, object> entry in rejected.Error.Info)
+        {
+            switch (entry.Key?.ToString())
+            {
+                case "DeadLetterReason":
+                    reason = entry.Value as string;
+                    break;
+                case "DeadLetterErrorDescription":
+                    description = entry.Value as string;
+                    break;
+            }
+        }
+        return (reason, description);
     }
 
     private static void StampSystemProperties(Message amqp, LockedMessage locked)

@@ -77,6 +77,18 @@ port) and messaging through the real `ServiceBusClient` - the JSON REST API (def
 - **Dead-letter tab** (queues and subscriptions) - the same receive UI pointed at the
   entity's `$DeadLetterQueue`: peek or lock DLQ messages, **Requeue** a cleaned copy back
   to the parent (or through the topic so rules re-evaluate), or **Delete** it off the DLQ.
+- **Resend** (DLQ and transfer-DLQ messages, single or bulk) - submit a brand-new copy of
+  a dead-lettered message: same body, content type, subject, correlation id, session id,
+  partition key, To/ReplyTo and application properties, but fresh broker metadata (new
+  MessageId by default, delivery count 0, `DeadLetter*` markers stripped). The original
+  always stays in the DLQ - removing it is a separate, explicit action. The dialog offers
+  a destination picker (default: the source entity; for a subscription DLQ the topic, so
+  rules re-evaluate) and a **Keep original MessageId** toggle for duplicate-detection
+  entities - note the broker silently drops a kept id that is still inside the dedup
+  window. Resend is peek-based, so it works on browsed messages without taking a lock.
+  No Service Bus SDK has a resend API; this is the same peek-clone-send recipe the Azure
+  portal and the community Service Bus Explorer implement, riding plain SDK calls, so it
+  also works against a real Azure namespace.
 - **Rules tab** (subscriptions only) - SQL / Correlation / True / False editor with
   examples in the help text. `$Default` rule visually distinguished from custom rules.
 - **Purge** - a per-entity Purge button (queue + DLQ, topic across subscriptions,
