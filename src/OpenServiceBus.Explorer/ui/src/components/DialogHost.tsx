@@ -5,6 +5,7 @@ import { CreateQueueDialog } from "./dialogs/CreateQueueDialog";
 import { CreateSubscriptionDialog } from "./dialogs/CreateSubscriptionDialog";
 import { CreateTopicDialog } from "./dialogs/CreateTopicDialog";
 import { DeadLetterDialog } from "./dialogs/DeadLetterDialog";
+import { ResendDialog } from "./dialogs/ResendDialog";
 import { RuleDialog } from "./dialogs/RuleDialog";
 
 export function DialogHost() {
@@ -17,6 +18,7 @@ export function DialogHost() {
       {dialog?.type === "createSubscription" && <CreateSubscriptionDialog presetTopic={dialog.topic} />}
       {dialog?.type === "rule" && <RuleDialog topic={dialog.topic} sub={dialog.sub} edit={dialog.edit} />}
       {dialog?.type === "deadletter" && <DeadLetterDialog target={dialog.target} lockTokens={dialog.lockTokens} />}
+      {dialog?.type === "resend" && <ResendDialog target={dialog.target} sequenceNumbers={dialog.sequenceNumbers} />}
       {dialog?.type === "confirm" && (
         <ConfirmDialog
           title={dialog.title}

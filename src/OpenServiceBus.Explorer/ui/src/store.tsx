@@ -26,6 +26,7 @@ export type DialogState =
   | { type: "createSubscription"; topic?: string }
   | { type: "rule"; topic: string; sub: string; edit?: import("@/lib/api").RuleInfo }
   | { type: "deadletter"; target: string; lockTokens: string[] }
+  | { type: "resend"; target: string; sequenceNumbers: number[] }
   | { type: "confirm"; title: string; description: string; destructive?: boolean; action: () => Promise<void> | void }
   | null;
 

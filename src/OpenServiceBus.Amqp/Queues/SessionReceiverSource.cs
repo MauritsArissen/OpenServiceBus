@@ -224,9 +224,13 @@ public sealed class SessionReceiverSource : IMessageSource
         }
         finally
         {
+            // Echo a fresh copy of the receiver's outcome when settling - see the matching
+            // note in QueueReceiverSource: proton-j verifies the remote state matches what
+            // it sent, and its received state instances cannot be re-encoded.
             if (dispositionContext.DeliveryState is not TransactionalState)
             {
-                dispositionContext.Complete();
+                dispositionContext.Link.DisposeMessage(
+                    dispositionContext.Message, EchoOutcome(dispositionContext.DeliveryState), settled: true);
             }
         }
     }
@@ -293,12 +297,34 @@ public sealed class SessionReceiverSource : IMessageSource
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
+    private static DeliveryState EchoOutcome(DeliveryState received) => received switch
+    {
+        Rejected => new Rejected(),
+        Released => new Released(),
+        Modified m => new Modified { DeliveryFailed = m.DeliveryFailed, UndeliverableHere = m.UndeliverableHere },
+        _ => new Accepted(),
+    };
+
+    // See the matching note in QueueReceiverSource: .NET uses Symbol keys, proton-j strings,
+    // and the Fields indexer rejects non-Symbol keys - enumerate entries instead.
     private static (string? Reason, string? Description) ExtractDeadLetterInfo(Rejected rejected)
     {
         if (rejected.Error?.Info is null) return (null, null);
-        rejected.Error.Info.TryGetValue(DeadLetterReasonSymbol, out var reason);
-        rejected.Error.Info.TryGetValue(DeadLetterErrorDescriptionSymbol, out var description);
-        return (reason as string, description as string);
+        string? reason = null;
+        string? description = null;
+        foreach (KeyValuePair<object, object> entry in rejected.Error.Info)
+        {
+            switch (entry.Key?.ToString())
+            {
+                case "DeadLetterReason":
+                    reason = entry.Value as string;
+                    break;
+                case "DeadLetterErrorDescription":
+                    description = entry.Value as string;
+                    break;
+            }
+        }
+        return (reason, description);
     }
 
     private static void StampSystemProperties(Message amqp, LockedMessage locked)

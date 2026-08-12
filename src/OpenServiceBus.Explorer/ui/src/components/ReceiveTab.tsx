@@ -1,6 +1,6 @@
 import {
   ArchiveXIcon, CheckIcon, ChevronsRightIcon, ClockIcon, DownloadIcon, FileDownIcon, MoreVerticalIcon,
-  RotateCcwIcon, Trash2Icon, UndoIcon, XIcon,
+  RotateCcwIcon, SendIcon, Trash2Icon, UndoIcon, XIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -169,6 +169,11 @@ export function ReceiveTab({ sel, target, isDlq }: { sel: Selected; target: stri
     }
   };
 
+  const selSeqs = selectedItems
+    .map((v) => v.m.sequenceNumber)
+    .filter((s): s is number => s != null);
+  const bulkResend = () => store.setDialog({ type: "resend", target, sequenceNumbers: selSeqs });
+
   const bulkDeadletter = () => store.setDialog({ type: "deadletter", target, lockTokens: lockedTokens });
   const bulkDelete = () =>
     store.setDialog({
@@ -280,6 +285,9 @@ export function ReceiveTab({ sel, target, isDlq }: { sel: Selected; target: stri
                   <div className="hidden items-center gap-1.5 sm:flex">
                     {isDlq ? (
                       <>
+                        <Button variant="outline" size="sm" disabled={busy || selSeqs.length === 0} onClick={bulkResend}>
+                          <SendIcon /> Resend
+                        </Button>
                         <Button variant="outline" size="sm" disabled={actDisabled} onClick={() => void bulkAct("requeue", "Requeue")}>
                           <RotateCcwIcon /> Requeue
                         </Button>
@@ -313,6 +321,9 @@ export function ReceiveTab({ sel, target, isDlq }: { sel: Selected; target: stri
                     <DropdownMenuContent align="end">
                       {isDlq ? (
                         <>
+                          <DropdownMenuItem disabled={busy || selSeqs.length === 0} onClick={bulkResend}>
+                            <SendIcon /> Resend {selCount}
+                          </DropdownMenuItem>
                           <DropdownMenuItem disabled={actDisabled} onClick={() => void bulkAct("requeue", "Requeue")}>
                             <RotateCcwIcon /> Requeue {selCount}
                           </DropdownMenuItem>
@@ -345,7 +356,8 @@ export function ReceiveTab({ sel, target, isDlq }: { sel: Selected; target: stri
             </div>
             {hasPeekedSelected && selCount > 0 && (
               <p className="basis-full text-xs text-muted-foreground">
-                Peeked messages hold no lock - switch to Peek &amp; Lock to settle them. Export still works.
+                Peeked messages hold no lock - switch to Peek &amp; Lock to settle them.
+                {isDlq ? " Export and Resend still work." : " Export still works."}
               </p>
             )}
           </div>

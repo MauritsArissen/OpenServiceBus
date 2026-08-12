@@ -212,6 +212,14 @@ export const explorerApi = {
     description: string | null = null,
   ) =>
     api<BulkResult>("/api/bulk", post({ connectionString, queue, action, lockTokens, reason, description })),
+  resend: (
+    connectionString: string,
+    queue: string,
+    sequenceNumbers: number[],
+    destination: string | null,
+    keepMessageId: boolean,
+  ) =>
+    api<ResendResult>("/api/resend", post({ connectionString, queue, sequenceNumbers, destination, keepMessageId })),
 
   metrics: (entity: string, windowSeconds: number) =>
     api<{ entity: MetricSample[]; dlq: MetricSample[] }>(
@@ -220,6 +228,16 @@ export const explorerApi = {
 };
 
 export type MetricSample = { t: number; active: number; enqueued: number; completed: number };
+
+export type ResendItemResult = { sequenceNumber: number; ok: boolean; messageId: string | null; error: string | null };
+export type ResendResult = {
+  destination: string;
+  keepMessageId: boolean;
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: ResendItemResult[];
+};
 
 export type BulkAction = "complete" | "abandon" | "deadletter" | "defer" | "requeue";
 export type BulkItemResult = { lockToken: string; ok: boolean; lockLost: boolean; error: string | null };

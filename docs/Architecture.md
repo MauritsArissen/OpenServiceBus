@@ -80,6 +80,16 @@ $management       → ManagementRequestProcessor (renew, peek, schedule, session
 $cbs              → CbsRequestProcessor (token validation when SAS enabled)
 ```
 
+Two wire details worth knowing about dispositions, matching real Service Bus:
+
+- Settling a peek-lock disposition ECHOES the receiver's outcome (Rejected for
+  dead-letter, Modified for abandon/defer, Accepted for complete) instead of blanket
+  Accepted. The Java SDK (proton-j) verifies the echoed outcome type and fails every
+  `deadLetter()`/`abandon()`/`defer()` call otherwise; the other SDKs do not check.
+- The `DeadLetterReason` / `DeadLetterErrorDescription` entries on a dead-letter
+  disposition's error info arrive with Symbol keys from the .NET SDK but plain string
+  keys from proton-j. Both shapes are accepted, like the real service does.
+
 ## Storage swap
 
 The `IMessageStore` interface is the seam between the AMQP/management surface and the

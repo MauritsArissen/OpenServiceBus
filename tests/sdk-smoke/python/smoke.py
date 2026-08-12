@@ -3,7 +3,7 @@
 Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
-  -> purge (JSON management API) -> transfer dlq -> sql filter
+  -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.
@@ -299,6 +299,65 @@ def run() -> None:
             "" if filter_ok else f"rule {rule_status}, got {len(filtered)} msg(s), extra {len(extra)}",
         )
         http("DELETE", f"{base}/{filter_topic}?api-version=2021-05")
+
+        # 19. dlq resend - the peek-clone-send recipe the Explorer's Resend rides on
+        # (issue #28): dead-letter a message, peek it off the DLQ, send a cleaned copy
+        # with a fresh id, receive the copy, and verify the DLQ original stays untouched.
+        def prop_keys(msg) -> set:
+            return {
+                k.decode() if isinstance(k, (bytes, bytearray)) else str(k)
+                for k in (msg.application_properties or {})
+            }
+
+        resend_queue = f"smoke-resend-{stamp}"
+        http("PUT", f"{base}/{resend_queue}?api-version=2021-05", empty_queue_xml.encode())
+        resend_ok = False
+        resend_detail = "original not peekable from the DLQ"
+        with client.get_queue_sender(resend_queue) as resend_sender:
+            resend_sender.send_messages(ServiceBusMessage(
+                "resend me", message_id=f"resend-orig-{stamp}", application_properties={"attempt": 1}))
+            with client.get_queue_receiver(resend_queue, max_wait_time=10) as poison_receiver:
+                poison = poison_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+                if poison:
+                    poison_receiver.dead_letter_message(poison[0], reason="smoke-poison")
+            with client.get_queue_receiver(
+                resend_queue, sub_queue=ServiceBusSubQueue.DEAD_LETTER, max_wait_time=10
+            ) as resend_dlq:
+                dead = [
+                    m for m in resend_dlq.peek_messages(max_message_count=10, sequence_number=1)
+                    if m.message_id == f"resend-orig-{stamp}"
+                ]
+                if dead:
+                    props = {}
+                    for k, v in (dead[0].application_properties or {}).items():
+                        key = k.decode() if isinstance(k, (bytes, bytearray)) else str(k)
+                        if key in ("DeadLetterReason", "DeadLetterErrorDescription", "Diagnostic-Id"):
+                            continue
+                        props[key] = v
+                    resend_sender.send_messages(ServiceBusMessage(
+                        str(dead[0]), message_id=f"resend-copy-{stamp}", application_properties=props))
+                    with client.get_queue_receiver(resend_queue, max_wait_time=10) as reopened:
+                        redelivered = reopened.receive_messages(max_message_count=1, max_wait_time=10)
+                        if redelivered:
+                            reopened.complete_message(redelivered[0])
+                    still_dead = any(
+                        m.message_id == f"resend-orig-{stamp}"
+                        for m in resend_dlq.peek_messages(max_message_count=10, sequence_number=1)
+                    )
+                    resend_ok = (
+                        len(redelivered) == 1
+                        and redelivered[0].message_id == f"resend-copy-{stamp}"
+                        and str(redelivered[0]) == "resend me"
+                        and "DeadLetterReason" not in prop_keys(redelivered[0])
+                        and still_dead
+                    )
+                    resend_detail = "" if resend_ok else (
+                        "copy not received" if not redelivered
+                        else "DLQ original vanished" if not still_dead
+                        else "copy mismatch"
+                    )
+        check("dlq resend", resend_ok, resend_detail)
+        http("DELETE", f"{base}/{resend_queue}?api-version=2021-05")
 
 
 try:

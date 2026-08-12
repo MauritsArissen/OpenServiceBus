@@ -3,11 +3,12 @@
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
-//   -> purge (JSON management API) -> transfer dlq -> sql filter
+//   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
 import { ServiceBusClient } from "@azure/service-bus";
+import Long from "long";
 
 const conn =
   process.env.SMOKE_CONNECTION ??
@@ -268,6 +269,59 @@ const run = async () => {
     filterOk ? "" : `rule ${ruleResp.status}, got ${filtered.length} msg(s), extra ${extra.length}`,
   );
   await fetch(`${httpBase}/${filterTopic}?api-version=2021-05`, { method: "DELETE" });
+
+  // 19. dlq resend - the peek-clone-send recipe the Explorer's Resend rides on (issue
+  // #28): dead-letter a message, peek it off the DLQ, send a cleaned copy with a fresh
+  // id, receive the copy on the queue, and verify the DLQ original stays untouched.
+  const resendQueue = `smoke-resend-${stamp}`;
+  await atomPut(resendQueue,
+    '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  const resendSender = client.createSender(resendQueue);
+  await resendSender.sendMessages({
+    body: "resend me",
+    messageId: `resend-orig-${stamp}`,
+    applicationProperties: { attempt: 1 },
+  });
+  const resendReceiver = client.createReceiver(resendQueue);
+  const poison = await resendReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  if (poison.length === 1) {
+    await resendReceiver.deadLetterMessage(poison[0], { deadLetterReason: "smoke-poison" });
+  }
+  const resendDlq = client.createReceiver(resendQueue, { subQueueType: "deadLetter" });
+  const dead = (await resendDlq.peekMessages(10, { fromSequenceNumber: Long.fromNumber(1) })).find(
+    (m) => m.messageId === `resend-orig-${stamp}`,
+  );
+  let resendOk = false;
+  let resendDetail = "original not peekable from the DLQ";
+  if (dead) {
+    const props = { ...dead.applicationProperties };
+    delete props.DeadLetterReason;
+    delete props.DeadLetterErrorDescription;
+    delete props["Diagnostic-Id"];
+    await resendSender.sendMessages({
+      body: dead.body,
+      messageId: `resend-copy-${stamp}`,
+      applicationProperties: props,
+    });
+    const redelivered = await resendReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+    if (redelivered.length === 1) await resendReceiver.completeMessage(redelivered[0]);
+    const stillDead = (await resendDlq.peekMessages(10, { fromSequenceNumber: Long.fromNumber(1) })).some(
+      (m) => m.messageId === `resend-orig-${stamp}`,
+    );
+    resendOk =
+      redelivered.length === 1 &&
+      redelivered[0].messageId === `resend-copy-${stamp}` &&
+      redelivered[0].body === "resend me" &&
+      (redelivered[0].deliveryCount ?? 1) <= 1 &&
+      !("DeadLetterReason" in (redelivered[0].applicationProperties ?? {})) &&
+      stillDead;
+    resendDetail = redelivered.length === 0 ? "copy not received" : stillDead ? "" : "DLQ original vanished";
+  }
+  check("dlq resend", resendOk, resendOk ? "" : resendDetail);
+  await resendSender.close();
+  await resendReceiver.close();
+  await resendDlq.close();
+  await fetch(`${httpBase}/${resendQueue}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>

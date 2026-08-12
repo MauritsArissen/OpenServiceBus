@@ -7,6 +7,7 @@ import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
 import com.azure.messaging.servicebus.ServiceBusReceiverClient;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import com.azure.messaging.servicebus.ServiceBusSessionReceiverClient;
+import com.azure.messaging.servicebus.models.DeadLetterOptions;
 import com.azure.messaging.servicebus.models.SubQueue;
 
 import java.net.URI;
@@ -26,7 +27,7 @@ import java.util.regex.Pattern;
  * Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
- *   -> purge (JSON management API) -> transfer dlq -> sql filter
+ *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -432,6 +433,75 @@ public final class Smoke {
             http.send(
                 HttpRequest.newBuilder(URI.create(base + "/" + filterTopic + "?api-version=2021-05")).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString());
+
+            // 19. dlq resend - the peek-clone-send recipe the Explorer's Resend rides on
+            // (issue #28): dead-letter a message, peek it off the DLQ, send a cleaned copy
+            // with a fresh id, receive the copy, and verify the DLQ original stays untouched.
+            String resendQueue = "smoke-resend-" + stamp;
+            URI resendQueueUri = URI.create(base + "/" + resendQueue + "?api-version=2021-05");
+            http.send(
+                HttpRequest.newBuilder(resendQueueUri)
+                    .header("Content-Type", "application/atom+xml")
+                    .PUT(HttpRequest.BodyPublishers.ofString(emptyQueueXml)).build(),
+                HttpResponse.BodyHandlers.ofString());
+            try (ServiceBusSenderClient resendSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(resendQueue).buildClient();
+                 ServiceBusReceiverClient resendReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(resendQueue).disableAutoComplete().buildClient();
+                 ServiceBusReceiverClient resendDlq = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(resendQueue).subQueue(SubQueue.DEAD_LETTER_QUEUE)
+                    .disableAutoComplete().buildClient()) {
+                ServiceBusMessage poison = new ServiceBusMessage("resend me");
+                poison.setMessageId("resend-orig-" + stamp);
+                poison.getApplicationProperties().put("attempt", 1);
+                resendSender.sendMessage(poison);
+                for (ServiceBusReceivedMessage m : resendReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    resendReceiver.deadLetter(m, new DeadLetterOptions().setDeadLetterReason("smoke-poison"));
+                }
+                ServiceBusReceivedMessage dead = null;
+                for (ServiceBusReceivedMessage m : resendDlq.peekMessages(10, 1)) {
+                    if (("resend-orig-" + stamp).equals(m.getMessageId())) {
+                        dead = m;
+                    }
+                }
+                boolean resendOk = false;
+                String resendFail = "original not peekable from the DLQ";
+                if (dead != null) {
+                    ServiceBusMessage resendCopy = new ServiceBusMessage(dead.getBody());
+                    resendCopy.setMessageId("resend-copy-" + stamp);
+                    dead.getApplicationProperties().forEach((k, v) -> {
+                        if (!"DeadLetterReason".equals(k) && !"DeadLetterErrorDescription".equals(k)
+                                && !"Diagnostic-Id".equals(k)) {
+                            resendCopy.getApplicationProperties().put(k, v);
+                        }
+                    });
+                    resendSender.sendMessage(resendCopy);
+                    ServiceBusReceivedMessage redelivered = null;
+                    for (ServiceBusReceivedMessage m : resendReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                        redelivered = m;
+                        resendReceiver.complete(m);
+                    }
+                    boolean stillDead = false;
+                    for (ServiceBusReceivedMessage m : resendDlq.peekMessages(10, 1)) {
+                        if (("resend-orig-" + stamp).equals(m.getMessageId())) {
+                            stillDead = true;
+                        }
+                    }
+                    resendOk = redelivered != null
+                        && ("resend-copy-" + stamp).equals(redelivered.getMessageId())
+                        && "resend me".equals(redelivered.getBody().toString())
+                        && !redelivered.getApplicationProperties().containsKey("DeadLetterReason")
+                        && stillDead;
+                    resendFail = redelivered == null ? "copy not received"
+                        : stillDead ? "copy mismatch" : "DLQ original vanished";
+                }
+                results.add(resendOk ? "PASS dlq resend" : "FAIL dlq resend: " + resendFail);
+            }
+            http.send(
+                HttpRequest.newBuilder(resendQueueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);
         }

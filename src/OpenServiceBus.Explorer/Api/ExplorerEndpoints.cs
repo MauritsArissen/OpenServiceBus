@@ -347,6 +347,72 @@ public static class ExplorerEndpoints
             });
         });
 
+        // Resend (issue #28): duplicate dead-lettered messages back onto an entity as brand
+        // new sends. Peek-based, so it works on browsed messages without taking a lock and
+        // NEVER touches the originals - removing them from the DLQ stays an explicit user
+        // action. There is no SDK/service resubmit API; this is the same peek-clone-send
+        // recipe the Azure portal and the community Service Bus Explorer implement.
+        api.MapPost("/resend", async (ResendRequest req, SessionManager sessions, CancellationToken ct) =>
+        {
+            var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
+            if (req.SequenceNumbers is not { Count: > 0 })
+            {
+                return Results.BadRequest(new { error = "sequenceNumbers must contain at least one sequence number." });
+            }
+            if (req.SequenceNumbers.Count > MaxBulkTokens)
+            {
+                return Results.BadRequest(new { error = $"At most {MaxBulkTokens} sequence numbers per resend request." });
+            }
+            var destination = NonEmpty(req.Destination) ?? ComputeResendTarget(req.Queue);
+            if (destination is null)
+            {
+                return Results.BadRequest(new { error = $"Cannot derive a resend destination from '{req.Queue}' - pass one explicitly." });
+            }
+
+            var keepMessageId = req.KeepMessageId == true;
+            using var activity = ExplorerTelemetry.Source.StartActivity("explorer.resend");
+            activity?.SetTag("servicebus.source", req.Queue);
+            activity?.SetTag("servicebus.destination", destination);
+            activity?.SetTag("servicebus.message_count", req.SequenceNumbers.Count);
+            activity?.SetTag("servicebus.keep_message_id", keepMessageId);
+
+            var receiver = session.Receiver(req.Queue);
+            await using var sender = session.Sender(destination);
+            var results = new List<ResendItemResult>(req.SequenceNumbers.Count);
+            foreach (var seq in req.SequenceNumbers)
+            {
+                try
+                {
+                    var found = await receiver.PeekMessagesAsync(1, fromSequenceNumber: seq, ct);
+                    if (found.Count == 0 || found[0].SequenceNumber != seq)
+                    {
+                        results.Add(new ResendItemResult(seq, false, null,
+                            "Message not found in the dead-letter queue (already settled or purged)."));
+                        continue;
+                    }
+                    var copy = BuildResendCopy(found[0], keepMessageId);
+                    await sender.SendMessageAsync(copy, ct);
+                    results.Add(new ResendItemResult(seq, true, copy.MessageId, null));
+                }
+                catch (Exception ex)
+                {
+                    results.Add(new ResendItemResult(seq, false, null, ex.Message));
+                }
+            }
+
+            var succeeded = results.Count(r => r.Ok);
+            activity?.SetTag("servicebus.resend_succeeded", succeeded);
+            return Results.Ok(new
+            {
+                destination,
+                keepMessageId,
+                total = results.Count,
+                succeeded,
+                failed = results.Count - succeeded,
+                results,
+            });
+        });
+
         // --- Connectivity check ---
         api.MapPost("/ping", async (PingRequest req, SessionManager sessions, MetricsCollector metrics, IHttpClientFactory httpFactory, CancellationToken ct) =>
         {
@@ -469,14 +535,23 @@ public static class ExplorerEndpoints
     private static string Combine(string baseUrl, string suffix)
         => baseUrl.TrimEnd('/') + suffix;
 
-    // A requeue re-publishes a clean copy of a DLQ message: same identity and payload, but
-    // TimeToLive is skipped when the broker reported it as effectively infinite (forwarding
-    // TimeSpan.MaxValue to a sender raises) and broker-stamped DLQ markers are stripped.
-    private static ServiceBusMessage BuildRequeueCopy(ServiceBusReceivedMessage msg)
+    // Requeue keeps the original identity; resend mints a fresh MessageId unless the user
+    // explicitly opts to keep it (relevant on duplicate-detection entities, where a kept id
+    // inside the dedup window is silently dropped by the broker - documented behavior).
+    private static ServiceBusMessage BuildRequeueCopy(ServiceBusReceivedMessage msg) =>
+        BuildResendCopy(msg, keepMessageId: true);
+
+    // A resend/requeue copy duplicates the payload and user-facing metadata (body, content
+    // type, subject, correlation id, session id, partition key, To/ReplyTo, application
+    // properties) with fresh broker metadata. TimeToLive is skipped when the broker reported
+    // it as effectively infinite (forwarding TimeSpan.MaxValue to a sender raises) and
+    // broker-stamped DLQ markers are stripped; DeadLetterReason/Source/Description live in
+    // annotations the copy never carries.
+    public static ServiceBusMessage BuildResendCopy(ServiceBusReceivedMessage msg, bool keepMessageId)
     {
         var copy = new ServiceBusMessage(msg.Body)
         {
-            MessageId = msg.MessageId,
+            MessageId = keepMessageId ? msg.MessageId : Guid.NewGuid().ToString("N"),
         };
         if (!string.IsNullOrEmpty(msg.CorrelationId)) copy.CorrelationId = msg.CorrelationId;
         if (!string.IsNullOrEmpty(msg.Subject)) copy.Subject = msg.Subject;
@@ -502,6 +577,30 @@ public static class ExplorerEndpoints
         const string dlqSuffix = "/$DeadLetterQueue";
         if (!queue.EndsWith(dlqSuffix, StringComparison.OrdinalIgnoreCase)) return null;
         var stripped = queue[..^dlqSuffix.Length];
+        const string subSegment = "/Subscriptions/";
+        var idx = stripped.IndexOf(subSegment, StringComparison.OrdinalIgnoreCase);
+        return idx > 0 ? stripped[..idx] : stripped;
+    }
+
+    // Same derivation as requeue, but resend also covers transfer DLQs: messages that failed
+    // auto-forwarding default back onto their source entity.
+    public static string? ComputeResendTarget(string dlqAddress)
+    {
+        const string transferSuffix = "/$Transfer/$DeadLetterQueue";
+        const string dlqSuffix = "/$DeadLetterQueue";
+        string stripped;
+        if (dlqAddress.EndsWith(transferSuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            stripped = dlqAddress[..^transferSuffix.Length];
+        }
+        else if (dlqAddress.EndsWith(dlqSuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            stripped = dlqAddress[..^dlqSuffix.Length];
+        }
+        else
+        {
+            return null;
+        }
         const string subSegment = "/Subscriptions/";
         var idx = stripped.IndexOf(subSegment, StringComparison.OrdinalIgnoreCase);
         return idx > 0 ? stripped[..idx] : stripped;
@@ -584,6 +683,8 @@ public sealed record PeekRequest(string ConnectionString, string Queue, int? Max
 public sealed record DispositionRequest(string ConnectionString, string Queue, string LockToken);
 public sealed record BulkRequest(string ConnectionString, string Queue, string? Action, List<string>? LockTokens, string? Reason, string? Description);
 public sealed record BulkItemResult(string LockToken, bool Ok, bool LockLost, string? Error);
+public sealed record ResendRequest(string ConnectionString, string Queue, List<long>? SequenceNumbers, string? Destination, bool? KeepMessageId);
+public sealed record ResendItemResult(long SequenceNumber, bool Ok, string? MessageId, string? Error);
 public sealed record DeadLetterRequest(string ConnectionString, string Queue, string LockToken, string? Reason, string? Description);
 public sealed record PingRequest(string ConnectionString, string ManagementUrl);
 public sealed record PurgeRequest(string? ManagementUrl, string? Queue, string? Topic, string? Subscription, bool? DeadLetterOnly);

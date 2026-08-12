@@ -3,7 +3,7 @@
 // Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
-//   -> purge (JSON management API) -> transfer dlq -> sql filter
+//   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -220,6 +220,48 @@ try
     Check("sql filter", filterOk,
         filterOk ? "" : filtered is null ? "no message" : extra is null ? filtered.MessageId! : "non-matching message leaked");
     await admin.DeleteTopicAsync(filterTopic);
+
+    // 19. dlq resend - the peek-clone-send recipe the Explorer's Resend rides on (issue
+    // #28): dead-letter a message, peek it off the DLQ, send a cleaned copy with a fresh
+    // id, receive the copy on the queue, and verify the DLQ original stays untouched.
+    var resendQueue = $"smoke-resend-{stamp}";
+    await admin.CreateQueueAsync(resendQueue);
+    var resendSender = client.CreateSender(resendQueue);
+    var poison = new ServiceBusMessage("resend me") { MessageId = $"resend-orig-{stamp}" };
+    poison.ApplicationProperties["attempt"] = 1;
+    await resendSender.SendMessageAsync(poison);
+    var resendReceiver = client.CreateReceiver(resendQueue);
+    var poisonMsg = await resendReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    if (poisonMsg is not null) await resendReceiver.DeadLetterMessageAsync(poisonMsg, "smoke-poison");
+    var resendDlq = client.CreateReceiver(resendQueue, new ServiceBusReceiverOptions { SubQueue = SubQueue.DeadLetter });
+    var dead = (await resendDlq.PeekMessagesAsync(10, fromSequenceNumber: 1)).FirstOrDefault(m => m.MessageId == $"resend-orig-{stamp}");
+    var resendOk = false;
+    var resendDetail = "original not peekable from the DLQ";
+    if (dead is not null)
+    {
+        var resendCopy = new ServiceBusMessage(dead.Body) { MessageId = $"resend-copy-{stamp}" };
+        foreach (var kv in dead.ApplicationProperties)
+        {
+            if (kv.Key is "DeadLetterReason" or "DeadLetterErrorDescription" or "Diagnostic-Id") continue;
+            resendCopy.ApplicationProperties[kv.Key] = kv.Value;
+        }
+        await resendSender.SendMessageAsync(resendCopy);
+        var redelivered = await resendReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        if (redelivered is not null) await resendReceiver.CompleteMessageAsync(redelivered);
+        var stillDead = (await resendDlq.PeekMessagesAsync(10, fromSequenceNumber: 1)).Any(m => m.MessageId == $"resend-orig-{stamp}");
+        resendOk = redelivered is not null
+            && redelivered.MessageId == $"resend-copy-{stamp}"
+            && redelivered.Body.ToString() == "resend me"
+            && redelivered.DeliveryCount == 1
+            && !redelivered.ApplicationProperties.ContainsKey("DeadLetterReason")
+            && stillDead;
+        resendDetail = redelivered is null ? "copy not received" : stillDead ? "" : "DLQ original vanished";
+    }
+    Check("dlq resend", resendOk, resendOk ? "" : resendDetail);
+    await resendSender.CloseAsync();
+    await resendReceiver.CloseAsync();
+    await resendDlq.CloseAsync();
+    await admin.DeleteQueueAsync(resendQueue);
 }
 catch (Exception e)
 {

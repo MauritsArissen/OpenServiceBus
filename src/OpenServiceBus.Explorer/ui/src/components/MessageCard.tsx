@@ -1,5 +1,5 @@
 import {
-  ArchiveXIcon, CheckIcon, ClockIcon, MoreVerticalIcon, RotateCcwIcon, TimerIcon, Trash2Icon, UndoIcon,
+  ArchiveXIcon, CheckIcon, ClockIcon, MoreVerticalIcon, RotateCcwIcon, SendIcon, TimerIcon, Trash2Icon, UndoIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -75,6 +75,8 @@ export function MessageCard({
       await store.refresh();
     });
   const deadletter = () => store.setDialog({ type: "deadletter", target, lockTokens: [token] });
+  const resend = () =>
+    store.setDialog({ type: "resend", target, sequenceNumbers: [msg.sequenceNumber!] });
   const deleteDlq = () =>
     store.setDialog({
       type: "confirm",
@@ -110,7 +112,7 @@ export function MessageCard({
           </Badge>
         )}
         <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{preview}</span>
-        {locked && (
+        {(locked || (isDlq && msg.sequenceNumber != null)) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
               <Button variant="ghost" size="icon-sm">
@@ -120,13 +122,22 @@ export function MessageCard({
             <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
               {isDlq ? (
                 <>
-                  <DropdownMenuItem onClick={() => void requeue()}>
-                    <RotateCcwIcon /> Requeue
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onClick={deleteDlq}>
-                    <Trash2Icon /> Delete
-                  </DropdownMenuItem>
+                  {msg.sequenceNumber != null && (
+                    <DropdownMenuItem onClick={resend}>
+                      <SendIcon /> Resend
+                    </DropdownMenuItem>
+                  )}
+                  {locked && (
+                    <>
+                      <DropdownMenuItem onClick={() => void requeue()}>
+                        <RotateCcwIcon /> Requeue
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem variant="destructive" onClick={deleteDlq}>
+                        <Trash2Icon /> Delete
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </>
               ) : (
                 <>
