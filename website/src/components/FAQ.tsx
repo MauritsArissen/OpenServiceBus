@@ -26,10 +26,28 @@ const FAQS: QA[] = [
     q: "Which SDKs / languages does it support?",
     a: (
       <>
-        The .NET <code>Azure.Messaging.ServiceBus</code> SDK is verified end-to-end.
-        Because OpenServiceBus speaks real AMQP 1.0, the Java / Python / JS SDKs
-        should work too - they're just not part of CI yet. Cross-language coverage
-        is on the roadmap.
+        All four official Azure Service Bus SDKs: .NET{" "}
+        (<code>Azure.Messaging.ServiceBus</code>), Node.js{" "}
+        (<code>@azure/service-bus</code>), Java{" "}
+        (<code>azure-messaging-servicebus</code>) and Python{" "}
+        (<code>azure-servicebus</code>). Every pull request runs an identical
+        smoke sequence against the broker in all four stacks - send, peek,
+        settle, sessions, scheduling, entity CRUD, dead-lettering, SQL filters
+        and more - so cross-SDK behavior is verified continuously, not assumed.
+      </>
+    ),
+  },
+  {
+    q: "Does ServiceBusAdministrationClient work?",
+    a: (
+      <>
+        Yes - OpenServiceBus serves the real ATOM management API on the AMQP
+        port, so the .NET admin client creates, inspects, updates and deletes
+        queues, topics, subscriptions and rules at runtime, exactly like
+        against Azure. The Java / JS / Python admin clients currently hardcode
+        https and cannot target a plaintext local endpoint (an SDK limitation,
+        not a broker one) - from those stacks use plain HTTP against the same
+        ATOM API, <code>config.json</code>, or the Explorer.
       </>
     ),
   },
@@ -49,7 +67,14 @@ const FAQS: QA[] = [
   },
   {
     q: "What about sessions, TTL, scheduled messages, and DLQ?",
-    a: <>All four are supported. Same APIs you'd use against real Service Bus.</>,
+    a: (
+      <>
+        All four are supported, same APIs you'd use against real Service Bus -
+        plus duplicate detection, auto-forwarding, transfer dead-letter queues,
+        transactions, and full SQL filter grammar (arithmetic, LIKE...ESCAPE,
+        parameters, built-in functions).
+      </>
+    ),
   },
   {
     q: "Is the Explorer UI included?",
@@ -57,10 +82,12 @@ const FAQS: QA[] = [
       <>
         Yes. The Docker image bundles a web Explorer on port <code>5400</code> -
         browse queues and topics, send messages, receive with real peek-locks,
-        drain and requeue DLQs, edit subscription rules, and watch live
-        throughput metrics. It's a real Azure SDK client under the hood, so
-        every action you take in the UI exercises the same code path your
-        application would. Try it at{" "}
+        multi-select for bulk complete / abandon / defer / dead-letter, resend
+        or requeue dead-lettered messages, purge entities, export messages as
+        JSON, edit subscription rules with the full SQL syntax reference, and
+        watch live throughput metrics. It's a real Azure SDK client under the
+        hood, so every action you take in the UI exercises the same code path
+        your application would. Try it at{" "}
         <a
           href="https://demo.openservicebus.net"
           target="_blank"

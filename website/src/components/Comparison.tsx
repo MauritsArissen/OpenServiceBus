@@ -23,13 +23,19 @@ const ROWS: Row[] = [
   },
   { feature: "Queues", osb: true, ms: true },
   { feature: "Topics & Subscriptions", osb: true, ms: true },
-  { feature: "SQL filters", osb: "partial", ms: true },
+  { feature: "SQL filters (full grammar incl. functions, LIKE, parameters)", osb: true, ms: true },
   { feature: "Sessions", osb: true, ms: true },
   { feature: "Duplicate detection", osb: true, ms: true },
   { feature: "Auto-forwarding", osb: true, ms: true },
   { feature: "Transactions", osb: "partial", ms: true },
   { feature: "SAS signature verification", osb: "partial", ms: true },
   { feature: "AMQP-over-WebSockets", osb: true, ms: true },
+  {
+    feature: "Runtime entity CRUD (ServiceBusAdministrationClient)",
+    osb: true,
+    ms: false,
+  },
+  { feature: "Message purge (REST API + Explorer)", osb: true, ms: false },
   { feature: "OpenTelemetry tracing & metrics", osb: true, ms: false },
 ];
 
@@ -46,7 +52,8 @@ export default function Comparison() {
           overkill if you just want to spin up a broker in a unit-test fixture.
           OpenServiceBus is a single Alpine binary you can embed as a NuGet
           package or run via one Docker command. MIT-licensed. Talks real AMQP
-          1.0 so the Azure SDK works unchanged.
+          1.0, so the official Azure SDKs for .NET, Node.js, Java and Python
+          work unchanged - all four run against every change in CI.
         </p>
       </div>
 
