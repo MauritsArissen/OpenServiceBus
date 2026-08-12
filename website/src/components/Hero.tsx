@@ -12,8 +12,10 @@ export default function Hero() {
           <span className="bg-gradient-to-r from-violet-400 to-fuchsia-400 bg-clip-text text-transparent">ServiceBus</span>
         </h1>
         <p className="mt-5 max-w-2xl text-lg sm:text-xl text-neutral-300 leading-relaxed">
-          A lightweight, open-source Azure Service Bus emulator. Drop it into your unit tests as a NuGet
-          package or spin it up with a single Docker command. The Azure SDK talks to it unchanged.
+          A lightweight, open-source Azure Service Bus emulator for your tests and your local dev loop.
+          Drop it into unit tests as a NuGet package, or spin it up with a single Docker command and run
+          your application against a local service bus - Explorer UI included. The Azure SDK talks to it
+          unchanged.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
           <a
