@@ -130,7 +130,11 @@ public sealed class SessionReceiverSource : IMessageSource
 
                 if (locked is null && !cts.IsCancellationRequested)
                 {
-                    _logger.LogDebug("Session lock lost for '{Session}' on '{Entity}'; ending receiver pump.", SessionId, _entityName);
+                    // The session lock was lost (expired or taken over) - tell the client with a
+                    // proper detach instead of a silent pump stop, so the SDK's session receiver
+                    // surfaces SessionLockLost rather than an inexplicable receive timeout.
+                    _logger.LogDebug("Session lock lost for '{Session}' on '{Entity}'; detaching receiver.", SessionId, _entityName);
+                    CloseSessionLockLost(link);
                     return null!;
                 }
             }
@@ -179,6 +183,7 @@ public sealed class SessionReceiverSource : IMessageSource
             return;
         }
 
+        DeliveryState? failureOutcome = null;
         try
         {
             // Transactional disposition - buffer the store op under the txn.
@@ -204,32 +209,38 @@ public sealed class SessionReceiverSource : IMessageSource
                 return;
             }
 
+            bool settled;
             switch (dispositionContext.DeliveryState)
             {
                 case Accepted:
-                    _store.TryCompleteAsync(_entityName, lockToken).GetAwaiter().GetResult();
+                    settled = _store.TryCompleteAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     break;
                 case Modified modified when modified.UndeliverableHere:
                     ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).GetAwaiter().GetResult();
-                    _store.TryDeferAsync(_entityName, lockToken).GetAwaiter().GetResult();
+                    settled = _store.TryDeferAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     break;
                 case Modified modified:
                     ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).GetAwaiter().GetResult();
-                    _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
+                    settled = _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     break;
                 case Released:
-                    _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
+                    settled = _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     break;
                 case Rejected rejected:
                     var (reason, description, dlqProps) = PropertiesToModifyCodec.FromRejected(rejected);
-                    DeadLetterAsync(lockToken, reason, description, dlqProps, inFlightDelivery: true).GetAwaiter().GetResult();
+                    settled = DeadLetterAsync(lockToken, reason, description, dlqProps, inFlightDelivery: true).GetAwaiter().GetResult();
                     break;
                 default:
                     _logger.LogWarning(
                         "Unexpected delivery state {State} for lock {Lock} on session {Session}",
                         dispositionContext.DeliveryState?.GetType().Name ?? "<null>", lockToken, SessionId);
-                    _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
+                    settled = _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     break;
+            }
+
+            if (!settled)
+            {
+                failureOutcome = LockLostFailureOutcome();
             }
         }
         catch (InvalidOperationException ex)
@@ -240,47 +251,68 @@ public sealed class SessionReceiverSource : IMessageSource
         {
             // Echo a fresh copy of the receiver's outcome when settling - see the matching
             // note in QueueReceiverSource: proton-j verifies the remote state matches what
-            // it sent, and its received state instances cannot be re-encoded.
+            // it sent, and its received state instances cannot be re-encoded. A refused
+            // settle is Rejected with message-lock-lost, or session-lock-lost when the
+            // whole session lock is gone rather than just the message lock.
             if (dispositionContext.DeliveryState is not TransactionalState)
             {
                 dispositionContext.Link.DisposeMessage(
-                    dispositionContext.Message, EchoOutcome(dispositionContext.DeliveryState), settled: true);
+                    dispositionContext.Message,
+                    failureOutcome ?? EchoOutcome(dispositionContext.DeliveryState),
+                    settled: true);
             }
         }
     }
 
+    // The message lock and the session lock fail independently: settling after only the
+    // message lock expired is MessageLockLost (the session is still ours), while settling
+    // after the session lock was lost/taken over is SessionLockLost - matching Azure.
+    private DeliveryState LockLostFailureOutcome() =>
+        _store.IsSessionLockHeldAsync(_entityName, SessionId, LinkName).GetAwaiter().GetResult()
+            ? LockLostOutcome.Message(_entityName)
+            : LockLostOutcome.Session(SessionId);
+
     private async Task InvokeDispositionAsync(Guid lockToken, Outcome? outcome)
     {
+        bool settled;
         try
         {
             switch (outcome)
             {
                 case Accepted:
-                    await _store.TryCompleteAsync(_entityName, lockToken).ConfigureAwait(false);
+                    settled = await _store.TryCompleteAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
                 case Modified modified when modified.UndeliverableHere:
                     await ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).ConfigureAwait(false);
-                    await _store.TryDeferAsync(_entityName, lockToken).ConfigureAwait(false);
+                    settled = await _store.TryDeferAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
                 case Modified modified:
                     await ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).ConfigureAwait(false);
-                    await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
+                    settled = await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
                 case Released:
-                    await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
+                    settled = await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
                 case Rejected rejected:
                     var (reason, description, dlqProps) = PropertiesToModifyCodec.FromRejected(rejected);
-                    await DeadLetterAsync(lockToken, reason, description, dlqProps, inFlightDelivery: true).ConfigureAwait(false);
+                    settled = await DeadLetterAsync(lockToken, reason, description, dlqProps, inFlightDelivery: true).ConfigureAwait(false);
                     break;
                 default:
-                    await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
+                    settled = await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
             }
         }
         catch (InvalidOperationException ex)
         {
             _logger.LogDebug(ex, "Ignored transactional disposition for lock {Lock} on deleted entity {Entity}", lockToken, _entityName);
+            return;
+        }
+
+        // See the matching note in QueueReceiverSource: fail the discharge on a lost lock.
+        if (!settled)
+        {
+            throw new LockLostException(
+                $"The lock for token {lockToken} on session '{SessionId}' of '{_entityName}' was lost before the transaction committed.");
         }
     }
 
@@ -305,7 +337,7 @@ public sealed class SessionReceiverSource : IMessageSource
         await _store.TryRemoveLockedAsync(_entityName, lockToken, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task DeadLetterAsync(
+    private async Task<bool> DeadLetterAsync(
         Guid lockToken,
         string? reason,
         string? description,
@@ -315,11 +347,10 @@ public sealed class SessionReceiverSource : IMessageSource
     {
         if (_isDlq)
         {
-            await _store.TryAbandonAsync(_entityName, lockToken, cancellationToken).ConfigureAwait(false);
-            return;
+            return await _store.TryAbandonAsync(_entityName, lockToken, cancellationToken).ConfigureAwait(false);
         }
         var removed = await _store.TryRemoveLockedAsync(_entityName, lockToken, cancellationToken).ConfigureAwait(false);
-        if (removed is null) return;
+        if (removed is null) return false;
         var dlqBytes = DeadLetterEncoder.AppendDeadLetterHeaders(removed.EncodedMessage, _entityName, reason, description, propertiesToModify);
         // Honor ForwardDeadLetteredMessagesTo, falling back to the local DLQ.
         var dlqTarget = string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo)
@@ -330,6 +361,24 @@ public sealed class SessionReceiverSource : IMessageSource
             deliveryCount: removed.DeliveryCount + (inFlightDelivery ? 1 : 0),
             forwardSource: string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo) ? null : _entityName,
             cancellationToken: cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    private void CloseSessionLockLost(ListenerLink link)
+    {
+        if (link.IsClosed) return;
+        try
+        {
+            link.Close(TimeSpan.Zero, new Error(new Symbol(Routing.ServiceBusErrors.SessionLockLost))
+            {
+                Info = new Fields(),
+                Description = $"The session lock for session '{SessionId}' on '{_entityName}' was lost. Accept the session again to continue.",
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to detach session receiver for '{Session}' on '{Entity}'", SessionId, _entityName);
+        }
     }
 
     private static DeliveryState EchoOutcome(DeliveryState received) => received switch

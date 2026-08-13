@@ -28,8 +28,9 @@ management API (and the Explorer and Testing host), not on the ATOM plane that
   empty entity
 - Held session locks: a `ServiceBusSessionReceiver` keeps its exclusivity and receives
   the next message sent to its session
-- In-flight settlements: completing/abandoning a message that was purged mid-flight is a
-  quiet no-op, mirroring the broker's lock-lost behavior
+- In-flight settlements: completing/abandoning a message that was purged mid-flight fails
+  with `MessageLockLost`, mirroring the broker's lock-lost behavior - the lock's message
+  is gone, exactly as if the lock had expired
 
 ## HTTP API (JSON management port, default 5300)
 

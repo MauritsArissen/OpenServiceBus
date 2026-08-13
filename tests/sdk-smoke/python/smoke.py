@@ -4,7 +4,7 @@ Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
-  -> queue dedup -> topic dedup -> batch dedup
+  -> queue dedup -> topic dedup -> batch dedup -> lock lost
   (-> abandon props runs in the other three smokes; azure-servicebus for Python does not
    expose propertiesToModify on its settlement methods, so there is nothing to exercise)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
@@ -423,6 +423,37 @@ def run() -> None:
             batch_seen = drain(batch_receiver)
         check("batch dedup", batch_seen == 2, "" if batch_seen == 2 else f"got {batch_seen} message(s)")
         http("DELETE", f"{base}/{dedup_queue}?api-version=2021-05")
+
+        # 24. lock lost - settling after the lock deadline fails with MessageLockLostError
+        # instead of silently succeeding, and the message redelivers (issue #52). Note the
+        # Python SDK also pre-checks the deadline client-side; the redelivery assertion is
+        # what proves the broker released the expired lock.
+        ll_queue = f"smoke-locklost-{stamp}"
+        http("PUT", f"{base}/{ll_queue}?api-version=2021-05", atom_entry(
+            '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
+            "<LockDuration>PT5S</LockDuration></QueueDescription>"))
+        with client.get_queue_sender(ll_queue) as ll_sender:
+            ll_sender.send_messages(ServiceBusMessage("expire me", message_id=f"ll-{stamp}"))
+        ll_ok = False
+        ll_detail = "no message"
+        with client.get_queue_receiver(ll_queue, max_wait_time=10) as ll_receiver:
+            ll_got = ll_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+            if ll_got:
+                time.sleep(7)
+                try:
+                    ll_receiver.complete_message(ll_got[0])
+                    ll_detail = "complete unexpectedly succeeded"
+                except Exception as e:  # noqa: BLE001 - asserting on the exception type
+                    ll_ok = type(e).__name__ == "MessageLockLostError"
+                    ll_detail = "" if ll_ok else type(e).__name__
+                ll_redelivered = ll_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+                if ll_redelivered:
+                    ll_receiver.complete_message(ll_redelivered[0])
+                if ll_ok and not ll_redelivered:
+                    ll_ok = False
+                    ll_detail = "no redelivery"
+        check("lock lost", ll_ok, ll_detail)
+        http("DELETE", f"{base}/{ll_queue}?api-version=2021-05")
 
 
 try:

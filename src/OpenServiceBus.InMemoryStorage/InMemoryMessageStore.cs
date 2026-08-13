@@ -342,13 +342,47 @@ public sealed class InMemoryMessageStore : IMessageStore
         return await TryDequeueAsync(queueName, lockDuration, associatedLinkName, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Claim a lock entry for settling, refusing expired locks: real Service Bus fails the
+    /// settle at the lock deadline, not at the next sweeper pass. An expired entry is
+    /// reclaimed on the spot (same transition the sweeper applies), so the message is
+    /// available for redelivery immediately after the refused settle.
+    /// </summary>
+    private bool TryTakeLiveLock(QueueState state, Guid lockToken, out LockEntry entry)
+    {
+        lock (state.Sync)
+        {
+            if (!state.Locks.TryGetValue(lockToken, out entry!)) return false;
+            if (entry.LockedUntil <= _timeProvider.GetUtcNow())
+            {
+                if (state.Locks.TryRemove(lockToken, out _))
+                {
+                    if (entry.WasDeferred)
+                    {
+                        if (state.Messages.TryGetValue(entry.SequenceNumber, out var msg))
+                        {
+                            state.Messages[entry.SequenceNumber] = msg with { IsDeferred = true };
+                        }
+                    }
+                    else
+                    {
+                        ReturnToAvailableWithIncrementedDeliveryCount(state, entry.SequenceNumber, entry.SessionId);
+                    }
+                }
+                return false;
+            }
+            state.Locks.TryRemove(lockToken, out _);
+            return true;
+        }
+    }
+
     public Task<bool> TryCompleteAsync(
         string queueName,
         Guid lockToken,
         CancellationToken cancellationToken = default)
     {
         var state = GetQueue(queueName);
-        if (!state.Locks.TryRemove(lockToken, out var entry))
+        if (!TryTakeLiveLock(state, lockToken, out var entry))
         {
             return Task.FromResult(false);
         }
@@ -363,7 +397,7 @@ public sealed class InMemoryMessageStore : IMessageStore
         CancellationToken cancellationToken = default)
     {
         var state = GetQueue(queueName);
-        if (!state.Locks.TryRemove(lockToken, out var entry))
+        if (!TryTakeLiveLock(state, lockToken, out var entry))
         {
             return Task.FromResult(false);
         }
@@ -448,7 +482,10 @@ public sealed class InMemoryMessageStore : IMessageStore
         // sweeper is concurrently revoking, and the sweeper must not revoke one just renewed.
         lock (state.Sync)
         {
-            if (!state.Locks.TryGetValue(lockToken, out var entry))
+            // An expired lock cannot be revived by a late renew - the deadline passing IS the
+            // loss, whether or not the sweeper has reclaimed the entry yet.
+            if (!state.Locks.TryGetValue(lockToken, out var entry)
+                || entry.LockedUntil <= _timeProvider.GetUtcNow())
             {
                 return Task.FromResult<DateTimeOffset?>(null);
             }
@@ -475,7 +512,7 @@ public sealed class InMemoryMessageStore : IMessageStore
         CancellationToken cancellationToken = default)
     {
         var state = GetQueue(queueName);
-        if (!state.Locks.TryRemove(lockToken, out var entry))
+        if (!TryTakeLiveLock(state, lockToken, out var entry))
         {
             return Task.FromResult<StoredMessage?>(null);
         }
@@ -489,6 +526,7 @@ public sealed class InMemoryMessageStore : IMessageStore
         lock (state.Sync)
         {
             if (state.Locks.TryGetValue(lockToken, out var entry)
+                && entry.LockedUntil > _timeProvider.GetUtcNow()
                 && state.Messages.TryGetValue(entry.SequenceNumber, out var msg))
             {
                 return Task.FromResult<StoredMessage?>(msg);
@@ -503,6 +541,7 @@ public sealed class InMemoryMessageStore : IMessageStore
         lock (state.Sync)
         {
             if (!state.Locks.TryGetValue(lockToken, out var entry)
+                || entry.LockedUntil <= _timeProvider.GetUtcNow()
                 || !state.Messages.TryGetValue(entry.SequenceNumber, out var msg))
             {
                 return Task.FromResult(false);
@@ -518,7 +557,7 @@ public sealed class InMemoryMessageStore : IMessageStore
         CancellationToken cancellationToken = default)
     {
         var state = GetQueue(queueName);
-        if (!state.Locks.TryRemove(lockToken, out var entry))
+        if (!TryTakeLiveLock(state, lockToken, out var entry))
         {
             return Task.FromResult(false);
         }
@@ -721,7 +760,12 @@ public sealed class InMemoryMessageStore : IMessageStore
 
         lock (session)
         {
-            if (session.Lock is null) return Task.FromResult<DateTimeOffset?>(null);
+            // An expired session lock cannot be revived by a late renew - the deadline
+            // passing IS the loss, same as message locks.
+            if (session.Lock is null || session.Lock.LockedUntil <= _timeProvider.GetUtcNow())
+            {
+                return Task.FromResult<DateTimeOffset?>(null);
+            }
             if (requestingLinkName is not null
                 && session.Lock.LinkName is not null
                 && !string.Equals(session.Lock.LinkName, requestingLinkName, StringComparison.Ordinal))
@@ -781,6 +825,16 @@ public sealed class InMemoryMessageStore : IMessageStore
             .Where(kv => kv.Value.Available.Reader.Count > 0 || kv.Value.State is not null)
             .Select(kv => kv.Key)
             .ToArray();
+    }
+
+    public Task<bool> IsSessionLockHeldAsync(string queueName, string sessionId, string? linkName = null, CancellationToken cancellationToken = default)
+    {
+        if (!_queues.TryGetValue(queueName, out var state)
+            || !state.Sessions.TryGetValue(sessionId, out var session))
+        {
+            return Task.FromResult(false);
+        }
+        return Task.FromResult(IsSessionLockHeldBy(session, linkName));
     }
 
     private QueueState GetQueue(string queueName)

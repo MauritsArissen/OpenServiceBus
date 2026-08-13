@@ -4,7 +4,7 @@
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
-//   -> queue dedup -> topic dedup -> batch dedup -> abandon props
+//   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -364,6 +364,47 @@ try
     await ptmSender.CloseAsync();
     await ptmReceiver.CloseAsync();
     await admin.DeleteQueueAsync(ptmQueue);
+
+    // 24. lock lost - settling after the lock deadline fails with MessageLockLost instead
+    // of silently succeeding, and the message redelivers (issue #52). Short lock so the
+    // smoke stays fast.
+    var llQueue = $"smoke-locklost-{stamp}";
+    await admin.CreateQueueAsync(new CreateQueueOptions(llQueue) { LockDuration = TimeSpan.FromSeconds(5) });
+    var llSender = client.CreateSender(llQueue);
+    await llSender.SendMessageAsync(new ServiceBusMessage("expire me") { MessageId = $"ll-{stamp}" });
+    await llSender.CloseAsync();
+    var llReceiver = client.CreateReceiver(llQueue);
+    var llMsg = await llReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    var llOk = false;
+    var llDetail = "no message";
+    if (llMsg is not null)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(7));
+        try
+        {
+            await llReceiver.CompleteMessageAsync(llMsg);
+            llDetail = "complete unexpectedly succeeded";
+        }
+        catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.MessageLockLost)
+        {
+            llOk = true;
+            llDetail = "";
+        }
+        catch (Exception ex)
+        {
+            llDetail = ex.GetType().Name + ": " + ex.Message;
+        }
+        var llRedelivered = await llReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        if (llRedelivered is not null) await llReceiver.CompleteMessageAsync(llRedelivered);
+        if (llOk && llRedelivered is null)
+        {
+            llOk = false;
+            llDetail = "no redelivery";
+        }
+    }
+    Check("lock lost", llOk, llDetail);
+    await llReceiver.CloseAsync();
+    await admin.DeleteQueueAsync(llQueue);
 }
 catch (Exception e)
 {

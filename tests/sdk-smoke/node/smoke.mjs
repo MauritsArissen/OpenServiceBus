@@ -4,7 +4,7 @@
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
-//   -> queue dedup -> topic dedup -> batch dedup -> abandon props
+//   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -425,6 +425,41 @@ const run = async () => {
   await ptmSender.close();
   await ptmReceiver.close();
   await fetch(`${httpBase}/${ptmQueue}?api-version=2021-05`, { method: "DELETE" });
+
+  // 24. lock lost - settling after the lock deadline fails with MessageLockLost instead
+  // of silently succeeding, and the message redelivers (issue #52).
+  const llQueue = `smoke-locklost-${stamp}`;
+  await atomPut(llQueue,
+    '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
+    "<LockDuration>PT5S</LockDuration></QueueDescription>");
+  const llSender = client.createSender(llQueue);
+  await llSender.sendMessages({ body: "expire me", messageId: `ll-${stamp}` });
+  // The JS receiver auto-renews message locks for up to 5 minutes by default, which
+  // would keep the lock alive through the sleep - disable it so expiry actually happens.
+  const llReceiver = client.createReceiver(llQueue, { maxAutoLockRenewalDurationInMs: 0 });
+  const [llMsg] = await llReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  let llOk = false;
+  let llDetail = "no message";
+  if (llMsg) {
+    await new Promise((resolve) => setTimeout(resolve, 7000));
+    try {
+      await llReceiver.completeMessage(llMsg);
+      llDetail = "complete unexpectedly succeeded";
+    } catch (e) {
+      llOk = e?.code === "MessageLockLost";
+      llDetail = llOk ? "" : `${e?.code ?? e?.name}: ${e?.message}`;
+    }
+    const [llRedelivered] = await llReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+    if (llRedelivered) await llReceiver.completeMessage(llRedelivered);
+    if (llOk && !llRedelivered) {
+      llOk = false;
+      llDetail = "no redelivery";
+    }
+  }
+  check("lock lost", llOk, llDetail);
+  await llSender.close();
+  await llReceiver.close();
+  await fetch(`${httpBase}/${llQueue}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>

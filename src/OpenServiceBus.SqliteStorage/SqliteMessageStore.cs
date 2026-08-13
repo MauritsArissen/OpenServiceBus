@@ -781,9 +781,10 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                        m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id
                 FROM locks l
                 JOIN messages m ON m.queue_name = l.queue_name AND m.sequence_number = l.sequence_number
-                WHERE l.lock_token = $t
+                WHERE l.lock_token = $t AND l.locked_until > $now
                 """;
             cmd.Parameters.AddWithValue("$t", lockToken.ToString("D"));
+            cmd.Parameters.AddWithValue("$now", ToUnixMs(_timeProvider.GetUtcNow()));
             using var rdr = cmd.ExecuteReader();
             if (!rdr.Read()) return null;
             return ReadStoredMessage(rdr, sequenceColIndex: 0);
@@ -1247,9 +1248,15 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             using (var sel = _connection.CreateCommand())
             {
                 sel.Transaction = tx;
-                sel.CommandText = "SELECT link_name FROM session_locks WHERE queue_name = $q AND session_id = $sid";
+                // An expired session lock cannot be revived by a late renew - same deadline
+                // semantics as message locks.
+                sel.CommandText = """
+                    SELECT link_name FROM session_locks
+                    WHERE queue_name = $q AND session_id = $sid AND locked_until > $now
+                    """;
                 sel.Parameters.AddWithValue("$q", queueName);
                 sel.Parameters.AddWithValue("$sid", sessionId);
+                sel.Parameters.AddWithValue("$now", ToUnixMs(_timeProvider.GetUtcNow()));
                 using var rdr = sel.ExecuteReader();
                 if (!rdr.Read()) { tx.Commit(); return null; }
                 link = rdr.IsDBNull(0) ? null : rdr.GetString(0);
@@ -1357,6 +1364,27 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    public async Task<bool> IsSessionLockHeldAsync(string queueName, string sessionId, string? linkName = null, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT link_name FROM session_locks
+                WHERE queue_name = $q AND session_id = $sid AND locked_until > $now
+                """;
+            cmd.Parameters.AddWithValue("$q", queueName);
+            cmd.Parameters.AddWithValue("$sid", sessionId);
+            cmd.Parameters.AddWithValue("$now", ToUnixMs(_timeProvider.GetUtcNow()));
+            using var rdr = cmd.ExecuteReader();
+            if (!rdr.Read()) return false;
+            var holder = rdr.IsDBNull(0) ? null : rdr.GetString(0);
+            return holder is null || linkName is null || string.Equals(holder, linkName, StringComparison.Ordinal);
+        }
+        finally { _gate.Release(); }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     private Channel<bool> GetNotifyChannel(string queueName) =>
@@ -1402,9 +1430,12 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         cmd.Transaction = tx;
         cmd.CommandText = """
             SELECT queue_name, sequence_number, locked_until, associated_link, was_deferred, session_id
-            FROM locks WHERE lock_token = $tok
+            FROM locks WHERE lock_token = $tok AND locked_until > $now
             """;
         cmd.Parameters.AddWithValue("$tok", lockToken.ToString("D"));
+        // An expired lock is already lost even before the sweeper reclaims the row - real
+        // Service Bus fails settles and renews at the deadline, not at the next sweep.
+        cmd.Parameters.AddWithValue("$now", ToUnixMs(_timeProvider.GetUtcNow()));
         using var rdr = cmd.ExecuteReader();
         if (!rdr.Read()) return null;
         return new LockEntryRow(

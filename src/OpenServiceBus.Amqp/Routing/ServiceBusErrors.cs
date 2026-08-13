@@ -11,4 +11,10 @@ public static class ServiceBusErrors
 
     /// <summary>Maps to <c>ServiceBusFailureReason.QuotaExceeded</c> in the SDKs.</summary>
     public const string QuotaExceeded = "amqp:resource-limit-exceeded";
+
+    /// <summary>Maps to <c>ServiceBusFailureReason.MessageLockLost</c> in the SDKs.</summary>
+    public const string MessageLockLost = "com.microsoft:message-lock-lost";
+
+    /// <summary>Maps to <c>ServiceBusFailureReason.SessionLockLost</c> in the SDKs.</summary>
+    public const string SessionLockLost = "com.microsoft:session-lock-lost";
 }

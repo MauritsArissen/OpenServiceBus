@@ -216,8 +216,11 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
                 .GetAwaiter().GetResult();
             if (newUntil is null)
             {
-                // Service Bus surfaces "lock lost" as 410 Gone - for unknown lock OR cross-link renew.
-                return BuildResponse(request, 410, $"Gone: lock token {lockTokens[i]} is unknown, expired, or held by a different link");
+                // Service Bus surfaces "lock lost" as 410 Gone - for unknown lock OR cross-link
+                // renew - with the condition symbol the SDKs map to MessageLockLost.
+                return BuildResponse(request, 410,
+                    $"Gone: lock token {lockTokens[i]} is unknown, expired, or held by a different link",
+                    Routing.ServiceBusErrors.MessageLockLost);
             }
             expirations[i] = newUntil.Value.UtcDateTime;
         }
@@ -460,24 +463,34 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
 
         foreach (var token in lockTokens)
         {
+            bool settled;
             switch (status)
             {
                 case DispositionCompleted:
-                    _store.TryCompleteAsync(_entityName, token).GetAwaiter().GetResult();
+                    settled = _store.TryCompleteAsync(_entityName, token).GetAwaiter().GetResult();
                     break;
                 case DispositionAbandoned:
                     ApplyPropertiesToModifyAsync(token, propertiesToModify).GetAwaiter().GetResult();
-                    _store.TryAbandonAsync(_entityName, token).GetAwaiter().GetResult();
+                    settled = _store.TryAbandonAsync(_entityName, token).GetAwaiter().GetResult();
                     break;
                 case DispositionDeferred:
                     ApplyPropertiesToModifyAsync(token, propertiesToModify).GetAwaiter().GetResult();
-                    _store.TryDeferAsync(_entityName, token).GetAwaiter().GetResult();
+                    settled = _store.TryDeferAsync(_entityName, token).GetAwaiter().GetResult();
                     break;
                 case DispositionSuspended:
-                    DeadLetterViaManagementAsync(token, reason, description, propertiesToModify).GetAwaiter().GetResult();
+                    settled = DeadLetterViaManagementAsync(token, reason, description, propertiesToModify).GetAwaiter().GetResult();
                     break;
                 default:
                     return BuildResponse(request, 400, $"BadRequest: unknown disposition-status '{status}'");
+            }
+
+            // Same 410 + condition shape as renew-lock: the SDKs map it to MessageLockLost.
+            // Real Service Bus fails the whole batch on the first bad token too.
+            if (!settled)
+            {
+                return BuildResponse(request, 410,
+                    $"Gone: lock token {token} is unknown, expired, or the message was removed",
+                    Routing.ServiceBusErrors.MessageLockLost);
             }
         }
 
@@ -498,16 +511,15 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
     /// is no longer in scope - e.g. for a message retrieved via receive-by-sequence-number).
     /// Mirrors <c>QueueReceiverSource.DeadLetterAsync</c> at this layer.
     /// </summary>
-    private async Task DeadLetterViaManagementAsync(Guid lockToken, string? reason, string? description, IReadOnlyDictionary<string, object?>? propertiesToModify = null)
+    private async Task<bool> DeadLetterViaManagementAsync(Guid lockToken, string? reason, string? description, IReadOnlyDictionary<string, object?>? propertiesToModify = null)
     {
         if (EntityNames.IsDeadLetterQueue(_entityName))
         {
-            await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
-            return;
+            return await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
         }
 
         var removed = await _store.TryRemoveLockedAsync(_entityName, lockToken).ConfigureAwait(false);
-        if (removed is null) return;
+        if (removed is null) return false;
 
         var dlqBytes = DeadLettering.DeadLetterEncoder.AppendDeadLetterHeaders(removed.EncodedMessage, _entityName, reason, description, propertiesToModify);
         // Honor ForwardDeadLetteredMessagesTo when set, fallback to local DLQ.
@@ -518,6 +530,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         // (receive-by-sequence / deferred), so that delivery counts toward the history.
         await _router.RouteAsync(dlqTarget, dlqBytes, deliveryCount: removed.DeliveryCount + 1,
             forwardSource: string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo) ? null : _entityName).ConfigureAwait(false);
+        return true;
     }
 
     private Message HandleAddRule(Message request)
@@ -658,7 +671,9 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         var newUntil = _store.TryRenewSessionLockAsync(_entityName, sessionId, _descriptor.LockDuration, requestingLink).GetAwaiter().GetResult();
         if (newUntil is null)
         {
-            return BuildResponse(request, 410, $"Gone: session lock for '{sessionId}' is unknown, expired, or held by a different link");
+            return BuildResponse(request, 410,
+                $"Gone: session lock for '{sessionId}' is unknown, expired, or held by a different link",
+                Routing.ServiceBusErrors.SessionLockLost);
         }
         var responseBody = new Map { [ExpirationBodyKey] = newUntil.Value.UtcDateTime };
         var response = BuildResponse(request, 200, "OK");

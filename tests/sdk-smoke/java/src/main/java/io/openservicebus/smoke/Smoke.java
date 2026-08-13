@@ -6,6 +6,8 @@ import com.azure.messaging.servicebus.ServiceBusMessage;
 import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
 import com.azure.messaging.servicebus.ServiceBusReceiverClient;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
+import com.azure.messaging.servicebus.ServiceBusException;
+import com.azure.messaging.servicebus.ServiceBusFailureReason;
 import com.azure.messaging.servicebus.ServiceBusSessionReceiverClient;
 import com.azure.messaging.servicebus.models.AbandonOptions;
 import com.azure.messaging.servicebus.models.DeadLetterOptions;
@@ -29,7 +31,7 @@ import java.util.regex.Pattern;
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
  *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
- *   -> queue dedup -> topic dedup -> batch dedup -> abandon props
+ *   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -647,6 +649,55 @@ public final class Smoke {
             results.add(ptmOk ? "PASS abandon props" : "FAIL abandon props: " + ptmDetail);
             http.send(
                 HttpRequest.newBuilder(ptmQueueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+
+            // 24. lock lost - settling after the lock deadline fails with MessageLockLost
+            // instead of silently succeeding, and the message redelivers (issue #52).
+            String llQueue = "smoke-locklost-" + stamp;
+            URI llQueueUri = URI.create(base + "/" + llQueue + "?api-version=2021-05");
+            http.send(atomPut.apply(llQueue,
+                "<QueueDescription xmlns=\"" + sbNs + "\">"
+                + "<LockDuration>PT5S</LockDuration></QueueDescription>"), HttpResponse.BodyHandlers.ofString());
+            boolean llOk = false;
+            String llDetail = "no message";
+            try (ServiceBusSenderClient llSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(llQueue).buildClient();
+                 // The Java receiver auto-renews message locks for up to 5 minutes by
+                 // default - disable it so the lock actually expires during the sleep.
+                 ServiceBusReceiverClient llReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(llQueue).disableAutoComplete()
+                    .maxAutoLockRenewDuration(Duration.ZERO).buildClient()) {
+                ServiceBusMessage expireMe = new ServiceBusMessage("expire me");
+                expireMe.setMessageId("ll-" + stamp);
+                llSender.sendMessage(expireMe);
+                ServiceBusReceivedMessage llMsg = null;
+                for (ServiceBusReceivedMessage m : llReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    llMsg = m;
+                }
+                if (llMsg != null) {
+                    Thread.sleep(7000);
+                    try {
+                        llReceiver.complete(llMsg);
+                        llDetail = "complete unexpectedly succeeded";
+                    } catch (ServiceBusException e) {
+                        llOk = e.getReason() == ServiceBusFailureReason.MESSAGE_LOCK_LOST;
+                        llDetail = llOk ? "" : "reason " + e.getReason();
+                    }
+                    ServiceBusReceivedMessage llRedelivered = null;
+                    for (ServiceBusReceivedMessage m : llReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                        llRedelivered = m;
+                        llReceiver.complete(m);
+                    }
+                    if (llOk && llRedelivered == null) {
+                        llOk = false;
+                        llDetail = "no redelivery";
+                    }
+                }
+            }
+            results.add(llOk ? "PASS lock lost" : "FAIL lock lost: " + llDetail);
+            http.send(
+                HttpRequest.newBuilder(llQueueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);
         }

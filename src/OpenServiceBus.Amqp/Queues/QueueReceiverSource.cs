@@ -220,6 +220,10 @@ public sealed class QueueReceiverSource : IMessageSource
             activity.SetTag(OpenServiceBusDiagnostics.TagOperation, "settle");
         }
         string disposition;
+        // Non-null when the store refused the settle (lock expired/unknown): the delivery is
+        // then settled with this outcome instead of the success echo, so the SDK surfaces
+        // MessageLockLost - real Service Bus behavior instead of a silent no-op.
+        DeliveryState? failureOutcome = null;
 
         try
         {
@@ -246,10 +250,11 @@ public sealed class QueueReceiverSource : IMessageSource
                 return;
             }
 
+            bool settled;
             switch (dispositionContext.DeliveryState)
             {
                 case Accepted:
-                    _store.TryCompleteAsync(_entityName, lockToken).GetAwaiter().GetResult();
+                    settled = _store.TryCompleteAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     disposition = "complete";
                     break;
 
@@ -259,24 +264,24 @@ public sealed class QueueReceiverSource : IMessageSource
                 // into the stored payload BEFORE settling so the re-exposed message carries it.
                 case Modified modified when modified.UndeliverableHere:
                     ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).GetAwaiter().GetResult();
-                    _store.TryDeferAsync(_entityName, lockToken).GetAwaiter().GetResult();
+                    settled = _store.TryDeferAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     disposition = "defer";
                     break;
 
                 case Modified modified:
                     ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).GetAwaiter().GetResult();
-                    _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
+                    settled = _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     disposition = "abandon";
                     break;
 
                 case Released:
-                    _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
+                    settled = _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     disposition = "abandon";
                     break;
 
                 case Rejected rejected:
                     var (reason, description, dlqProps) = PropertiesToModifyCodec.FromRejected(rejected);
-                    DeadLetterAsync(lockToken, reason, description, dlqProps, inFlightDelivery: true).GetAwaiter().GetResult();
+                    settled = DeadLetterAsync(lockToken, reason, description, dlqProps, inFlightDelivery: true).GetAwaiter().GetResult();
                     disposition = "deadletter";
                     if (reason is not null) activity?.SetTag(OpenServiceBusDiagnostics.TagDeadLetterReason, reason);
                     break;
@@ -285,9 +290,15 @@ public sealed class QueueReceiverSource : IMessageSource
                     _logger.LogWarning(
                         "Unexpected delivery state {State} for lock {Lock} on {Entity}",
                         dispositionContext.DeliveryState?.GetType().Name ?? "<null>", lockToken, _entityName);
-                    _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
+                    settled = _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     disposition = "abandon";
                     break;
+            }
+
+            if (!settled)
+            {
+                failureOutcome = LockLostFailureOutcome();
+                disposition = "lock-lost";
             }
 
             // Tag + count once the outcome is known. Counters carry the disposition status so
@@ -304,20 +315,27 @@ public sealed class QueueReceiverSource : IMessageSource
         finally
         {
             // Only complete here for the non-tx path; the tx branch already settled the delivery
-            // with a TransactionalState outcome above. Settle by ECHOING the receiver's outcome:
-            // DispositionContext.Complete() settles every delivery as Accepted, but proton-j
-            // (the Java SDK) verifies the remote state matches the outcome it sent, so settling
-            // a Rejected (dead-letter) disposition as Accepted makes deadLetter() throw
-            // client-side. Real Service Bus echoes the receiver's outcome. Echo a FRESH
-            // instance, never the received one - proton-j populates Rejected.Error.Info with
-            // string keys that AMQPNetLite cannot re-encode into a Fields map.
+            // with a TransactionalState outcome above. On success, settle by ECHOING the
+            // receiver's outcome: DispositionContext.Complete() settles every delivery as
+            // Accepted, but proton-j (the Java SDK) verifies the remote state matches the
+            // outcome it sent, so settling a Rejected (dead-letter) disposition as Accepted
+            // makes deadLetter() throw client-side. Real Service Bus echoes the receiver's
+            // outcome. Echo a FRESH instance, never the received one - proton-j populates
+            // Rejected.Error.Info with string keys that AMQPNetLite cannot re-encode.
+            // On a lost lock, settle Rejected with com.microsoft:message-lock-lost instead.
             if (dispositionContext.DeliveryState is not TransactionalState)
             {
                 dispositionContext.Link.DisposeMessage(
-                    dispositionContext.Message, EchoOutcome(dispositionContext.DeliveryState), settled: true);
+                    dispositionContext.Message,
+                    failureOutcome ?? EchoOutcome(dispositionContext.DeliveryState),
+                    settled: true);
             }
         }
     }
+
+    // Queue receivers only ever lose message locks; the session variant overrides this
+    // decision with a session-lock check.
+    private DeliveryState LockLostFailureOutcome() => LockLostOutcome.Message(_entityName);
 
     /// <summary>
     /// Apply a single buffered disposition outcome against the store. Runs at txn commit time
@@ -325,37 +343,47 @@ public sealed class QueueReceiverSource : IMessageSource
     /// </summary>
     private async Task InvokeDispositionAsync(Guid lockToken, Outcome? outcome)
     {
+        bool settled;
         try
         {
             switch (outcome)
             {
                 case Accepted:
-                    await _store.TryCompleteAsync(_entityName, lockToken).ConfigureAwait(false);
+                    settled = await _store.TryCompleteAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
                 case Modified modified when modified.UndeliverableHere:
                     await ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).ConfigureAwait(false);
-                    await _store.TryDeferAsync(_entityName, lockToken).ConfigureAwait(false);
+                    settled = await _store.TryDeferAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
                 case Modified modified:
                     await ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).ConfigureAwait(false);
-                    await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
+                    settled = await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
                 case Released:
-                    await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
+                    settled = await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
                 case Rejected rejected:
                     var (reason, description, dlqProps) = PropertiesToModifyCodec.FromRejected(rejected);
-                    await DeadLetterAsync(lockToken, reason, description, dlqProps, inFlightDelivery: true).ConfigureAwait(false);
+                    settled = await DeadLetterAsync(lockToken, reason, description, dlqProps, inFlightDelivery: true).ConfigureAwait(false);
                     break;
                 default:
                     // Treat unknown as abandon so the lock is at least released on commit.
-                    await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
+                    settled = await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
             }
         }
         catch (InvalidOperationException ex)
         {
             _logger.LogDebug(ex, "Ignored transactional disposition for lock {Lock} on deleted entity {Entity}", lockToken, _entityName);
+            return;
+        }
+
+        // Escapes to the coordinator, which fails the discharge - the client's commit throws
+        // instead of committing a settled no-op over a lock that expired before the commit.
+        if (!settled)
+        {
+            throw new LockLostException(
+                $"The lock for token {lockToken} on '{_entityName}' was lost before the transaction committed.");
         }
     }
 
@@ -391,7 +419,7 @@ public sealed class QueueReceiverSource : IMessageSource
         _logger.LogDebug("TTL-dropped expired message from {Entity}", _entityName);
     }
 
-    private async Task DeadLetterAsync(
+    private async Task<bool> DeadLetterAsync(
         Guid lockToken,
         string? reason,
         string? description,
@@ -402,12 +430,11 @@ public sealed class QueueReceiverSource : IMessageSource
         if (_isDlq)
         {
             // No DLQ for the DLQ - just release the lock without enqueue elsewhere.
-            await _store.TryAbandonAsync(_entityName, lockToken, cancellationToken).ConfigureAwait(false);
-            return;
+            return await _store.TryAbandonAsync(_entityName, lockToken, cancellationToken).ConfigureAwait(false);
         }
 
         var removed = await _store.TryRemoveLockedAsync(_entityName, lockToken, cancellationToken).ConfigureAwait(false);
-        if (removed is null) return;
+        if (removed is null) return false;
 
         var dlqBytes = DeadLetterEncoder.AppendDeadLetterHeaders(removed.EncodedMessage, _entityName, reason, description, propertiesToModify);
         // If the entity is configured to forward dead-lettered messages elsewhere, route there;
@@ -433,6 +460,7 @@ public sealed class QueueReceiverSource : IMessageSource
 
         _logger.LogDebug("Dead-lettered seq#{Seq} from {Entity} to {Dlq} (reason={Reason})",
             removed.SequenceNumber, _entityName, dlqTarget, reason ?? "(unspecified)");
+        return true;
     }
 
     private static DeliveryState EchoOutcome(DeliveryState received) => received switch
