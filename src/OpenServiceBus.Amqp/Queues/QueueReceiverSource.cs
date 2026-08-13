@@ -1,4 +1,5 @@
 using OpenServiceBus.Amqp.DeadLettering;
+using OpenServiceBus.Amqp.Settlement;
 
 using System.Diagnostics;
 using Amqp;
@@ -30,10 +31,6 @@ public sealed class QueueReceiverSource : IMessageSource
     private static readonly Symbol EnqueuedTimeUtcSymbol = new("x-opt-enqueued-time");
     private static readonly Symbol SequenceNumberSymbol = new("x-opt-sequence-number");
     private static readonly Symbol LockedUntilSymbol = new("x-opt-locked-until");
-
-    // Same names appear as Symbol keys on Rejected.Error.Info (the SDK's preferred shape).
-    private static readonly Symbol DeadLetterReasonSymbol = new(DeadLetterEncoder.DeadLetterReasonHeader);
-    private static readonly Symbol DeadLetterErrorDescriptionSymbol = new(DeadLetterEncoder.DeadLetterErrorDescriptionHeader);
 
     // Default reason when the SDK calls DeadLetterMessageAsync(msg) with no reason supplied.
     private const string MaxDeliveryReason = "MaxDeliveryCountExceeded";
@@ -258,20 +255,28 @@ public sealed class QueueReceiverSource : IMessageSource
 
                 // Modified with UndeliverableHere=true is the SDK's DeferAsync wire signal -
                 // park the message in Deferred state instead of returning it to the active pool.
+                // The outcome's message-annotations field carries PropertiesToModify: merge it
+                // into the stored payload BEFORE settling so the re-exposed message carries it.
                 case Modified modified when modified.UndeliverableHere:
+                    ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).GetAwaiter().GetResult();
                     _store.TryDeferAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     disposition = "defer";
                     break;
 
+                case Modified modified:
+                    ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).GetAwaiter().GetResult();
+                    _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
+                    disposition = "abandon";
+                    break;
+
                 case Released:
-                case Modified:
                     _store.TryAbandonAsync(_entityName, lockToken).GetAwaiter().GetResult();
                     disposition = "abandon";
                     break;
 
                 case Rejected rejected:
-                    var (reason, description) = ExtractDeadLetterInfo(rejected);
-                    DeadLetterAsync(lockToken, reason, description, inFlightDelivery: true).GetAwaiter().GetResult();
+                    var (reason, description, dlqProps) = PropertiesToModifyCodec.FromRejected(rejected);
+                    DeadLetterAsync(lockToken, reason, description, dlqProps, inFlightDelivery: true).GetAwaiter().GetResult();
                     disposition = "deadletter";
                     if (reason is not null) activity?.SetTag(OpenServiceBusDiagnostics.TagDeadLetterReason, reason);
                     break;
@@ -328,15 +333,19 @@ public sealed class QueueReceiverSource : IMessageSource
                     await _store.TryCompleteAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
                 case Modified modified when modified.UndeliverableHere:
+                    await ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).ConfigureAwait(false);
                     await _store.TryDeferAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
+                case Modified modified:
+                    await ApplyPropertiesToModifyAsync(lockToken, PropertiesToModifyCodec.FromModified(modified)).ConfigureAwait(false);
+                    await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
+                    break;
                 case Released:
-                case Modified:
                     await _store.TryAbandonAsync(_entityName, lockToken).ConfigureAwait(false);
                     break;
                 case Rejected rejected:
-                    var (reason, description) = ExtractDeadLetterInfo(rejected);
-                    await DeadLetterAsync(lockToken, reason, description, inFlightDelivery: true).ConfigureAwait(false);
+                    var (reason, description, dlqProps) = PropertiesToModifyCodec.FromRejected(rejected);
+                    await DeadLetterAsync(lockToken, reason, description, dlqProps, inFlightDelivery: true).ConfigureAwait(false);
                     break;
                 default:
                     // Treat unknown as abandon so the lock is at least released on commit.
@@ -348,6 +357,21 @@ public sealed class QueueReceiverSource : IMessageSource
         {
             _logger.LogDebug(ex, "Ignored transactional disposition for lock {Lock} on deleted entity {Entity}", lockToken, _entityName);
         }
+    }
+
+    /// <summary>
+    /// Merge a settlement's PropertiesToModify into the stored payload while the lock is
+    /// still held, so the subsequent settle (abandon/defer) re-exposes the modified message.
+    /// A lock lost in the meantime makes this a no-op - the settle then fails the same way
+    /// it would have without properties.
+    /// </summary>
+    private async Task ApplyPropertiesToModifyAsync(Guid lockToken, IReadOnlyDictionary<string, object?>? properties)
+    {
+        if (properties is null || properties.Count == 0) return;
+        var locked = await _store.TryGetLockedAsync(_entityName, lockToken).ConfigureAwait(false);
+        if (locked is null) return;
+        var merged = PropertiesToModifyCodec.MergeIntoEncoded(locked.EncodedMessage, properties);
+        await _store.TryUpdateLockedPayloadAsync(_entityName, lockToken, merged).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -367,7 +391,13 @@ public sealed class QueueReceiverSource : IMessageSource
         _logger.LogDebug("TTL-dropped expired message from {Entity}", _entityName);
     }
 
-    private async Task DeadLetterAsync(Guid lockToken, string? reason, string? description, bool inFlightDelivery = false, CancellationToken cancellationToken = default)
+    private async Task DeadLetterAsync(
+        Guid lockToken,
+        string? reason,
+        string? description,
+        IReadOnlyDictionary<string, object?>? propertiesToModify = null,
+        bool inFlightDelivery = false,
+        CancellationToken cancellationToken = default)
     {
         if (_isDlq)
         {
@@ -379,7 +409,7 @@ public sealed class QueueReceiverSource : IMessageSource
         var removed = await _store.TryRemoveLockedAsync(_entityName, lockToken, cancellationToken).ConfigureAwait(false);
         if (removed is null) return;
 
-        var dlqBytes = DeadLetterEncoder.AppendDeadLetterHeaders(removed.EncodedMessage, _entityName, reason, description);
+        var dlqBytes = DeadLetterEncoder.AppendDeadLetterHeaders(removed.EncodedMessage, _entityName, reason, description, propertiesToModify);
         // If the entity is configured to forward dead-lettered messages elsewhere, route there;
         // otherwise the message lands on the local <entity>/$DeadLetterQueue as before.
         var dlqTarget = string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo)
@@ -412,29 +442,6 @@ public sealed class QueueReceiverSource : IMessageSource
         Modified m => new Modified { DeliveryFailed = m.DeliveryFailed, UndeliverableHere = m.UndeliverableHere },
         _ => new Accepted(),
     };
-
-    // The .NET SDK stamps Rejected.Error.Info with Symbol keys; proton-j (Java) uses plain
-    // string keys for the same names. Enumerate entries instead of indexing: the Fields
-    // map's typed indexer rejects non-Symbol keys (decode fills it unvalidated).
-    private static (string? Reason, string? Description) ExtractDeadLetterInfo(Rejected rejected)
-    {
-        if (rejected.Error?.Info is null) return (null, null);
-        string? reason = null;
-        string? description = null;
-        foreach (KeyValuePair<object, object> entry in rejected.Error.Info)
-        {
-            switch (entry.Key?.ToString())
-            {
-                case "DeadLetterReason":
-                    reason = entry.Value as string;
-                    break;
-                case "DeadLetterErrorDescription":
-                    description = entry.Value as string;
-                    break;
-            }
-        }
-        return (reason, description);
-    }
 
     private static void StampSystemProperties(Message amqp, LockedMessage locked)
     {

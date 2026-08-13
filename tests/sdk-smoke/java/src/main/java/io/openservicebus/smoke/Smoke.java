@@ -7,6 +7,7 @@ import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
 import com.azure.messaging.servicebus.ServiceBusReceiverClient;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import com.azure.messaging.servicebus.ServiceBusSessionReceiverClient;
+import com.azure.messaging.servicebus.models.AbandonOptions;
 import com.azure.messaging.servicebus.models.DeadLetterOptions;
 import com.azure.messaging.servicebus.models.SubQueue;
 
@@ -28,7 +29,7 @@ import java.util.regex.Pattern;
  *   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
  *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
- *   -> queue dedup -> topic dedup -> batch dedup
+ *   -> queue dedup -> topic dedup -> batch dedup -> abandon props
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -611,6 +612,41 @@ public final class Smoke {
                 : "FAIL batch dedup: got " + batchSeen + " message(s)");
             http.send(
                 HttpRequest.newBuilder(dedupQueueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+
+            // 23. abandon props - PropertiesToModify on abandon (issue #30): the map merges
+            // into the stored message so the redelivery carries it.
+            String ptmQueue = "smoke-ptm-" + stamp;
+            URI ptmQueueUri = URI.create(base + "/" + ptmQueue + "?api-version=2021-05");
+            http.send(atomPut.apply(ptmQueue,
+                "<QueueDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            boolean ptmOk = false;
+            String ptmDetail = "no redelivery";
+            try (ServiceBusSenderClient ptmSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(ptmQueue).buildClient();
+                 ServiceBusReceiverClient ptmReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(ptmQueue).disableAutoComplete().buildClient()) {
+                ServiceBusMessage tryMe = new ServiceBusMessage("try me");
+                tryMe.setMessageId("ptm-" + stamp);
+                tryMe.getApplicationProperties().put("existing", "old");
+                ptmSender.sendMessage(tryMe);
+                for (ServiceBusReceivedMessage m : ptmReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    java.util.Map<String, Object> mods = new java.util.HashMap<>();
+                    mods.put("retry-reason", "timeout");
+                    mods.put("existing", "new");
+                    ptmReceiver.abandon(m, new AbandonOptions().setPropertiesToModify(mods));
+                }
+                for (ServiceBusReceivedMessage m : ptmReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    ptmOk = "timeout".equals(m.getApplicationProperties().get("retry-reason"))
+                        && "new".equals(m.getApplicationProperties().get("existing"));
+                    ptmDetail = ptmOk ? "" : "properties missing";
+                    ptmReceiver.complete(m);
+                }
+            }
+            results.add(ptmOk ? "PASS abandon props" : "FAIL abandon props: " + ptmDetail);
+            http.send(
+                HttpRequest.newBuilder(ptmQueueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);
         }

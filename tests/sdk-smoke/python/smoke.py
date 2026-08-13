@@ -5,6 +5,8 @@ Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
   -> queue dedup -> topic dedup -> batch dedup
+  (-> abandon props runs in the other three smokes; azure-servicebus for Python does not
+   expose propertiesToModify on its settlement methods, so there is nothing to exercise)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.

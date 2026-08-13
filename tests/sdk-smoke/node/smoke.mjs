@@ -4,7 +4,7 @@
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
-//   -> queue dedup -> topic dedup -> batch dedup
+//   -> queue dedup -> topic dedup -> batch dedup -> abandon props
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -397,6 +397,34 @@ const run = async () => {
   await dedupSender.close();
   await dedupReceiver.close();
   await fetch(`${httpBase}/${dedupQueue}?api-version=2021-05`, { method: "DELETE" });
+
+  // 23. abandon props - PropertiesToModify on abandon (issue #30): the map merges into
+  // the stored message so the redelivery carries it.
+  const ptmQueue = `smoke-ptm-${stamp}`;
+  await atomPut(ptmQueue,
+    '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  const ptmSender = client.createSender(ptmQueue);
+  await ptmSender.sendMessages({
+    body: "try me",
+    messageId: `ptm-${stamp}`,
+    applicationProperties: { existing: "old" },
+  });
+  const ptmReceiver = client.createReceiver(ptmQueue);
+  const [ptmFirst] = await ptmReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  if (ptmFirst) {
+    await ptmReceiver.abandonMessage(ptmFirst, { "retry-reason": "timeout", existing: "new" });
+  }
+  const [ptmSecond] = await ptmReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  if (ptmSecond) await ptmReceiver.completeMessage(ptmSecond);
+  const ptmOk =
+    !!ptmSecond &&
+    ptmSecond.applicationProperties?.["retry-reason"] === "timeout" &&
+    ptmSecond.applicationProperties?.existing === "new" &&
+    ptmSecond.deliveryCount === 1;
+  check("abandon props", ptmOk, ptmOk ? "" : !ptmSecond ? "no redelivery" : "properties missing");
+  await ptmSender.close();
+  await ptmReceiver.close();
+  await fetch(`${httpBase}/${ptmQueue}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>
