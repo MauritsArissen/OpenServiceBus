@@ -43,9 +43,32 @@ public sealed class QueueRehydrationHostedService : IHostedService
             .Select(q => q.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var savedDescriptors = _store.LoadQueueDescriptors();
+        var savedTopics = _store.LoadTopicDescriptors();
 
         var rehydratedQueues = 0;
         var rehydratedSubscriptions = 0;
+        var rehydratedTopics = 0;
+
+        // Topics restore from their own persisted snapshots first - full settings (status,
+        // TTL, duplicate detection) instead of the all-default synthesis, and topics without
+        // any subscription (invisible to the backing-queue scan below) come back too.
+        if (_topics is not null)
+        {
+            foreach (var (topicName, json) in savedTopics)
+            {
+                try
+                {
+                    if (await _topics.GetTopicAsync(topicName, cancellationToken).ConfigureAwait(false) is not null) continue;
+                    var topicDescriptor = TopicDescriptorJson.Deserialize(json) ?? new TopicDescriptor { Name = topicName };
+                    await _topics.CreateTopicAsync(topicDescriptor with { Name = topicName }, cancellationToken).ConfigureAwait(false);
+                    rehydratedTopics++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to rehydrate topic '{Topic}' from persistent store.", topicName);
+                }
+            }
+        }
 
         foreach (var name in _store.ListQueueNames())
         {
@@ -116,11 +139,11 @@ public sealed class QueueRehydrationHostedService : IHostedService
             rehydratedQueues++;
         }
 
-        if (rehydratedQueues > 0 || rehydratedSubscriptions > 0)
+        if (rehydratedQueues > 0 || rehydratedSubscriptions > 0 || rehydratedTopics > 0)
         {
             _logger.LogInformation(
-                "Rehydrated {Queues} queue(s) and {Subs} subscription(s) from persistent store with default descriptors.",
-                rehydratedQueues, rehydratedSubscriptions);
+                "Rehydrated {Queues} queue(s), {Topics} topic(s) and {Subs} subscription(s) from persistent store.",
+                rehydratedQueues, rehydratedTopics, rehydratedSubscriptions);
         }
     }
 

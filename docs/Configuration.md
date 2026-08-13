@@ -91,7 +91,11 @@ and logs an informational message. Parse errors are logged but do **not** stop t
 | `ForwardDeadLetteredMessagesTo`       | string            | -           | DLQ-forward target                                                            |
 
 Topics + subscriptions in `config.json` are accepted in the same shape as the Microsoft
-emulator (`"Topics": [ { "Name": ..., "Subscriptions": [ ... ] } ]`); the
+emulator (`"Topics": [ { "Name": ..., "Subscriptions": [ ... ] } ]`). Topic `Properties`
+support `DefaultMessageTimeToLive`, `AutoDeleteOnIdle`, `Status`, `MaxSizeInMegabytes`,
+`MaxMessageSizeInKilobytes`, and - like queues - `RequiresDuplicateDetection` +
+`DuplicateDetectionHistoryTimeWindow` (see [Duplicate Detection](Duplicate-Detection));
+the
 [`OpenServiceBus.Samples.TopicsAndFilters`](https://github.com/mauritsarissen/OpenServiceBus/tree/main/samples/dotnet/OpenServiceBus.Samples.TopicsAndFilters)
 sample ships a `config.json` covering topics, subscriptions, and rule shapes (SQL + correlation).
 

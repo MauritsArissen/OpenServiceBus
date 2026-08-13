@@ -101,7 +101,9 @@ public sealed class TopicSenderProcessor : IMessageProcessor
             if (msg.Format == AmqpBatchedMessageFormat && msg.BodySection is DataList dataList)
             {
                 var batchTxnId = (messageContext.DeliveryState as TransactionalState)?.TxnId;
-                _ = FanOutBatchAsync(messageContext, dataList, batchTxnId);
+                var batchDedupWindow = DuplicateDetection.EffectiveWindow(
+                    currentTopic.RequiresDuplicateDetection, currentTopic.DuplicateDetectionHistoryTimeWindow);
+                _ = FanOutBatchAsync(messageContext, dataList, batchTxnId, batchDedupWindow);
                 return;
             }
 
@@ -110,11 +112,24 @@ public sealed class TopicSenderProcessor : IMessageProcessor
             var scheduledFor = ReadScheduledEnqueueTime(msg);
             var filterContext = BuildFilterContext(msg, _timeProvider.GetUtcNow());
 
+            // Topic-level duplicate detection runs ONCE per publish, before fan-out, so a
+            // duplicate reaches zero subscriptions - matching Azure. Scheduled publishes are
+            // checked at send time (now), not at activation, also matching Azure. The check
+            // uses the freshly resolved descriptor so config changes apply without re-attach.
+            var dedupWindow = DuplicateDetection.EffectiveWindow(
+                currentTopic.RequiresDuplicateDetection, currentTopic.DuplicateDetectionHistoryTimeWindow);
+            var messageId = dedupWindow is not null ? msg.Properties?.MessageId?.ToString() : null;
+
             // Transactional fan-out - buffer the route-and-fanout under the txn so it
-            // only happens on commit. Each enlist captures the same byte[] + filter context.
+            // only happens on commit. Each enlist captures the same byte[] + filter context;
+            // the dedup check also runs at commit time, matching the queue path.
             if (messageContext.DeliveryState is TransactionalState txnState && txnState.TxnId is { Length: > 0 } txnId)
             {
-                if (_transactions.Enlist(txnId, _ => _router.RouteAsync(_topic.Name, encoded, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext)))
+                if (_transactions.Enlist(txnId, async _ =>
+                    {
+                        if (await IsDuplicateAsync(messageId, dedupWindow).ConfigureAwait(false)) return;
+                        await _router.RouteAsync(_topic.Name, encoded, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext).ConfigureAwait(false);
+                    }))
                 {
                     messageContext.Link.DisposeMessage(messageContext.Message,
                         new TransactionalState { TxnId = txnId, Outcome = new Accepted() }, settled: true);
@@ -129,7 +144,7 @@ public sealed class TopicSenderProcessor : IMessageProcessor
             // Note: session routing isn't yet threaded through topic fan-out; subscriptions
             // with RequiresSession are accepted at creation time but messages pass via the
             // regular channel. Lifted when EvaluateSubscribers returns descriptors.
-            _ = FanOutAndCompleteAsync(messageContext, encoded, expiresAt, scheduledFor, filterContext, sessionId: null);
+            _ = FanOutAndCompleteAsync(messageContext, encoded, expiresAt, scheduledFor, filterContext, sessionId: null, messageId, dedupWindow);
         }
         catch (Exception ex)
         {
@@ -141,13 +156,27 @@ public sealed class TopicSenderProcessor : IMessageProcessor
         }
     }
 
+    private async Task<bool> IsDuplicateAsync(string? messageId, TimeSpan? dedupWindow)
+    {
+        if (dedupWindow is not { } window || string.IsNullOrEmpty(messageId)) return false;
+        var duplicate = await _store.CheckTopicDuplicateAsync(_topic.Name, messageId, window).ConfigureAwait(false);
+        if (duplicate)
+        {
+            _logger.LogDebug("Dropped duplicate MessageId '{MessageId}' on topic {Topic} before fan-out (window {Window})",
+                messageId, _topic.Name, window);
+        }
+        return duplicate;
+    }
+
     private async Task FanOutAndCompleteAsync(
         MessageContext context,
         byte[] encoded,
         DateTimeOffset? expiresAt,
         DateTimeOffset? scheduledFor,
         MessageFilterContext filterContext,
-        string? sessionId)
+        string? sessionId,
+        string? messageId = null,
+        TimeSpan? dedupWindow = null)
     {
         try
         {
@@ -160,6 +189,16 @@ public sealed class TopicSenderProcessor : IMessageProcessor
                 activity.SetTag(OpenServiceBusDiagnostics.TagOperation, "publish");
                 if (filterContext.MessageId is { } mid) activity.SetTag(OpenServiceBusDiagnostics.TagMessageId, mid);
                 if (filterContext.CorrelationId is { } cid) activity.SetTag(OpenServiceBusDiagnostics.TagConversationId, cid);
+            }
+
+            // Silent drop on a dedup hit: the sender still sees Accepted, no subscription
+            // sees a copy - identical to how the queue path treats duplicates.
+            if (await IsDuplicateAsync(messageId, dedupWindow).ConfigureAwait(false))
+            {
+                activity?.SetTag("osb.dedup.dropped", true);
+                activity?.SetTag("osb.fanout.subscribers", 0);
+                context.Complete();
+                return;
             }
 
             // Routing the topic name itself triggers the router's fan-out path, which also
@@ -194,7 +233,7 @@ public sealed class TopicSenderProcessor : IMessageProcessor
         });
     }
 
-    private async Task FanOutBatchAsync(MessageContext context, DataList dataList, byte[]? txnId)
+    private async Task FanOutBatchAsync(MessageContext context, DataList dataList, byte[]? txnId, TimeSpan? dedupWindow)
     {
         try
         {
@@ -209,11 +248,18 @@ public sealed class TopicSenderProcessor : IMessageProcessor
                 var expiresAt = ComputeExpiresAt(inner);
                 var scheduledFor = ReadScheduledEnqueueTime(inner);
                 var filterContext = BuildFilterContext(inner, _timeProvider.GetUtcNow());
+                // Each inner message of a batched envelope is checked individually,
+                // consistent with the queue path.
+                var messageId = dedupWindow is not null ? inner.Properties?.MessageId?.ToString() : null;
 
                 if (txnId is { Length: > 0 })
                 {
                     // Buffer the fan-out under the txn; it only runs on commit.
-                    if (!_transactions.Enlist(txnId, _ => _router.RouteAsync(_topic.Name, innerBytes, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext)))
+                    if (!_transactions.Enlist(txnId, async _ =>
+                        {
+                            if (await IsDuplicateAsync(messageId, dedupWindow).ConfigureAwait(false)) return;
+                            await _router.RouteAsync(_topic.Name, innerBytes, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext).ConfigureAwait(false);
+                        }))
                     {
                         enlisted = false;
                         break;
@@ -221,6 +267,7 @@ public sealed class TopicSenderProcessor : IMessageProcessor
                 }
                 else
                 {
+                    if (await IsDuplicateAsync(messageId, dedupWindow).ConfigureAwait(false)) continue;
                     await _router.RouteAsync(_topic.Name, innerBytes, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext).ConfigureAwait(false);
                 }
             }

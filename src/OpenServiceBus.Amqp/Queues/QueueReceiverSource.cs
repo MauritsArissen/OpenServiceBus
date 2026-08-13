@@ -90,6 +90,12 @@ public sealed class QueueReceiverSource : IMessageSource
             while (locked is null)
             {
                 if (link.IsDraining) return null!;
+                // A closed link must stop pumping: clients that close a receiver with credit
+                // still outstanding (pyamqp does not drain on timeout) would otherwise leave
+                // this in-flight poll running as a ZOMBIE consumer - it steals every future
+                // message on the queue, and re-steals them on each lock expiry, starving every
+                // real receiver forever.
+                if (link.IsClosed) return null!;
                 if (_registry is not null)
                 {
                     var current = _registry.GetAsync(_entityName).GetAwaiter().GetResult();
@@ -128,6 +134,14 @@ public sealed class QueueReceiverSource : IMessageSource
                     Routing.DeletedEntityLink.Close(link, _entityName, _logger);
                     return null!;
                 }
+            }
+
+            // The link can close between the dequeue winning and this delivery - hand the
+            // message straight back instead of returning a context no one can send on.
+            if (link.IsClosed)
+            {
+                await _store.TryAbandonAsync(_entityName, locked.LockToken).ConfigureAwait(false);
+                return null!;
             }
 
             // Messages that crossed their TTL deadline while waiting in the queue get

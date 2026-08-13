@@ -17,14 +17,19 @@ public sealed class TopicManager : ITopicRegistry
     public const string DefaultRuleName = "$Default";
 
     private readonly IQueueRegistry _queues;
+    private readonly IMessageStore? _store;
 
     private readonly ConcurrentDictionary<string, TopicDescriptor> _topics = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SubscriptionDescriptor> _subscriptions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, RuleDescriptor>> _rules = new(StringComparer.OrdinalIgnoreCase);
 
-    public TopicManager(IQueueRegistry queues)
+    // The store is optional so unit tests can construct a bare registry; when present it
+    // persists topic descriptor snapshots (restart survival on SQLite) and owns the
+    // topic-level dedup history that must die with the topic.
+    public TopicManager(IQueueRegistry queues, IMessageStore? store = null)
     {
         _queues = queues;
+        _store = store;
     }
 
     public event EventHandler<TopicDescriptor>? TopicCreated;
@@ -39,7 +44,7 @@ public sealed class TopicManager : ITopicRegistry
     event EventHandler<SubscriptionDescriptor> ITopicRegistry.SubscriptionUpdated { add => SubscriptionUpdated += value; remove => SubscriptionUpdated -= value; }
     event EventHandler<SubscriptionDescriptor> ITopicRegistry.SubscriptionDeleted { add => SubscriptionDeleted += value; remove => SubscriptionDeleted -= value; }
 
-    public Task<TopicDescriptor> CreateTopicAsync(TopicDescriptor descriptor, CancellationToken cancellationToken = default)
+    public async Task<TopicDescriptor> CreateTopicAsync(TopicDescriptor descriptor, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
@@ -47,12 +52,16 @@ public sealed class TopicManager : ITopicRegistry
         var stored = _topics.GetOrAdd(descriptor.Name, descriptor);
         if (ReferenceEquals(stored, descriptor))
         {
+            if (_store is not null)
+            {
+                await _store.SaveTopicDescriptorAsync(descriptor.Name, TopicDescriptorJson.Serialize(descriptor), cancellationToken).ConfigureAwait(false);
+            }
             TopicCreated?.Invoke(this, descriptor);
         }
-        return Task.FromResult(stored);
+        return stored;
     }
 
-    public Task<TopicDescriptor> UpdateTopicAsync(TopicDescriptor descriptor, CancellationToken cancellationToken = default)
+    public async Task<TopicDescriptor> UpdateTopicAsync(TopicDescriptor descriptor, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
@@ -66,7 +75,11 @@ public sealed class TopicManager : ITopicRegistry
             }
             if (_topics.TryUpdate(descriptor.Name, descriptor, existing))
             {
-                return Task.FromResult(descriptor);
+                if (_store is not null)
+                {
+                    await _store.SaveTopicDescriptorAsync(descriptor.Name, TopicDescriptorJson.Serialize(descriptor), cancellationToken).ConfigureAwait(false);
+                }
+                return descriptor;
             }
         }
     }
@@ -88,6 +101,11 @@ public sealed class TopicManager : ITopicRegistry
         if (!_topics.TryRemove(name, out var topic))
         {
             return false;
+        }
+        if (_store is not null)
+        {
+            await _store.DeleteTopicDescriptorAsync(name, cancellationToken).ConfigureAwait(false);
+            await _store.ClearTopicDedupHistoryAsync(name, cancellationToken).ConfigureAwait(false);
         }
         TopicDeleted?.Invoke(this, topic);
 

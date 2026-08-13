@@ -4,6 +4,7 @@ Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
+  -> queue dedup -> topic dedup -> batch dedup
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.
@@ -358,6 +359,68 @@ def run() -> None:
                     )
         check("dlq resend", resend_ok, resend_detail)
         http("DELETE", f"{base}/{resend_queue}?api-version=2021-05")
+
+        # 20. queue dedup - a duplicate-detection queue silently drops a repeated MessageId
+        # within the window (issue #29 hardening): three sends, one shared id, two survivors.
+        def drain(receiver) -> int:
+            seen = 0
+            while True:
+                got = receiver.receive_messages(max_message_count=1, max_wait_time=2)
+                if not got:
+                    return seen
+                receiver.complete_message(got[0])
+                seen += 1
+
+        dedup_queue = f"smoke-dedup-{stamp}"
+        http("PUT", f"{base}/{dedup_queue}?api-version=2021-05", atom_entry(
+            '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
+            "<RequiresDuplicateDetection>true</RequiresDuplicateDetection>"
+            "<DuplicateDetectionHistoryTimeWindow>PT10M</DuplicateDetectionHistoryTimeWindow>"
+            "</QueueDescription>"))
+        with client.get_queue_sender(dedup_queue) as dedup_sender:
+            dedup_sender.send_messages(ServiceBusMessage("first", message_id=f"dupq-{stamp}"))
+            dedup_sender.send_messages(ServiceBusMessage("retry", message_id=f"dupq-{stamp}"))
+            dedup_sender.send_messages(ServiceBusMessage("unique", message_id=f"dupq-other-{stamp}"))
+        with client.get_queue_receiver(dedup_queue, max_wait_time=2) as dedup_receiver:
+            dedup_seen = drain(dedup_receiver)
+        check("queue dedup", dedup_seen == 2, "" if dedup_seen == 2 else f"got {dedup_seen} message(s)")
+
+        # 21. topic dedup - duplicate detection runs at the TOPIC before fan-out (issue
+        # #29): a duplicate publish reaches zero subscriptions; each subscription sees
+        # exactly one copy.
+        dedup_topic = f"smoke-dedup-topic-{stamp}"
+        http("PUT", f"{base}/{dedup_topic}?api-version=2021-05", atom_entry(
+            '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
+            "<RequiresDuplicateDetection>true</RequiresDuplicateDetection></TopicDescription>"))
+        for sub in ("s1", "s2"):
+            http("PUT", f"{base}/{dedup_topic}/subscriptions/{sub}?api-version=2021-05", atom_entry(
+                '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        with client.get_topic_sender(dedup_topic) as topic_dedup_sender:
+            topic_dedup_sender.send_messages(ServiceBusMessage("evt", message_id=f"dupt-{stamp}"))
+            topic_dedup_sender.send_messages(ServiceBusMessage("evt-retry", message_id=f"dupt-{stamp}"))
+        topic_dedup_ok = True
+        topic_dedup_detail = ""
+        for sub in ("s1", "s2"):
+            with client.get_subscription_receiver(dedup_topic, sub, max_wait_time=2) as sub_receiver:
+                got = drain(sub_receiver)
+            if got != 1:
+                topic_dedup_ok = False
+                topic_dedup_detail = f"subscription {sub} got {got} message(s)"
+        check("topic dedup", topic_dedup_ok, topic_dedup_detail)
+        http("DELETE", f"{base}/{dedup_topic}?api-version=2021-05")
+
+        # 22. batch dedup - one batched envelope with an in-batch duplicate: each inner
+        # message is checked individually, so the duplicate is dropped and distinct ids land.
+        with client.get_queue_sender(dedup_queue) as batch_sender:
+            batch_sender.send_messages([
+                ServiceBusMessage("one", message_id=f"dupb-{stamp}"),
+                ServiceBusMessage("dup-of-one", message_id=f"dupb-{stamp}"),
+                ServiceBusMessage("two", message_id=f"dupb2-{stamp}"),
+            ])
+        with client.get_queue_receiver(dedup_queue, max_wait_time=2) as batch_receiver:
+            batch_seen = drain(batch_receiver)
+        check("batch dedup", batch_seen == 2, "" if batch_seen == 2 else f"got {batch_seen} message(s)")
+        http("DELETE", f"{base}/{dedup_queue}?api-version=2021-05")
 
 
 try:
