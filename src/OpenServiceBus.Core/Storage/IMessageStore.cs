@@ -223,6 +223,22 @@ public interface IMessageStore
     Task<bool> TryDeferAsync(string queueName, Guid lockToken, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Snapshot of a currently-locked message by lock token, without settling it. Null when
+    /// the token is unknown or the lock has been released. Used by settlement paths that
+    /// need the stored payload (e.g. merging PropertiesToModify) before deciding the outcome.
+    /// </summary>
+    Task<StoredMessage?> TryGetLockedAsync(string queueName, Guid lockToken, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replace the stored payload of a currently-locked message, keeping its sequence number,
+    /// delivery count and every other attribute. The caller must hold the lock; returns false
+    /// when the token is unknown or the lock has been released. Persistent stores write
+    /// through so the change survives a restart. Used to apply PropertiesToModify from
+    /// abandon/defer dispositions before the settle re-exposes the message.
+    /// </summary>
+    Task<bool> TryUpdateLockedPayloadAsync(string queueName, Guid lockToken, byte[] encodedMessage, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retrieve a deferred message by sequence number and place it under a fresh peek-lock.
     /// Returns <c>null</c> if no deferred message with that sequence number exists.
     /// Dispositions on the returned lock token go through the <c>$management</c> update-disposition

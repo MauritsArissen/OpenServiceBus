@@ -4,7 +4,7 @@
 //   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
-//   -> queue dedup -> topic dedup -> batch dedup
+//   -> queue dedup -> topic dedup -> batch dedup -> abandon props
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -334,6 +334,36 @@ try
     await dedupSender.CloseAsync();
     await dedupReceiver.CloseAsync();
     await admin.DeleteQueueAsync(dedupQueue);
+
+    // 23. abandon props - PropertiesToModify on abandon (issue #30): the map merges into
+    // the stored message so the redelivery carries it. (The Python SDK does not expose
+    // propertiesToModify, so its script notes this step instead of running it.)
+    var ptmQueue = $"smoke-ptm-{stamp}";
+    await admin.CreateQueueAsync(ptmQueue);
+    var ptmSender = client.CreateSender(ptmQueue);
+    var ptmMsg = new ServiceBusMessage("try me") { MessageId = $"ptm-{stamp}" };
+    ptmMsg.ApplicationProperties["existing"] = "old";
+    await ptmSender.SendMessageAsync(ptmMsg);
+    var ptmReceiver = client.CreateReceiver(ptmQueue);
+    var ptmFirst = await ptmReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    if (ptmFirst is not null)
+    {
+        await ptmReceiver.AbandonMessageAsync(ptmFirst, new Dictionary<string, object>
+        {
+            ["retry-reason"] = "timeout",
+            ["existing"] = "new",
+        });
+    }
+    var ptmSecond = await ptmReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    if (ptmSecond is not null) await ptmReceiver.CompleteMessageAsync(ptmSecond);
+    var ptmOk = ptmSecond is not null
+        && Equals(ptmSecond.ApplicationProperties.GetValueOrDefault("retry-reason"), "timeout")
+        && Equals(ptmSecond.ApplicationProperties.GetValueOrDefault("existing"), "new")
+        && ptmSecond.DeliveryCount == 2;
+    Check("abandon props", ptmOk, ptmOk ? "" : ptmSecond is null ? "no redelivery" : "properties missing");
+    await ptmSender.CloseAsync();
+    await ptmReceiver.CloseAsync();
+    await admin.DeleteQueueAsync(ptmQueue);
 }
 catch (Exception e)
 {

@@ -80,7 +80,7 @@ $management       → ManagementRequestProcessor (renew, peek, schedule, session
 $cbs              → CbsRequestProcessor (token validation when SAS enabled)
 ```
 
-Two wire details worth knowing about dispositions, matching real Service Bus:
+Three wire details worth knowing about dispositions, matching real Service Bus:
 
 - Settling a peek-lock disposition ECHOES the receiver's outcome (Rejected for
   dead-letter, Modified for abandon/defer, Accepted for complete) instead of blanket
@@ -89,6 +89,14 @@ Two wire details worth knowing about dispositions, matching real Service Bus:
 - The `DeadLetterReason` / `DeadLetterErrorDescription` entries on a dead-letter
   disposition's error info arrive with Symbol keys from the .NET SDK but plain string
   keys from proton-j. Both shapes are accepted, like the real service does.
+- The `PropertiesToModify` map the SDK settlement overloads carry (abandon / defer /
+  dead-letter) is merged into the stored message's application properties before the
+  settle, last write wins per key - so redeliveries, deferred retrievals and DLQ copies
+  carry it, and it survives a restart on the SQLite store. It arrives as the `Modified`
+  outcome's message-annotations field, as extra entries in the dead-letter error info,
+  or as `properties-to-modify` on the `$management` update-disposition used when
+  settling deferred messages. On a dead-letter, the broker-stamped reason/description
+  win over a colliding property key. The Python SDK does not expose the parameter.
 
 ## Storage swap
 

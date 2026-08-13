@@ -483,6 +483,35 @@ public sealed class InMemoryMessageStore : IMessageStore
         return Task.FromResult<StoredMessage?>(msg);
     }
 
+    public Task<StoredMessage?> TryGetLockedAsync(string queueName, Guid lockToken, CancellationToken cancellationToken = default)
+    {
+        var state = GetQueue(queueName);
+        lock (state.Sync)
+        {
+            if (state.Locks.TryGetValue(lockToken, out var entry)
+                && state.Messages.TryGetValue(entry.SequenceNumber, out var msg))
+            {
+                return Task.FromResult<StoredMessage?>(msg);
+            }
+        }
+        return Task.FromResult<StoredMessage?>(null);
+    }
+
+    public Task<bool> TryUpdateLockedPayloadAsync(string queueName, Guid lockToken, byte[] encodedMessage, CancellationToken cancellationToken = default)
+    {
+        var state = GetQueue(queueName);
+        lock (state.Sync)
+        {
+            if (!state.Locks.TryGetValue(lockToken, out var entry)
+                || !state.Messages.TryGetValue(entry.SequenceNumber, out var msg))
+            {
+                return Task.FromResult(false);
+            }
+            state.Messages[entry.SequenceNumber] = msg with { EncodedMessage = encodedMessage };
+            return Task.FromResult(true);
+        }
+    }
+
     public Task<bool> TryDeferAsync(
         string queueName,
         Guid lockToken,

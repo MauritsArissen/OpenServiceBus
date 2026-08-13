@@ -770,6 +770,51 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    public async Task<StoredMessage?> TryGetLockedAsync(string queueName, Guid lockToken, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT m.sequence_number, m.enqueued_at, m.encoded_message, m.delivery_count,
+                       m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id
+                FROM locks l
+                JOIN messages m ON m.queue_name = l.queue_name AND m.sequence_number = l.sequence_number
+                WHERE l.lock_token = $t
+                """;
+            cmd.Parameters.AddWithValue("$t", lockToken.ToString("D"));
+            using var rdr = cmd.ExecuteReader();
+            if (!rdr.Read()) return null;
+            return ReadStoredMessage(rdr, sequenceColIndex: 0);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<bool> TryUpdateLockedPayloadAsync(string queueName, Guid lockToken, byte[] encodedMessage, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return WithTransaction(tx =>
+            {
+                var entry = ReadLock(tx, lockToken);
+                if (entry is null) return false;
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    UPDATE messages SET encoded_message = $body
+                    WHERE queue_name = $q AND sequence_number = $seq
+                    """;
+                cmd.Parameters.AddWithValue("$body", encodedMessage);
+                cmd.Parameters.AddWithValue("$q", entry.QueueName);
+                cmd.Parameters.AddWithValue("$seq", entry.SequenceNumber);
+                return cmd.ExecuteNonQuery() > 0;
+            });
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task<bool> TryAbandonAsync(string queueName, Guid lockToken, CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);

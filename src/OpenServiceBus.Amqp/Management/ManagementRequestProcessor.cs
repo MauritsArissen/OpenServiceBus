@@ -3,6 +3,7 @@ using Amqp.Framing;
 using Amqp.Listener;
 using Amqp.Types;
 using Microsoft.Extensions.Logging;
+using OpenServiceBus.Amqp.Settlement;
 using OpenServiceBus.Amqp.Topics;
 using OpenServiceBus.Core.Entities;
 using OpenServiceBus.Core.Filters;
@@ -72,6 +73,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
     private const string DispositionStatusBodyKey = "disposition-status";
     private const string DeadLetterReasonBodyKey = "deadletter-reason";
     private const string DeadLetterDescriptionBodyKey = "deadletter-description";
+    private const string PropertiesToModifyBodyKey = "properties-to-modify";
 
     // Wire values for disposition-status (lowercased Enum.ToString() from the SDK's DispositionStatus).
     private const string DispositionCompleted = "completed";
@@ -451,6 +453,10 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
 
         var reason = body.TryGetValue(DeadLetterReasonBodyKey, out var r) ? r as string : null;
         var description = body.TryGetValue(DeadLetterDescriptionBodyKey, out var d) ? d as string : null;
+        // The SDK settlement overloads carry PropertiesToModify here when settling by lock
+        // token (e.g. after link recovery) - merge before the settle, like the link path.
+        var propertiesToModify = PropertiesToModifyCodec.FromMap(
+            body.TryGetValue(PropertiesToModifyBodyKey, out var p) ? p : null);
 
         foreach (var token in lockTokens)
         {
@@ -460,13 +466,15 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
                     _store.TryCompleteAsync(_entityName, token).GetAwaiter().GetResult();
                     break;
                 case DispositionAbandoned:
+                    ApplyPropertiesToModifyAsync(token, propertiesToModify).GetAwaiter().GetResult();
                     _store.TryAbandonAsync(_entityName, token).GetAwaiter().GetResult();
                     break;
                 case DispositionDeferred:
+                    ApplyPropertiesToModifyAsync(token, propertiesToModify).GetAwaiter().GetResult();
                     _store.TryDeferAsync(_entityName, token).GetAwaiter().GetResult();
                     break;
                 case DispositionSuspended:
-                    DeadLetterViaManagementAsync(token, reason, description).GetAwaiter().GetResult();
+                    DeadLetterViaManagementAsync(token, reason, description, propertiesToModify).GetAwaiter().GetResult();
                     break;
                 default:
                     return BuildResponse(request, 400, $"BadRequest: unknown disposition-status '{status}'");
@@ -476,12 +484,21 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         return BuildResponse(request, 200, "OK");
     }
 
+    private async Task ApplyPropertiesToModifyAsync(Guid lockToken, IReadOnlyDictionary<string, object?>? properties)
+    {
+        if (properties is null || properties.Count == 0) return;
+        var locked = await _store.TryGetLockedAsync(_entityName, lockToken).ConfigureAwait(false);
+        if (locked is null) return;
+        var merged = PropertiesToModifyCodec.MergeIntoEncoded(locked.EncodedMessage, properties);
+        await _store.TryUpdateLockedPayloadAsync(_entityName, lockToken, merged).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Move a locked message to the DLQ via the management path (when the original receiver link
     /// is no longer in scope - e.g. for a message retrieved via receive-by-sequence-number).
     /// Mirrors <c>QueueReceiverSource.DeadLetterAsync</c> at this layer.
     /// </summary>
-    private async Task DeadLetterViaManagementAsync(Guid lockToken, string? reason, string? description)
+    private async Task DeadLetterViaManagementAsync(Guid lockToken, string? reason, string? description, IReadOnlyDictionary<string, object?>? propertiesToModify = null)
     {
         if (EntityNames.IsDeadLetterQueue(_entityName))
         {
@@ -492,7 +509,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         var removed = await _store.TryRemoveLockedAsync(_entityName, lockToken).ConfigureAwait(false);
         if (removed is null) return;
 
-        var dlqBytes = DeadLettering.DeadLetterEncoder.AppendDeadLetterHeaders(removed.EncodedMessage, _entityName, reason, description);
+        var dlqBytes = DeadLettering.DeadLetterEncoder.AppendDeadLetterHeaders(removed.EncodedMessage, _entityName, reason, description, propertiesToModify);
         // Honor ForwardDeadLetteredMessagesTo when set, fallback to local DLQ.
         var dlqTarget = string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo)
             ? _entityName + EntityNames.DeadLetterSuffix

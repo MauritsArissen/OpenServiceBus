@@ -21,12 +21,22 @@ internal static class DeadLetterEncoder
         byte[] originalEncoded,
         string sourceQueue,
         string? reason,
-        string? description)
+        string? description,
+        IReadOnlyDictionary<string, object?>? propertiesToModify = null)
     {
         var buffer = new ByteBuffer(originalEncoded, 0, originalEncoded.Length, originalEncoded.Length);
         var msg = Message.Decode(buffer);
 
         msg.ApplicationProperties ??= new ApplicationProperties();
+        // PropertiesToModify from the dead-letter call merge first; the broker-stamped
+        // reason/description headers win on a key collision, matching Azure.
+        if (propertiesToModify is not null)
+        {
+            foreach (var (key, value) in propertiesToModify)
+            {
+                msg.ApplicationProperties[key] = value;
+            }
+        }
         if (reason is not null) msg.ApplicationProperties[DeadLetterReasonHeader] = reason;
         if (description is not null) msg.ApplicationProperties[DeadLetterErrorDescriptionHeader] = description;
 
