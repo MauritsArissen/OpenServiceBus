@@ -5,6 +5,7 @@
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
+//   -> topic schedule
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -405,6 +406,30 @@ try
     Check("lock lost", llOk, llDetail);
     await llReceiver.CloseAsync();
     await admin.DeleteQueueAsync(llQueue);
+
+    // 25. topic schedule - ScheduleMessageAsync against a TOPIC sender (issue #53): the
+    // broker holds the publish at the topic and fans it out at the due time; a cancelled
+    // schedule never fans out.
+    var schedTopic = $"smoke-sched-topic-{stamp}";
+    await admin.CreateTopicAsync(schedTopic);
+    await admin.CreateSubscriptionAsync(schedTopic, "s1");
+    var schedSender = client.CreateSender(schedTopic);
+    var dueSeq = await schedSender.ScheduleMessageAsync(
+        new ServiceBusMessage("due soon") { MessageId = $"ts-{stamp}" }, DateTimeOffset.UtcNow.AddSeconds(2));
+    var cancelSeq = await schedSender.ScheduleMessageAsync(
+        new ServiceBusMessage("never") { MessageId = $"ts-never-{stamp}" }, DateTimeOffset.UtcNow.AddMinutes(5));
+    await schedSender.CancelScheduledMessageAsync(cancelSeq);
+    await schedSender.CloseAsync();
+    var schedReceiver = client.CreateReceiver(schedTopic, "s1");
+    var dueMsg = await schedReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    if (dueMsg is not null) await schedReceiver.CompleteMessageAsync(dueMsg);
+    var extraSched = await schedReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2));
+    if (extraSched is not null) await schedReceiver.CompleteMessageAsync(extraSched);
+    await schedReceiver.CloseAsync();
+    var schedOk = dueSeq > 0 && dueMsg is not null && dueMsg.Body.ToString() == "due soon" && extraSched is null;
+    Check("topic schedule", schedOk,
+        schedOk ? "" : dueMsg is null ? "scheduled message never arrived" : "cancelled message leaked");
+    await admin.DeleteTopicAsync(schedTopic);
 }
 catch (Exception e)
 {

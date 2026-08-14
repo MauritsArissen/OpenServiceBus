@@ -77,6 +77,7 @@ attach (receiver) → /<queue> + SessionFilter   → SessionReceiverSource
 attach (receiver) → /<queue>/$DeadLetterQueue  → QueueReceiverSource (DLQ mode)
 attach (receiver) → /<topic>/Subscriptions/<s> → QueueReceiverSource on backing queue
 $management       → ManagementRequestProcessor (renew, peek, schedule, sessions, rules, …)
+<topic>/$management → ManagementRequestProcessor in topic mode (schedule/cancel only)
 $cbs              → CbsRequestProcessor (token validation when SAS enabled)
 ```
 

@@ -32,6 +32,7 @@ import java.util.regex.Pattern;
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
  *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
  *   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
+ *   -> topic schedule
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -698,6 +699,52 @@ public final class Smoke {
             results.add(llOk ? "PASS lock lost" : "FAIL lock lost: " + llDetail);
             http.send(
                 HttpRequest.newBuilder(llQueueUri).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+
+            // 25. topic schedule - scheduleMessage against a TOPIC sender (issue #53): the
+            // broker holds the publish at the topic and fans it out at the due time; a
+            // cancelled schedule never fans out.
+            String schedTopic = "smoke-sched-topic-" + stamp;
+            http.send(atomPut.apply(schedTopic,
+                "<TopicDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            http.send(atomPut.apply(schedTopic + "/subscriptions/s1",
+                "<SubscriptionDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            boolean schedOk = false;
+            String schedDetail = "scheduled message never arrived";
+            try (ServiceBusSenderClient schedSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().topicName(schedTopic).buildClient()) {
+                ServiceBusMessage dueSoon = new ServiceBusMessage("due soon");
+                dueSoon.setMessageId("ts-" + stamp);
+                Long dueSeq = schedSender.scheduleMessage(dueSoon, OffsetDateTime.now().plusSeconds(2));
+                ServiceBusMessage never = new ServiceBusMessage("never");
+                never.setMessageId("ts-never-" + stamp);
+                Long cancelSeq = schedSender.scheduleMessage(never, OffsetDateTime.now().plusMinutes(5));
+                schedSender.cancelScheduledMessage(cancelSeq);
+                if (dueSeq != null && dueSeq > 0) {
+                    try (ServiceBusReceiverClient schedReceiver = new ServiceBusClientBuilder()
+                            .connectionString(conn).retryOptions(retry)
+                            .receiver().topicName(schedTopic).subscriptionName("s1")
+                            .disableAutoComplete().buildClient()) {
+                        ServiceBusReceivedMessage dueMsg = null;
+                        for (ServiceBusReceivedMessage m : schedReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                            dueMsg = m;
+                            schedReceiver.complete(m);
+                        }
+                        ServiceBusReceivedMessage extraSched = null;
+                        for (ServiceBusReceivedMessage m : schedReceiver.receiveMessages(1, Duration.ofSeconds(2))) {
+                            extraSched = m;
+                            schedReceiver.complete(m);
+                        }
+                        schedOk = dueMsg != null && "due soon".equals(dueMsg.getBody().toString()) && extraSched == null;
+                        schedDetail = schedOk ? ""
+                            : dueMsg == null ? "scheduled message never arrived" : "cancelled message leaked";
+                    }
+                }
+            }
+            results.add(schedOk ? "PASS topic schedule" : "FAIL topic schedule: " + schedDetail);
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + schedTopic + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);
         }

@@ -312,31 +312,8 @@ public sealed class TopicSenderProcessor : IMessageProcessor
         return usage;
     }
 
-    private static MessageFilterContext BuildFilterContext(Message msg, DateTimeOffset enqueuedAt)
-    {
-        var appProps = new Dictionary<string, object?>(StringComparer.Ordinal);
-        if (msg.ApplicationProperties is not null)
-        {
-            foreach (var key in msg.ApplicationProperties.Map.Keys)
-            {
-                if (key is null) continue;
-                appProps[key.ToString()!] = msg.ApplicationProperties.Map[key];
-            }
-        }
-        return new MessageFilterContext
-        {
-            MessageId = msg.Properties?.MessageId,
-            CorrelationId = msg.Properties?.CorrelationId,
-            Subject = msg.Properties?.Subject,
-            To = msg.Properties?.To,
-            ReplyTo = msg.Properties?.ReplyTo,
-            ReplyToSessionId = msg.Properties?.ReplyToGroupId,
-            SessionId = msg.Properties?.GroupId,
-            ContentType = msg.Properties?.ContentType,
-            EnqueuedTimeUtc = enqueuedAt,
-            ApplicationProperties = appProps,
-        };
-    }
+    private static MessageFilterContext BuildFilterContext(Message msg, DateTimeOffset enqueuedAt) =>
+        AmqpFilterContext.FromMessage(msg, enqueuedAt);
 
     private static Message DecodeMessage(byte[] bytes)
     {

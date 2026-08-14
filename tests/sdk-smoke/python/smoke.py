@@ -4,7 +4,7 @@ Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   send -> peek -> receive -> complete -> schedule -> cancelSchedule -> session receive
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
-  -> queue dedup -> topic dedup -> batch dedup -> lock lost
+  -> queue dedup -> topic dedup -> batch dedup -> lock lost -> topic schedule
   (-> abandon props runs in the other three smokes; azure-servicebus for Python does not
    expose propertiesToModify on its settlement methods, so there is nothing to exercise)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
@@ -454,6 +454,34 @@ def run() -> None:
                     ll_detail = "no redelivery"
         check("lock lost", ll_ok, ll_detail)
         http("DELETE", f"{base}/{ll_queue}?api-version=2021-05")
+
+        # 25. topic schedule - schedule_messages against a TOPIC sender (issue #53): the
+        # broker holds the publish at the topic and fans it out at the due time; a
+        # cancelled schedule never fans out.
+        sched_topic = f"smoke-sched-topic-{stamp}"
+        http("PUT", f"{base}/{sched_topic}?api-version=2021-05", atom_entry(
+            '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        http("PUT", f"{base}/{sched_topic}/subscriptions/s1?api-version=2021-05", atom_entry(
+            '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        with client.get_topic_sender(sched_topic) as sched_sender:
+            due_seqs = sched_sender.schedule_messages(
+                ServiceBusMessage("due soon", message_id=f"ts-{stamp}"),
+                datetime.now(timezone.utc) + timedelta(seconds=2))
+            cancel_seqs = sched_sender.schedule_messages(
+                ServiceBusMessage("never", message_id=f"ts-never-{stamp}"),
+                datetime.now(timezone.utc) + timedelta(minutes=5))
+            sched_sender.cancel_scheduled_messages(cancel_seqs)
+        with client.get_subscription_receiver(sched_topic, "s1", max_wait_time=10) as sched_receiver:
+            due = sched_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+            if due:
+                sched_receiver.complete_message(due[0])
+            extra_sched = sched_receiver.receive_messages(max_message_count=1, max_wait_time=2)
+            if extra_sched:
+                sched_receiver.complete_message(extra_sched[0])
+        sched_ok = bool(due_seqs) and bool(due) and str(due[0]) == "due soon" and not extra_sched
+        check("topic schedule", sched_ok,
+              "" if sched_ok else ("scheduled message never arrived" if not due else "cancelled message leaked"))
+        http("DELETE", f"{base}/{sched_topic}?api-version=2021-05")
 
 
 try:

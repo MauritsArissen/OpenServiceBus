@@ -178,6 +178,19 @@ the topic, a repeated `MessageId` inside the window is dropped at the topic BEFO
 fan-out, so every subscription receives exactly one copy - see
 [Duplicate Detection](Duplicate-Detection).
 
+## Scheduled publishes
+
+`ScheduleMessageAsync` / `CancelScheduledMessageAsync` work against a topic sender, same
+as queues: the broker holds the scheduled publish AT THE TOPIC (it appears in no
+subscription until due) and fans it out at activation time. Because fan-out happens at
+activation, subscription filters are evaluated then - a subscription created between
+scheduling and activation receives its copy, matching Azure. On a duplicate-detection
+topic the `MessageId` is reserved at SCHEDULE time, so an immediate publish or a second
+schedule with the same id inside the window is silently dropped (the second schedule
+reports sequence number 0). Cancelling uses the sequence number returned by the schedule;
+purging or deleting the topic discards pending scheduled publishes. Setting
+`ScheduledEnqueueTime` on a plain send still works as before.
+
 ## DLQ for a subscription
 
 Same shape as queue DLQs, just nested:

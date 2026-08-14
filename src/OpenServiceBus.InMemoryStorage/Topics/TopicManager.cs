@@ -33,12 +33,14 @@ public sealed class TopicManager : ITopicRegistry
     }
 
     public event EventHandler<TopicDescriptor>? TopicCreated;
+    public event EventHandler<TopicDescriptor>? TopicUpdated;
     public event EventHandler<TopicDescriptor>? TopicDeleted;
     public event EventHandler<SubscriptionDescriptor>? SubscriptionCreated;
     public event EventHandler<SubscriptionDescriptor>? SubscriptionUpdated;
     public event EventHandler<SubscriptionDescriptor>? SubscriptionDeleted;
 
     event EventHandler<TopicDescriptor> ITopicRegistry.TopicCreated { add => TopicCreated += value; remove => TopicCreated -= value; }
+    event EventHandler<TopicDescriptor> ITopicRegistry.TopicUpdated { add => TopicUpdated += value; remove => TopicUpdated -= value; }
     event EventHandler<TopicDescriptor> ITopicRegistry.TopicDeleted { add => TopicDeleted += value; remove => TopicDeleted -= value; }
     event EventHandler<SubscriptionDescriptor> ITopicRegistry.SubscriptionCreated { add => SubscriptionCreated += value; remove => SubscriptionCreated -= value; }
     event EventHandler<SubscriptionDescriptor> ITopicRegistry.SubscriptionUpdated { add => SubscriptionUpdated += value; remove => SubscriptionUpdated -= value; }
@@ -54,6 +56,9 @@ public sealed class TopicManager : ITopicRegistry
         {
             if (_store is not null)
             {
+                // The topic's own store queue holds SCHEDULED publishes until activation
+                // (immediate publishes fan out without ever touching it).
+                await _store.CreateQueueAsync(descriptor.Name, cancellationToken).ConfigureAwait(false);
                 await _store.SaveTopicDescriptorAsync(descriptor.Name, TopicDescriptorJson.Serialize(descriptor), cancellationToken).ConfigureAwait(false);
             }
             TopicCreated?.Invoke(this, descriptor);
@@ -79,6 +84,7 @@ public sealed class TopicManager : ITopicRegistry
                 {
                     await _store.SaveTopicDescriptorAsync(descriptor.Name, TopicDescriptorJson.Serialize(descriptor), cancellationToken).ConfigureAwait(false);
                 }
+                TopicUpdated?.Invoke(this, descriptor);
                 return descriptor;
             }
         }
@@ -104,6 +110,7 @@ public sealed class TopicManager : ITopicRegistry
         }
         if (_store is not null)
         {
+            await _store.DeleteQueueAsync(name, cancellationToken).ConfigureAwait(false);
             await _store.DeleteTopicDescriptorAsync(name, cancellationToken).ConfigureAwait(false);
             await _store.ClearTopicDedupHistoryAsync(name, cancellationToken).ConfigureAwait(false);
         }

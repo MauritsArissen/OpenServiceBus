@@ -106,13 +106,19 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
 
         // Per-subscription $management endpoint registration. Subscription backing
         // queues route here so rule-management ops can resolve through the topic registry.
+        // Topics get their own node too, so ScheduleMessageAsync / CancelScheduledMessageAsync
+        // against a topic sender have somewhere to land.
         if (_topicRegistry is not null)
         {
+            _topicRegistry.TopicCreated += OnTopicCreated;
+            _topicRegistry.TopicUpdated += OnTopicCreated;
+            _topicRegistry.TopicDeleted += OnTopicDeleted;
             _topicRegistry.SubscriptionCreated += OnSubscriptionCreated;
             _topicRegistry.SubscriptionUpdated += OnSubscriptionCreated;
             _topicRegistry.SubscriptionDeleted += OnSubscriptionDeleted;
             foreach (var topic in await _topicRegistry.ListTopicsAsync(cancellationToken).ConfigureAwait(false))
             {
+                RegisterTopicManagementEndpoint(topic);
                 foreach (var sub in await _topicRegistry.ListSubscriptionsAsync(topic.Name, cancellationToken).ConfigureAwait(false))
                 {
                     RegisterSubscriptionManagementEndpoint(sub);
@@ -132,6 +138,9 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
         _queueRegistry.QueueDeleted -= OnQueueDeleted;
         if (_topicRegistry is not null)
         {
+            _topicRegistry.TopicCreated -= OnTopicCreated;
+            _topicRegistry.TopicUpdated -= OnTopicCreated;
+            _topicRegistry.TopicDeleted -= OnTopicDeleted;
             _topicRegistry.SubscriptionCreated -= OnSubscriptionCreated;
             _topicRegistry.SubscriptionUpdated -= OnSubscriptionCreated;
             _topicRegistry.SubscriptionDeleted -= OnSubscriptionDeleted;
@@ -198,6 +207,40 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
 
         _requestNodes.Register(descriptor.Name + "/$management", processor);
         _logger.LogDebug("Registered $management endpoint for queue {Queue}", descriptor.Name);
+    }
+
+    // Also invoked on TopicUpdated: re-registering swaps the processor's captured
+    // descriptor snapshot for the new one, same as the queue nodes.
+    private void OnTopicCreated(object? sender, TopicDescriptor descriptor) =>
+        RegisterTopicManagementEndpoint(descriptor);
+
+    private void OnTopicDeleted(object? sender, TopicDescriptor descriptor)
+    {
+        if (_host is null) return;
+        try
+        {
+            _requestNodes.Unregister(descriptor.Name + "/$management");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to unregister $management for topic {Topic}", descriptor.Name);
+        }
+    }
+
+    private void RegisterTopicManagementEndpoint(TopicDescriptor descriptor)
+    {
+        if (_host is null) return;
+
+        var processor = new ManagementRequestProcessor(
+            descriptor,
+            _messageStore,
+            _router,
+            _timeProvider,
+            _loggerFactory.CreateLogger<ManagementRequestProcessor>(),
+            _activity);
+
+        _requestNodes.Register(descriptor.Name + "/$management", processor);
+        _logger.LogDebug("Registered $management endpoint for topic {Topic}", descriptor.Name);
     }
 
     private void OnSubscriptionCreated(object? sender, SubscriptionDescriptor descriptor) =>

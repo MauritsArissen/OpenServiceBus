@@ -56,6 +56,8 @@ public sealed class EntityPurger
         {
             purged += await PurgeBackingQueueAsync(sub.BackingQueueName, deadLetterOnly: false, cancellationToken).ConfigureAwait(false);
         }
+        // The topic's own store queue holds scheduled publishes that have not activated yet.
+        purged += await _store.PurgeAsync(name, cancellationToken).ConfigureAwait(false);
         // Same contract as queue purge: dedup bookkeeping goes with the messages, so a
         // reseeded topic accepts previously-seen MessageIds again.
         await _store.ClearTopicDedupHistoryAsync(name, cancellationToken).ConfigureAwait(false);

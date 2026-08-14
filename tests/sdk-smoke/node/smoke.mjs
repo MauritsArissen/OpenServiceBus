@@ -5,6 +5,7 @@
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
+//   -> topic schedule
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -460,6 +461,32 @@ const run = async () => {
   await llSender.close();
   await llReceiver.close();
   await fetch(`${httpBase}/${llQueue}?api-version=2021-05`, { method: "DELETE" });
+
+  // 25. topic schedule - scheduleMessages against a TOPIC sender (issue #53): the broker
+  // holds the publish at the topic and fans it out at the due time; a cancelled schedule
+  // never fans out.
+  const schedTopic = `smoke-sched-topic-${stamp}`;
+  await atomPut(schedTopic,
+    '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  await atomPut(`${schedTopic}/subscriptions/s1`,
+    '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  const schedSender = client.createSender(schedTopic);
+  const [dueSeq] = await schedSender.scheduleMessages(
+    { body: "due soon", messageId: `ts-${stamp}` }, new Date(Date.now() + 2000));
+  const [cancelSeq] = await schedSender.scheduleMessages(
+    { body: "never", messageId: `ts-never-${stamp}` }, new Date(Date.now() + 300_000));
+  await schedSender.cancelScheduledMessages([cancelSeq]);
+  await schedSender.close();
+  const schedReceiver = client.createReceiver(schedTopic, "s1");
+  const [dueMsg] = await schedReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  if (dueMsg) await schedReceiver.completeMessage(dueMsg);
+  const [extraSched] = await schedReceiver.receiveMessages(1, { maxWaitTimeInMs: 2000 });
+  if (extraSched) await schedReceiver.completeMessage(extraSched);
+  await schedReceiver.close();
+  const schedOk = !!dueSeq && !!dueMsg && dueMsg.body === "due soon" && !extraSched;
+  check("topic schedule", schedOk,
+    schedOk ? "" : !dueMsg ? "scheduled message never arrived" : "cancelled message leaked");
+  await fetch(`${httpBase}/${schedTopic}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>
