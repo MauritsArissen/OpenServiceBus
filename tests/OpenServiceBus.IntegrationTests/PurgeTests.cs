@@ -75,7 +75,7 @@ public class PurgeTests
     }
 
     [Fact]
-    public async Task Purge_WithAMessageInFlight_SettlingItIsAQuietNoOp()
+    public async Task Purge_WithAMessageInFlight_SettlingItThrowsMessageLockLost()
     {
         await using var host = await OpenServiceBusTestHost.StartAsync();
         await host.CreateQueueAsync("inflight");
@@ -88,10 +88,15 @@ public class PurgeTests
 
         (await host.PurgeQueueAsync("inflight")).ShouldBe(1L);
 
-        await receiver.CompleteMessageAsync(held);
+        // The purge removed the locked message, so settling it fails exactly like an
+        // expired lock would - MessageLockLost, not a silent no-op (issue #52).
+        var ex = await Should.ThrowAsync<ServiceBusException>(() => receiver.CompleteMessageAsync(held));
+        ex.Reason.ShouldBe(ServiceBusFailureReason.MessageLockLost);
 
         await client.CreateSender("inflight").SendMessageAsync(new ServiceBusMessage("still-works"));
-        (await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10))).ShouldNotBeNull();
+        var after = await receiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        after.ShouldNotBeNull();
+        await receiver.CompleteMessageAsync(after);
     }
 
     [Fact]

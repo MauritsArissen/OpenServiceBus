@@ -80,7 +80,17 @@ $management       → ManagementRequestProcessor (renew, peek, schedule, session
 $cbs              → CbsRequestProcessor (token validation when SAS enabled)
 ```
 
-Three wire details worth knowing about dispositions, matching real Service Bus:
+Four wire details worth knowing about dispositions, matching real Service Bus:
+
+- A settle or renew against an expired/unknown lock FAILS instead of silently
+  succeeding: link dispositions are settled `Rejected` with
+  `com.microsoft:message-lock-lost` (or `com.microsoft:session-lock-lost` when the whole
+  session lock is gone), the `$management` update-disposition and renew operations reply
+  410 with the same condition, a transactional disposition whose lock expires before
+  commit fails the discharge, and a session receiver whose session lock is lost is
+  detached with the condition instead of going silent. The lock DEADLINE is what counts -
+  an expired lock refuses settlement even before the sweeper reclaims it, and the message
+  becomes available for redelivery immediately.
 
 - Settling a peek-lock disposition ECHOES the receiver's outcome (Rejected for
   dead-letter, Modified for abandon/defer, Accepted for complete) instead of blanket

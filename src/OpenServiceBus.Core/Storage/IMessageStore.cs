@@ -321,6 +321,13 @@ public interface IMessageStore
         string sessionId,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// True while the session lock is currently held and unexpired - and, when
+    /// <paramref name="linkName"/> is provided, held by that link. Read-only; used by the
+    /// settlement paths to distinguish a lost message lock from a lost session lock.
+    /// </summary>
+    Task<bool> IsSessionLockHeldAsync(string queueName, string sessionId, string? linkName = null, CancellationToken cancellationToken = default);
+
     /// <summary>Enumerate session ids on the queue that have at least one available message OR a stored state.</summary>
     IReadOnlyList<string> ListSessions(string queueName);
 }
