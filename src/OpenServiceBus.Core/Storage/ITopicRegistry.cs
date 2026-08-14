@@ -54,6 +54,9 @@ public interface ITopicRegistry
     IReadOnlyList<SubscriberMatch> EvaluateSubscriberMatches(string topicName, MessageFilterContext message);
 
     event EventHandler<TopicDescriptor> TopicCreated;
+
+    /// <summary>Raised after a topic's descriptor has been replaced via <see cref="UpdateTopicAsync"/>.</summary>
+    event EventHandler<TopicDescriptor> TopicUpdated;
     event EventHandler<TopicDescriptor> TopicDeleted;
     event EventHandler<SubscriptionDescriptor> SubscriptionCreated;
 

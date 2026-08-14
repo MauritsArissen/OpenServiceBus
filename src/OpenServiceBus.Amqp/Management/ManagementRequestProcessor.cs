@@ -105,6 +105,11 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
     private readonly string? _topicName;
     private readonly string? _subscriptionName;
 
+    // Set only when this processor sits in front of a TOPIC ($management on the topic
+    // itself): only the sender-side schedule/cancel operations are served, and the
+    // duplicate-detection check runs against the topic-level history.
+    private readonly bool _isTopicNode;
+
     public ManagementRequestProcessor(
         string entityName,
         QueueDescriptor descriptor,
@@ -147,6 +152,39 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         _subscriptionName = subscriptionName;
     }
 
+    /// <summary>
+    /// Topic-mode overload: serves <c>&lt;topic&gt;/$management</c> with the sender-side
+    /// operations (schedule / cancel-scheduled) only. Scheduled publishes are held in the
+    /// topic's own store queue until the activation sweep fans them out through the router;
+    /// duplicate detection is evaluated at SCHEDULE time against the topic-level history,
+    /// so scheduled and immediate publishes dedup against each other. The synthetic queue
+    /// descriptor carries the topic's TTL/status/size/dedup settings so the shared handler
+    /// logic reads the right values; a fresh processor is registered on every TopicUpdated,
+    /// same as queue nodes.
+    /// </summary>
+    public ManagementRequestProcessor(
+        TopicDescriptor topic,
+        IMessageStore store,
+        IMessageRouter router,
+        TimeProvider timeProvider,
+        ILogger<ManagementRequestProcessor> logger,
+        EntityActivityTracker? activityTracker = null)
+        : this(topic.Name, SyntheticTopicQueue(topic), store, router, timeProvider, logger, activityTracker)
+    {
+        _isTopicNode = true;
+    }
+
+    private static QueueDescriptor SyntheticTopicQueue(TopicDescriptor topic) => new()
+    {
+        Name = topic.Name,
+        DefaultMessageTimeToLive = topic.DefaultMessageTimeToLive,
+        Status = topic.Status,
+        MaxSizeInMegabytes = topic.MaxSizeInMegabytes,
+        MaxMessageSizeInKilobytes = topic.MaxMessageSizeInKilobytes,
+        RequiresDuplicateDetection = topic.RequiresDuplicateDetection,
+        DuplicateDetectionHistoryTimeWindow = topic.DuplicateDetectionHistoryTimeWindow,
+    };
+
     public int Credit => 100;
 
     public Message HandleRequest(Message request, Connection? connection)
@@ -156,6 +194,14 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
 
         try
         {
+            // A topic stores no receivable messages - only the sender-side operations exist
+            // on its node, exactly like real Service Bus.
+            if (_isTopicNode && operation is not (ScheduleMessageOperation or CancelScheduledMessageOperation))
+            {
+                return BuildResponse(request, 400,
+                    $"BadRequest: operation '{operation}' is not supported on a topic $management node.");
+            }
+
             return operation switch
             {
                 RenewLockOperation => HandleRenewLock(request),
@@ -304,6 +350,25 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
             var dedupWindow = DuplicateDetection.EffectiveWindow(
                 _descriptor.RequiresDuplicateDetection, _descriptor.DuplicateDetectionHistoryTimeWindow);
             var messageId = dedupWindow is not null ? amqp.Properties?.MessageId?.ToString() : null;
+
+            // Topic mode checks the TOPIC-LEVEL dedup history (at schedule time, like the
+            // live publish path) instead of the holding queue's own window, so scheduled
+            // and immediate publishes dedup against each other. A duplicate is silently
+            // dropped; there is no original sequence number to return for topic dedup, so
+            // the SDK sees 0 for that entry.
+            if (_isTopicNode)
+            {
+                if (dedupWindow is { } topicWindow && !string.IsNullOrEmpty(messageId)
+                    && _store.CheckTopicDuplicateAsync(_entityName, messageId!, topicWindow).GetAwaiter().GetResult())
+                {
+                    sequenceNumbers[i] = 0;
+                    continue;
+                }
+                var held = _store.EnqueueAsync(_entityName, encoded, expiresAt, scheduledTime,
+                    sessionId: null, messageId: null, duplicateDetectionWindow: null).GetAwaiter().GetResult();
+                sequenceNumbers[i] = held.SequenceNumber;
+                continue;
+            }
 
             var stored = _store.EnqueueAsync(_entityName, encoded, expiresAt, scheduledTime, sessionId, messageId, dedupWindow).GetAwaiter().GetResult();
             sequenceNumbers[i] = stored.SequenceNumber;

@@ -177,7 +177,9 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
             storeAsIface,
             queues,
             opts.TimeProvider,
-            NullLogger<ScheduledMessageActivator>.Instance);
+            NullLogger<ScheduledMessageActivator>.Instance,
+            topics,
+            router);
 
         var idleReaper = new IdleEntityReaper(
             queues,

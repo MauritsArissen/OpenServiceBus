@@ -130,6 +130,14 @@ public sealed class QueueRehydrationHostedService : IHostedService
                 continue;
             }
 
+            // A store queue named after a topic is that topic's scheduled-publish holding
+            // queue, not a user queue - the topic itself was already restored above.
+            if (_topics is not null
+                && await _topics.GetTopicAsync(name, cancellationToken).ConfigureAwait(false) is not null)
+            {
+                continue;
+            }
+
             // Plain queue - restored from its persisted descriptor snapshot when one exists.
             if (knownQueues.Contains(name)) continue;
             var descriptor = savedDescriptors.TryGetValue(name, out var json)
