@@ -87,7 +87,40 @@ CREATE TABLE locks (
 CREATE TABLE session_locks    ( queue_name, session_id, locked_until, link_name );
 CREATE TABLE session_state    ( queue_name, session_id, state BLOB );
 CREATE TABLE dedup_history    ( queue_name, message_id, original_sequence_number, expires_at );
+
+-- Entity settings, as opaque JSON snapshots written on every create/update.
+CREATE TABLE queue_descriptors (
+    queue_name      TEXT PRIMARY KEY COLLATE NOCASE,
+    descriptor_json TEXT NOT NULL
+);
+
+CREATE TABLE topic_descriptors (
+    topic_name      TEXT PRIMARY KEY COLLATE NOCASE,
+    descriptor_json TEXT NOT NULL
+);
+
+CREATE TABLE subscription_descriptors (
+    topic_name        TEXT COLLATE NOCASE,
+    subscription_name TEXT COLLATE NOCASE,
+    descriptor_json   TEXT NOT NULL,
+    PRIMARY KEY (topic_name, subscription_name)
+);
+
+-- One row per rule: filter (True/False/SQL/correlation, with parameters) and optional action.
+CREATE TABLE subscription_rules (
+    topic_name        TEXT COLLATE NOCASE,
+    subscription_name TEXT COLLATE NOCASE,
+    rule_name         TEXT COLLATE NOCASE,
+    rule_json         TEXT NOT NULL,
+    PRIMARY KEY (topic_name, subscription_name, rule_name)
+);
+
+CREATE TABLE topic_dedup_history ( topic_name, message_id, expires_at );
 ```
+
+Deletes cascade top-down: dropping a topic removes its subscription and rule rows, and
+dropping a subscription removes its rules - no orphans are left behind for a later
+rehydration to resurrect.
 
 PRAGMAs set on every open:
 
@@ -104,23 +137,32 @@ can `sqlite3 broker.db` and inspect everything by hand.
 When the broker restarts against an existing `.db` file:
 
 1. SQLite opens, applies idempotent DDL (`IF NOT EXISTS`).
-2. `QueueRehydrationHostedService` runs after the config bootstrap. It calls
-   `IMessageStore.ListQueueNames()` and, for any queue not already in the registry,
-   creates a `QueueDescriptor` with **default settings** (lock 60s, max-delivery 10, no
-   sessions, no dedup, etc.).
+2. `QueueRehydrationHostedService` runs after the config bootstrap and hands off to
+   `EntityRehydrator`, which restores, in order:
+   1. **Topics** from `topic_descriptors` - full settings (status, TTL, duplicate
+      detection), including topics that have no subscriptions yet.
+   2. **Subscriptions** from `subscription_descriptors` - full settings, `RequiresSession`,
+      `ForwardTo`, `AutoDeleteOnIdle` and `UserMetadata` included.
+   3. **Queues** from `queue_descriptors` - full settings (lock duration, max-delivery,
+      sessions, dedup, status, forwarding).
+   4. **Rules** from `subscription_rules` - every filter shape (True, False, SQL with
+      parameters, correlation with typed properties) plus the optional SQL action.
 3. Messages are immediately receivable - sequence numbers and delivery counts survive.
 
-> 💡 **Per-queue settings are NOT persisted in the SQLite schema today.** They live only in
-> `QueueDescriptor` objects in memory. If you need declarative settings to survive
-> restarts, mount a `config.json` - the bootstrap service runs before rehydration, so
-> config-declared queues come up with the right shape and rehydration is a no-op for them.
+The restored rule set **replaces** the `$Default` TrueFilter a fresh subscription is born
+with, rather than merging alongside it. A `$Default` you deleted stays deleted; without
+that, every rehydrated subscription would silently widen back to match-all.
 
-> ⚠️ **Topics, subscriptions, and rules are not rehydrated at all.** Only queue names come
-> back from the store. Subscription backing queues (`events/Subscriptions/all`) resurface
-> as plain queues with their messages intact, but the topic itself, its subscription list,
-> and its filter rules are gone - senders attaching to the topic fail and fan-out stops.
-> If you use topics with SQLite persistence, declaring them in `config.json` is required,
-> not optional.
+> 💡 **`config.json` still wins where it conflicts.** The bootstrap service runs before
+> rehydration, so anything it declares is left exactly as declared and its subscriptions
+> keep their config-declared rules. Declaring topology in config is now an option rather
+> than a requirement.
+
+> ⚠️ **Databases written by older versions** have no `subscription_descriptors` rows. Those
+> subscriptions still come back through the legacy backing-queue-name scan, which recovers
+> only what the backing queue mirrors (lock duration, max-delivery, TTL, dead-lettering on
+> expiration, dead-letter forwarding, status) and gives them a `$Default` TrueFilter. Once
+> the subscription is next created or updated, it gets a real snapshot.
 
 ## File location tips
 
@@ -141,3 +183,6 @@ Highlights:
   instance wrote.
 - **5 SDK round-trip tests** booting the full broker with SQLite as the backing store,
   driving via the real `Azure.Messaging.ServiceBus` client.
+- **Topology rehydration tests** that build a topic, subscriptions and custom rules against
+  a `.db` file, close the store, reopen it and run `EntityRehydrator` over fresh registries
+  - asserting the restored filters still route (and still reject) the same messages.

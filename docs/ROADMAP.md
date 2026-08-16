@@ -15,9 +15,10 @@ chart, and the standalone docs site are still open. Individual milestones below 
 marked accordingly - the original scope text is kept for reference.
 
 Known gaps within shipped milestones (tracked as bugs/limitations, see the feature docs):
-transactional batched sends to topics, commit acknowledgement racing the replay, SAS
-enforcement for non-SDK clients that skip `$cbs`, and topic/subscription rehydration
-from SQLite (queues only today).
+transactional batched sends to topics, commit acknowledgement racing the replay, and SAS
+enforcement for non-SDK clients that skip `$cbs`. SQLite rehydration now covers the full
+topology - queues, topics, subscriptions and subscription rules - so `config.json` is a
+declarative convenience rather than a requirement for topics.
 
 ## Locked decisions
 

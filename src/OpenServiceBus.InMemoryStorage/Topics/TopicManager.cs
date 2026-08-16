@@ -179,13 +179,22 @@ public sealed class TopicManager : ITopicRegistry
 
         // Every fresh subscription gets a $Default rule with a TrueFilter - same as Azure SB.
         var rules = _rules.GetOrAdd(key, _ => new ConcurrentDictionary<string, RuleDescriptor>(StringComparer.OrdinalIgnoreCase));
-        rules[DefaultRuleName] = new RuleDescriptor
+        var defaultRule = new RuleDescriptor
         {
             TopicName = descriptor.TopicName,
             SubscriptionName = descriptor.Name,
             Name = DefaultRuleName,
             Filter = TrueFilter.Instance,
         };
+        rules[DefaultRuleName] = defaultRule;
+
+        if (_store is not null)
+        {
+            await _store.SaveSubscriptionDescriptorAsync(
+                descriptor.TopicName, descriptor.Name, SubscriptionDescriptorJson.Serialize(descriptor), cancellationToken).ConfigureAwait(false);
+            await _store.SaveSubscriptionRuleAsync(
+                descriptor.TopicName, descriptor.Name, DefaultRuleName, RuleDescriptorJson.Serialize(defaultRule), cancellationToken).ConfigureAwait(false);
+        }
 
         SubscriptionCreated?.Invoke(this, descriptor);
         return descriptor;
@@ -227,6 +236,12 @@ public sealed class TopicManager : ITopicRegistry
             }, cancellationToken).ConfigureAwait(false);
         }
 
+        if (_store is not null)
+        {
+            await _store.SaveSubscriptionDescriptorAsync(
+                descriptor.TopicName, descriptor.Name, SubscriptionDescriptorJson.Serialize(descriptor), cancellationToken).ConfigureAwait(false);
+        }
+
         SubscriptionUpdated?.Invoke(this, descriptor);
         return descriptor;
     }
@@ -256,11 +271,16 @@ public sealed class TopicManager : ITopicRegistry
         }
         _rules.TryRemove(key, out _);
         await _queues.DeleteAsync(sub.BackingQueueName, cancellationToken).ConfigureAwait(false);
+        if (_store is not null)
+        {
+            // Cascades the persisted rule snapshots with it.
+            await _store.DeleteSubscriptionDescriptorAsync(topicName, subscriptionName, cancellationToken).ConfigureAwait(false);
+        }
         SubscriptionDeleted?.Invoke(this, sub);
         return true;
     }
 
-    public Task<RuleDescriptor> CreateOrReplaceRuleAsync(RuleDescriptor rule, CancellationToken cancellationToken = default)
+    public async Task<RuleDescriptor> CreateOrReplaceRuleAsync(RuleDescriptor rule, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(rule);
         var key = SubKey(rule.TopicName, rule.SubscriptionName);
@@ -270,17 +290,26 @@ public sealed class TopicManager : ITopicRegistry
         }
         var rules = _rules.GetOrAdd(key, _ => new ConcurrentDictionary<string, RuleDescriptor>(StringComparer.OrdinalIgnoreCase));
         rules[rule.Name] = rule;
-        return Task.FromResult(rule);
+        if (_store is not null)
+        {
+            await _store.SaveSubscriptionRuleAsync(
+                rule.TopicName, rule.SubscriptionName, rule.Name, RuleDescriptorJson.Serialize(rule), cancellationToken).ConfigureAwait(false);
+        }
+        return rule;
     }
 
-    public Task<bool> DeleteRuleAsync(string topicName, string subscriptionName, string ruleName, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteRuleAsync(string topicName, string subscriptionName, string ruleName, CancellationToken cancellationToken = default)
     {
         var key = SubKey(topicName, subscriptionName);
-        if (!_rules.TryGetValue(key, out var rules))
+        if (!_rules.TryGetValue(key, out var rules) || !rules.TryRemove(ruleName, out _))
         {
-            return Task.FromResult(false);
+            return false;
         }
-        return Task.FromResult(rules.TryRemove(ruleName, out _));
+        if (_store is not null)
+        {
+            await _store.DeleteSubscriptionRuleAsync(topicName, subscriptionName, ruleName, cancellationToken).ConfigureAwait(false);
+        }
+        return true;
     }
 
     public Task<IReadOnlyList<RuleDescriptor>> ListRulesAsync(string topicName, string subscriptionName, CancellationToken cancellationToken = default)

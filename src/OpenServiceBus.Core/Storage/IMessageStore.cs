@@ -45,13 +45,61 @@ public interface IMessageStore
     Task SaveTopicDescriptorAsync(string topicName, string descriptorJson, CancellationToken cancellationToken = default) =>
         Task.CompletedTask;
 
-    /// <summary>Remove a topic's persisted descriptor snapshot (topic deletion).</summary>
+    /// <summary>
+    /// Remove a topic's persisted descriptor snapshot (topic deletion), along with the
+    /// subscription and rule snapshots hanging off it - nothing under a deleted topic may
+    /// survive to be rehydrated later.
+    /// </summary>
     Task DeleteTopicDescriptorAsync(string topicName, CancellationToken cancellationToken = default) =>
         Task.CompletedTask;
 
     /// <summary>Descriptor snapshots by topic name, as persisted by <see cref="SaveTopicDescriptorAsync"/>.</summary>
     IReadOnlyDictionary<string, string> LoadTopicDescriptors() =>
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Persist an opaque descriptor snapshot (JSON) for a subscription, replacing any previous
+    /// snapshot. Without this a restart can only recover the handful of settings the backing
+    /// queue mirrors; the subscription-only ones (session flag, forwarding, auto-delete,
+    /// metadata) are gone. The in-memory default is a no-op.
+    /// </summary>
+    Task SaveSubscriptionDescriptorAsync(string topicName, string subscriptionName, string descriptorJson, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
+    /// <summary>
+    /// Remove a subscription's persisted descriptor snapshot AND every rule snapshot attached
+    /// to it - a subscription's rules cannot outlive it, so persistent stores cascade here
+    /// rather than leaving orphaned rows behind.
+    /// </summary>
+    Task DeleteSubscriptionDescriptorAsync(string topicName, string subscriptionName, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
+    /// <summary>
+    /// Descriptor snapshots by subscription address (<c>&lt;topic&gt;/Subscriptions/&lt;sub&gt;</c>,
+    /// see <c>EntityNames.SubscriptionAddress</c>), as persisted by
+    /// <see cref="SaveSubscriptionDescriptorAsync"/>.
+    /// </summary>
+    IReadOnlyDictionary<string, string> LoadSubscriptionDescriptors() =>
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Persist an opaque snapshot (JSON) of a single subscription rule - filter, optional
+    /// action and their parameters - replacing any previous snapshot under the same rule name.
+    /// The in-memory default is a no-op.
+    /// </summary>
+    Task SaveSubscriptionRuleAsync(string topicName, string subscriptionName, string ruleName, string ruleJson, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
+    /// <summary>Remove a single persisted rule snapshot (rule deletion).</summary>
+    Task DeleteSubscriptionRuleAsync(string topicName, string subscriptionName, string ruleName, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
+    /// <summary>
+    /// Rule snapshots grouped by subscription address (<c>&lt;topic&gt;/Subscriptions/&lt;sub&gt;</c>),
+    /// as persisted by <see cref="SaveSubscriptionRuleAsync"/>.
+    /// </summary>
+    IReadOnlyDictionary<string, IReadOnlyList<string>> LoadSubscriptionRules() =>
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Topic-level duplicate detection: atomically checks whether <paramref name="messageId"/>
