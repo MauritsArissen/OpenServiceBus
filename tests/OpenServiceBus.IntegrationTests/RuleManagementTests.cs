@@ -130,6 +130,40 @@ public class RuleManagementTests
         await Should.ThrowAsync<ServiceBusException>(() => ruleManager.DeleteRuleAsync("does-not-exist"));
     }
 
+    [Fact]
+    public async Task CreateRuleAsync_CorrelationFilterWithNumericProperty_MatchesAcrossNumericWidthAndNameCasing()
+    {
+        await using var harness = await IntegrationHarness.StartAsync();
+        await harness.Topics.CreateTopicAsync(new TopicDescriptor { Name = "events" });
+        await harness.Topics.CreateSubscriptionAsync(new SubscriptionDescriptor { TopicName = "events", Name = "priority-five" });
+
+        await using var client = new ServiceBusClient(harness.ConnectionString);
+        var ruleManager = client.CreateRuleManager("events", "priority-five");
+        await ruleManager.DeleteRuleAsync("$Default");
+        var filter = new CorrelationRuleFilter();
+        filter.ApplicationProperties["Priority"] = 5L;
+        await ruleManager.CreateRuleAsync(new CreateRuleOptions("priority-five", filter));
+
+        var sender = client.CreateSender("events");
+        var intMatch = new ServiceBusMessage("int-payload") { MessageId = "int-5" };
+        intMatch.ApplicationProperties["priority"] = 5;
+        var uintMatch = new ServiceBusMessage("uint-payload") { MessageId = "uint-5" };
+        uintMatch.ApplicationProperties["priority"] = (uint)5;
+        var doubleMatch = new ServiceBusMessage("double-payload") { MessageId = "double-5" };
+        doubleMatch.ApplicationProperties["priority"] = 5.0;
+        var noMatch = new ServiceBusMessage("other-payload") { MessageId = "int-6" };
+        noMatch.ApplicationProperties["priority"] = 6;
+
+        await sender.SendMessageAsync(intMatch);
+        await sender.SendMessageAsync(uintMatch);
+        await sender.SendMessageAsync(doubleMatch);
+        await sender.SendMessageAsync(noMatch);
+
+        var received = await DrainAsync(client, "events", "priority-five");
+
+        received.OrderBy(id => id).ShouldBe(new[] { "double-5", "int-5", "uint-5" });
+    }
+
     private static async Task<List<string>> DrainAsync(ServiceBusClient client, string topic, string subscription)
     {
         var receiver = client.CreateReceiver(topic, subscription, new ServiceBusReceiverOptions

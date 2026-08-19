@@ -5,7 +5,7 @@
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
-//   -> topic schedule
+//   -> topic schedule -> correlation filter
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -487,6 +487,42 @@ const run = async () => {
   check("topic schedule", schedOk,
     schedOk ? "" : !dueMsg ? "scheduled message never arrived" : "cancelled message leaked");
   await fetch(`${httpBase}/${schedTopic}?api-version=2021-05`, { method: "DELETE" });
+
+  // 26. correlation filter - a correlation rule with a numeric application property
+  // matches across property-name casing and AMQP numeric width (issue #56): the rule
+  // value is a long while rhea encodes plain JS numbers as uints.
+  const corrTopic = `smoke-corr-${stamp}`;
+  await atomPut(corrTopic,
+    '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  await atomPut(`${corrTopic}/subscriptions/cf`,
+    '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  await fetch(`${httpBase}/${corrTopic}/subscriptions/cf/rules/$Default?api-version=2021-05`, { method: "DELETE" });
+  const corrRuleResp = await atomPut(`${corrTopic}/subscriptions/cf/rules/prio`,
+    '<RuleDescription xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
+    '<Filter i:type="CorrelationFilter"><Properties><KeyValueOfstringanyType><Key>Priority</Key>' +
+    '<Value xmlns:d6p1="http://www.w3.org/2001/XMLSchema" i:type="d6p1:long">5</Value>' +
+    '</KeyValueOfstringanyType></Properties></Filter></RuleDescription>');
+  const corrSender = client.createSender(corrTopic);
+  await corrSender.sendMessages({ body: "corr-match", messageId: `corr-match-${stamp}`, applicationProperties: { priority: 5 } });
+  await corrSender.sendMessages({ body: "corr-miss", messageId: `corr-miss-${stamp}`, applicationProperties: { priority: 7 } });
+  await corrSender.close();
+  const corrReceiver = client.createReceiver(corrTopic, "cf");
+  const corrGot = await corrReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  if (corrGot.length === 1) await corrReceiver.completeMessage(corrGot[0]);
+  const corrExtra = await corrReceiver.receiveMessages(1, { maxWaitTimeInMs: 2_000 });
+  if (corrExtra.length === 1) await corrReceiver.completeMessage(corrExtra[0]);
+  await corrReceiver.close();
+  const corrOk =
+    corrRuleResp.status === 201 &&
+    corrGot.length === 1 &&
+    corrGot[0].messageId === `corr-match-${stamp}` &&
+    corrExtra.length === 0;
+  check(
+    "correlation filter",
+    corrOk,
+    corrOk ? "" : `rule ${corrRuleResp.status}, got ${corrGot.length} msg(s), extra ${corrExtra.length}`,
+  );
+  await fetch(`${httpBase}/${corrTopic}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>

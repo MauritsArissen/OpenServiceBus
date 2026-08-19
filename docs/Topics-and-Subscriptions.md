@@ -60,8 +60,21 @@ new RuleDescriptor
 };
 ```
 
-Empty fields are wildcards. All non-empty fields must match exactly. Faster than SQL
-filters when you only need equality.
+Empty fields are wildcards. All non-empty fields must match. Faster than SQL filters
+when you only need equality.
+
+Matching semantics, aligned with the SQL filter path:
+
+- System-field values (`CorrelationId`, `Subject`, `SessionId`, ...) compare
+  case-sensitively - correlation values are exact matches, as in Azure.
+- Application-property NAMES resolve case-insensitively, the same resolution SQL
+  filters use (`Properties = { ["Priority"] = 5 }` matches a message carrying
+  `priority`).
+- Application-property VALUES use the SQL evaluator's numeric normalization: every
+  integral type widens to long and every fractional type to double, so a rule value
+  of `5` matches the property regardless of the AMQP numeric width the sending SDK
+  chose (long from .NET, uint from Node.js, int from Java). String values stay
+  case-sensitive, and numbers never equal numeric strings.
 
 ### `SqlFilter`
 
