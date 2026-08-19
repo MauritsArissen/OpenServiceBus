@@ -35,6 +35,7 @@ in the repo - every page here is committed in source.
 
 ### Wire protocol
 
+- **[System Properties](System-Properties)** - broker-stamped `x-opt-*` annotations and the SDK properties they feed.
 - **[WebSocket Transport](WebSocket-Transport)** - AMQP-over-WebSocket bridge.
 
 ### Operations

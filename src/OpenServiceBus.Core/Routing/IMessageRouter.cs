@@ -43,6 +43,13 @@ public interface IMessageRouter
     /// lands in this entity's <c>$Transfer/$DeadLetterQueue</c> instead of being dropped.
     /// Null for direct sends, fan-out, and broker-internal DLQ moves.
     /// </param>
+    /// <param name="enqueuedSequenceNumber">
+    /// The sequence number the message carried on the entity it was originally sent to.
+    /// Null for fresh sends - the router then allocates one on the first entity of the chain
+    /// (the forwarding queue or the topic) when the message is redirected, and otherwise lets
+    /// the store set it equal to the assigned sequence number. Re-enqueue paths (dead-letter
+    /// moves, scheduled topic activation) pass the preserved value.
+    /// </param>
     Task<IReadOnlyList<string>> RouteAsync(
         string targetEntityName,
         byte[] encodedMessage,
@@ -54,5 +61,6 @@ public interface IMessageRouter
         MessageFilterContext? filterContext = null,
         int deliveryCount = 0,
         string? forwardSource = null,
+        long? enqueuedSequenceNumber = null,
         CancellationToken cancellationToken = default);
 }

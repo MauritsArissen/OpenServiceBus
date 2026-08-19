@@ -5,6 +5,7 @@ Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
   -> queue dedup -> topic dedup -> batch dedup -> lock lost -> topic schedule
+  -> system props
   (-> abandon props runs in the other three smokes; azure-servicebus for Python does not
    expose propertiesToModify on its settlement methods, so there is nothing to exercise)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
@@ -21,7 +22,12 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from azure.servicebus import ServiceBusClient, ServiceBusMessage, ServiceBusSubQueue
+from azure.servicebus import (
+    ServiceBusClient,
+    ServiceBusMessage,
+    ServiceBusMessageState,
+    ServiceBusSubQueue,
+)
 
 CONN = os.environ.get(
     "SMOKE_CONNECTION",
@@ -482,6 +488,52 @@ def run() -> None:
         check("topic schedule", sched_ok,
               "" if sched_ok else ("scheduled message never arrived" if not due else "cancelled message leaked"))
         http("DELETE", f"{base}/{sched_topic}?api-version=2021-05")
+
+        # 26. system props - broker-stamped system properties (issue #55): a scheduled
+        # message peeks as SCHEDULED; the delivery carries state ACTIVE, the original
+        # scheduled enqueue time, the round-tripped partition_key, and
+        # enqueued_sequence_number; deferred retrieval reports state DEFERRED.
+        sp_queue = f"smoke-sysprops-{stamp}"
+        http("PUT", f"{base}/{sp_queue}?api-version=2021-05", atom_entry(
+            '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        sp_when = datetime.now(timezone.utc) + timedelta(seconds=2)
+        with client.get_queue_sender(sp_queue) as sp_sender:
+            sp_seqs = sp_sender.schedule_messages(
+                ServiceBusMessage("sys props", message_id=f"sp-{stamp}", partition_key=f"pk-{stamp}"),
+                sp_when)
+        sp_ok = False
+        sp_detail = "scheduled message never arrived"
+        with client.get_queue_receiver(sp_queue, max_wait_time=10) as sp_receiver:
+            sp_peeked = next(
+                (m for m in sp_receiver.peek_messages(max_message_count=10) if m.message_id == f"sp-{stamp}"),
+                None)
+            sp_got = sp_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+            if sp_got:
+                sp_received = sp_got[0]
+                sp_receiver.defer_message(sp_received)
+                sp_deferred_list = sp_receiver.receive_deferred_messages(sp_received.sequence_number)
+                sp_deferred = sp_deferred_list[0] if sp_deferred_list else None
+                if sp_deferred:
+                    sp_receiver.complete_message(sp_deferred)
+                sp_ok = (
+                    sp_peeked is not None
+                    and sp_peeked.state == ServiceBusMessageState.SCHEDULED
+                    and sp_received.state == ServiceBusMessageState.ACTIVE
+                    and sp_received.partition_key == f"pk-{stamp}"
+                    and sp_received.enqueued_sequence_number == sp_seqs[0]
+                    and sp_received.scheduled_enqueue_time_utc is not None
+                    and abs((sp_received.scheduled_enqueue_time_utc - sp_when).total_seconds()) < 1
+                    and sp_deferred is not None
+                    and sp_deferred.state == ServiceBusMessageState.DEFERRED
+                )
+                sp_detail = "" if sp_ok else (
+                    f"peek={sp_peeked.state if sp_peeked else 'miss'} state={sp_received.state}"
+                    f" pk={sp_received.partition_key} eseq={sp_received.enqueued_sequence_number}/{sp_seqs[0]}"
+                    f" sched={sp_received.scheduled_enqueue_time_utc}"
+                    f" deferred={sp_deferred.state if sp_deferred else 'miss'}"
+                )
+        check("system props", sp_ok, sp_detail)
+        http("DELETE", f"{base}/{sp_queue}?api-version=2021-05")
 
 
 try:

@@ -71,6 +71,7 @@ CREATE TABLE messages (
     scheduled_enqueue_time  INTEGER,        -- unix ms or NULL
     is_deferred             INTEGER DEFAULT 0,
     session_id              TEXT,
+    enqueued_sequence_number INTEGER,       -- publish-side sequence, NULL = same as sequence_number
     PRIMARY KEY (queue_name, sequence_number)
 );
 
@@ -121,6 +122,12 @@ CREATE TABLE topic_dedup_history ( topic_name, message_id, expires_at );
 Deletes cascade top-down: dropping a topic removes its subscription and rule rows, and
 dropping a subscription removes its rules - no orphans are left behind for a later
 rehydration to resurrect.
+
+Additive schema changes are applied automatically when the store opens an older database:
+columns that the DDL cannot add via `CREATE TABLE IF NOT EXISTS` (currently
+`messages.enqueued_sequence_number`) are added with a guarded `ALTER TABLE`. Rows written
+before the column existed read back with `enqueued_sequence_number = NULL`, which the store
+treats as "same as `sequence_number`" - see [System Properties](System-Properties).
 
 PRAGMAs set on every open:
 

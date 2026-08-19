@@ -116,6 +116,7 @@ public sealed class InMemoryMessageStore : IMessageStore
         string? messageId = null,
         TimeSpan? duplicateDetectionWindow = null,
         int deliveryCount = 0,
+        long? enqueuedSequenceNumber = null,
         CancellationToken cancellationToken = default)
     {
         var state = GetQueue(queueName);
@@ -156,6 +157,7 @@ public sealed class InMemoryMessageStore : IMessageStore
             message = new StoredMessage
             {
                 SequenceNumber = seq,
+                EnqueuedSequenceNumber = enqueuedSequenceNumber ?? seq,
                 EnqueuedAt = now,
                 EncodedMessage = encodedMessage,
                 ExpiresAt = expiresAt,
@@ -189,6 +191,12 @@ public sealed class InMemoryMessageStore : IMessageStore
         }
 
         return Task.FromResult(message);
+    }
+
+    public Task<long> AllocateSequenceNumberAsync(string entityName, CancellationToken cancellationToken = default)
+    {
+        var state = _queues.GetOrAdd(entityName, _ => new QueueState());
+        return Task.FromResult(Interlocked.Increment(ref state.NextSequenceNumber));
     }
 
     public int ActivateScheduled(string queueName, DateTimeOffset now)

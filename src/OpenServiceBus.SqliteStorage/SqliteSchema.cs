@@ -43,6 +43,10 @@ internal static class SqliteSchema
             scheduled_enqueue_time  INTEGER NULL,
             is_deferred             INTEGER NOT NULL DEFAULT 0,
             session_id              TEXT NULL,
+            -- The sequence number on the entity the message was ORIGINALLY sent to,
+            -- preserved across forward/fan-out/dead-letter re-enqueues. NULL on rows written
+            -- by older schema versions and means "same as sequence_number".
+            enqueued_sequence_number INTEGER NULL,
             PRIMARY KEY (queue_name, sequence_number),
             FOREIGN KEY (queue_name) REFERENCES queues(name) ON DELETE CASCADE
         );
@@ -167,5 +171,22 @@ internal static class SqliteSchema
         using var cmd = connection.CreateCommand();
         cmd.CommandText = ConnectionPragmas + "\n" + Sql;
         cmd.ExecuteNonQuery();
+        AddColumnIfMissing(connection, "messages", "enqueued_sequence_number", "INTEGER NULL");
+    }
+
+    /// <summary>
+    /// Additive migration for databases created before a column existed. CREATE TABLE IF NOT
+    /// EXISTS never alters an existing table, so new columns are added here; guarded by a
+    /// pragma_table_info check to stay idempotent across the per-connection Apply calls.
+    /// </summary>
+    private static void AddColumnIfMissing(SqliteConnection connection, string table, string column, string definition)
+    {
+        using var check = connection.CreateCommand();
+        check.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{column}'";
+        if (Convert.ToInt64(check.ExecuteScalar()) > 0) return;
+
+        using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition}";
+        alter.ExecuteNonQuery();
     }
 }
