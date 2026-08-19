@@ -17,4 +17,7 @@ public static class ServiceBusErrors
 
     /// <summary>Maps to <c>ServiceBusFailureReason.SessionLockLost</c> in the SDKs.</summary>
     public const string SessionLockLost = "com.microsoft:session-lock-lost";
+
+    /// <summary>Sent with the 204 get-message-sessions reply when no sessions match, like real Service Bus.</summary>
+    public const string SessionNotFound = "com.microsoft:session-not-found";
 }
