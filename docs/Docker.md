@@ -227,11 +227,11 @@ named volume (`-v osb-data:/data` or compose `volumes:`), the same `broker.db` i
 across recreates - proven by an end-to-end test: send a message via the SDK, `docker stop
 && docker rm`, `docker run` from the same volume, the SDK receives the same message.
 
-> ⚠️ Queue **descriptors** (LockDuration, MaxDeliveryCount, RequiresSession, etc.) are
-> reset to defaults on restart because the in-memory registry rebuilds from the store's
-> queue names only, and **topics, subscriptions, and rules are not rehydrated at all** -
-> only their backing queues come back. **Always declare your topology in `config.json`**
-> so it survives restarts. The bootstrap service runs before rehydration.
+> 💡 The whole topology survives the restart with it: queue and topic settings,
+> subscription settings (`RequiresSession`, `ForwardTo`, `AutoDeleteOnIdle`, …) and every
+> subscription rule, filter parameters and actions included. Declaring topology in
+> `config.json` is still the way to pin a known-good shape - the bootstrap service runs
+> before rehydration and wins where the two disagree.
 
 See [Persistence](Persistence) for the SQLite schema and restart semantics.
 

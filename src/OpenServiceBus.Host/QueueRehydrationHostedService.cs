@@ -8,15 +8,13 @@ namespace OpenServiceBus.Host;
 /// <summary>
 /// After config bootstrap, ensure the in-memory registries have an entry for every entity the
 /// backing <see cref="IMessageStore"/> knows about. Only relevant with a persistent store
-/// (SQLite): on restart the SQLite file still holds the queue rows but the registries are empty
-/// memory.
+/// (SQLite): on restart the SQLite file still holds the entity rows but the registries are
+/// empty memory.
 ///
-/// Plain queues rehydrate as <see cref="QueueDescriptor"/>s; subscription backing queues
-/// (<c>&lt;topic&gt;/Subscriptions/&lt;sub&gt;</c>) rehydrate the topic + subscription through the
-/// <see cref="ITopicRegistry"/> so senders can attach to the topic and fan-out works again.
-/// Per-entity settings and custom subscription rules are NOT persisted, so rehydrated entities
-/// come back with default settings and a <c>$Default</c> TrueFilter; declare topology in
-/// <c>config.json</c> (which runs before this service) when you need it to survive exactly.
+/// The restore itself is <see cref="EntityRehydrator"/>; this wrapper owns the hosting
+/// lifetime and the logging. Queues, topics, subscriptions and subscription rules all come
+/// back from their persisted snapshots; <c>config.json</c> still runs first and wins for
+/// anything it declares.
 /// </summary>
 public sealed class QueueRehydrationHostedService : IHostedService
 {
@@ -39,120 +37,18 @@ public sealed class QueueRehydrationHostedService : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        var knownQueues = (await _queues.ListAsync(cancellationToken).ConfigureAwait(false))
-            .Select(q => q.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var savedDescriptors = _store.LoadQueueDescriptors();
-        var savedTopics = _store.LoadTopicDescriptors();
+        var rehydrator = new EntityRehydrator(
+            _store,
+            _queues,
+            _topics,
+            (context, ex) => _logger.LogError(ex, "Failed to rehydrate {Entity} from persistent store.", context));
 
-        var rehydratedQueues = 0;
-        var rehydratedSubscriptions = 0;
-        var rehydratedTopics = 0;
+        var result = await rehydrator.RunAsync(cancellationToken).ConfigureAwait(false);
+        if (result.IsEmpty) return;
 
-        // Topics restore from their own persisted snapshots first - full settings (status,
-        // TTL, duplicate detection) instead of the all-default synthesis, and topics without
-        // any subscription (invisible to the backing-queue scan below) come back too.
-        if (_topics is not null)
-        {
-            foreach (var (topicName, json) in savedTopics)
-            {
-                try
-                {
-                    if (await _topics.GetTopicAsync(topicName, cancellationToken).ConfigureAwait(false) is not null) continue;
-                    var topicDescriptor = TopicDescriptorJson.Deserialize(json) ?? new TopicDescriptor { Name = topicName };
-                    await _topics.CreateTopicAsync(topicDescriptor with { Name = topicName }, cancellationToken).ConfigureAwait(false);
-                    rehydratedTopics++;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to rehydrate topic '{Topic}' from persistent store.", topicName);
-                }
-            }
-        }
-
-        foreach (var name in _store.ListQueueNames())
-        {
-            // The DLQ sibling is created automatically alongside its parent (queue or subscription),
-            // so never discover it directly - that would double-register or fight the auto-sibling logic.
-            if (name.EndsWith(EntityNames.DeadLetterSuffix, StringComparison.Ordinal)) continue;
-
-            // Subscription backing queue: reconstruct the topic + subscription so the pub/sub layer
-            // (which is not persisted) comes back rather than resurfacing as an orphan plain queue.
-            var subsIdx = name.IndexOf(EntityNames.SubscriptionsSegment, StringComparison.OrdinalIgnoreCase);
-            if (subsIdx > 0)
-            {
-                if (_topics is null)
-                {
-                    // No topic registry configured; nothing sensible to do with a subscription queue.
-                    continue;
-                }
-
-                var topicName = name[..subsIdx];
-                var subName = name[(subsIdx + EntityNames.SubscriptionsSegment.Length)..];
-                // Guard against nested segments we don't model (defensive; addresses are flat).
-                if (subName.Contains('/', StringComparison.Ordinal)) continue;
-
-                try
-                {
-                    if (await _topics.GetTopicAsync(topicName, cancellationToken).ConfigureAwait(false) is null)
-                    {
-                        await _topics.CreateTopicAsync(new TopicDescriptor { Name = topicName }, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    if (await _topics.GetSubscriptionAsync(topicName, subName, cancellationToken).ConfigureAwait(false) is null)
-                    {
-                        // Creates the backing-queue descriptor (messages already in the store stay put)
-                        // and a $Default TrueFilter rule. Custom rules are lost - see the class remarks.
-                        // The persisted backing-queue snapshot restores the settings the backing
-                        // queue mirrors (status, lock duration, delivery cap, TTL, DLQ routing).
-                        var subDescriptor = new SubscriptionDescriptor { TopicName = topicName, Name = subName };
-                        if (savedDescriptors.TryGetValue(name, out var subJson)
-                            && QueueDescriptorJson.Deserialize(subJson) is { } backing)
-                        {
-                            subDescriptor = subDescriptor with
-                            {
-                                LockDuration = backing.LockDuration,
-                                MaxDeliveryCount = backing.MaxDeliveryCount,
-                                DefaultMessageTimeToLive = backing.DefaultMessageTimeToLive,
-                                DeadLetteringOnMessageExpiration = backing.DeadLetteringOnMessageExpiration,
-                                ForwardDeadLetteredMessagesTo = backing.ForwardDeadLetteredMessagesTo,
-                                Status = backing.Status,
-                            };
-                        }
-                        await _topics.CreateSubscriptionAsync(subDescriptor, cancellationToken).ConfigureAwait(false);
-                        rehydratedSubscriptions++;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to rehydrate subscription '{Topic}/{Sub}' from persistent store.", topicName, subName);
-                }
-                continue;
-            }
-
-            // A store queue named after a topic is that topic's scheduled-publish holding
-            // queue, not a user queue - the topic itself was already restored above.
-            if (_topics is not null
-                && await _topics.GetTopicAsync(name, cancellationToken).ConfigureAwait(false) is not null)
-            {
-                continue;
-            }
-
-            // Plain queue - restored from its persisted descriptor snapshot when one exists.
-            if (knownQueues.Contains(name)) continue;
-            var descriptor = savedDescriptors.TryGetValue(name, out var json)
-                ? QueueDescriptorJson.Deserialize(json) ?? new QueueDescriptor { Name = name }
-                : new QueueDescriptor { Name = name };
-            await _queues.CreateAsync(descriptor with { Name = name }, cancellationToken).ConfigureAwait(false);
-            rehydratedQueues++;
-        }
-
-        if (rehydratedQueues > 0 || rehydratedSubscriptions > 0 || rehydratedTopics > 0)
-        {
-            _logger.LogInformation(
-                "Rehydrated {Queues} queue(s), {Topics} topic(s) and {Subs} subscription(s) from persistent store.",
-                rehydratedQueues, rehydratedTopics, rehydratedSubscriptions);
-        }
+        _logger.LogInformation(
+            "Rehydrated {Queues} queue(s), {Topics} topic(s), {Subs} subscription(s) and {Rules} rule(s) from persistent store.",
+            result.Queues, result.Topics, result.Subscriptions, result.Rules);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

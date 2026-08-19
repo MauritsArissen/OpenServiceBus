@@ -37,4 +37,25 @@ public static class EntityNames
     /// <summary>The canonical backing-queue address for a subscription on a topic.</summary>
     public static string SubscriptionAddress(string topicName, string subscriptionName) =>
         $"{topicName}{SubscriptionsSegment}{subscriptionName}";
+
+    /// <summary>
+    /// Split a subscription address back into its topic and subscription parts. False for
+    /// anything that isn't a flat <c>&lt;topic&gt;/Subscriptions/&lt;sub&gt;</c> address -
+    /// including nested segments, which the model has no shape for.
+    /// </summary>
+    public static bool TryParseSubscriptionAddress(string address, out string topicName, out string subscriptionName)
+    {
+        topicName = string.Empty;
+        subscriptionName = string.Empty;
+
+        var index = address.IndexOf(SubscriptionsSegment, StringComparison.OrdinalIgnoreCase);
+        if (index <= 0) return false;
+
+        var candidateSub = address[(index + SubscriptionsSegment.Length)..];
+        if (candidateSub.Length == 0 || candidateSub.Contains('/', StringComparison.Ordinal)) return false;
+
+        topicName = address[..index];
+        subscriptionName = candidateSub;
+        return true;
+    }
 }

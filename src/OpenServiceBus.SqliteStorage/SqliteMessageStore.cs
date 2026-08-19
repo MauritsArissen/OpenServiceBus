@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using OpenServiceBus.Core.Entities;
 using OpenServiceBus.Core.Messaging;
 using OpenServiceBus.Core.Storage;
 
@@ -210,7 +211,11 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         try
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM topic_descriptors WHERE topic_name = $name";
+            cmd.CommandText = """
+                DELETE FROM topic_descriptors WHERE topic_name = $name;
+                DELETE FROM subscription_descriptors WHERE topic_name = $name;
+                DELETE FROM subscription_rules WHERE topic_name = $name;
+                """;
             cmd.Parameters.AddWithValue("$name", topicName);
             cmd.ExecuteNonQuery();
         }
@@ -227,6 +232,124 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             using var rdr = cmd.ExecuteReader();
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             while (rdr.Read()) result[rdr.GetString(0)] = rdr.GetString(1);
+            return result;
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task SaveSubscriptionDescriptorAsync(string topicName, string subscriptionName, string descriptorJson, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO subscription_descriptors(topic_name, subscription_name, descriptor_json)
+                VALUES ($topic, $sub, $json)
+                ON CONFLICT(topic_name, subscription_name) DO UPDATE SET descriptor_json = excluded.descriptor_json;
+                """;
+            cmd.Parameters.AddWithValue("$topic", topicName);
+            cmd.Parameters.AddWithValue("$sub", subscriptionName);
+            cmd.Parameters.AddWithValue("$json", descriptorJson);
+            cmd.ExecuteNonQuery();
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task DeleteSubscriptionDescriptorAsync(string topicName, string subscriptionName, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                DELETE FROM subscription_descriptors WHERE topic_name = $topic AND subscription_name = $sub;
+                DELETE FROM subscription_rules WHERE topic_name = $topic AND subscription_name = $sub;
+                """;
+            cmd.Parameters.AddWithValue("$topic", topicName);
+            cmd.Parameters.AddWithValue("$sub", subscriptionName);
+            cmd.ExecuteNonQuery();
+        }
+        finally { _gate.Release(); }
+    }
+
+    public IReadOnlyDictionary<string, string> LoadSubscriptionDescriptors()
+    {
+        _gate.Wait();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT topic_name, subscription_name, descriptor_json FROM subscription_descriptors";
+            using var rdr = cmd.ExecuteReader();
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            while (rdr.Read())
+            {
+                result[EntityNames.SubscriptionAddress(rdr.GetString(0), rdr.GetString(1))] = rdr.GetString(2);
+            }
+            return result;
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task SaveSubscriptionRuleAsync(string topicName, string subscriptionName, string ruleName, string ruleJson, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO subscription_rules(topic_name, subscription_name, rule_name, rule_json)
+                VALUES ($topic, $sub, $rule, $json)
+                ON CONFLICT(topic_name, subscription_name, rule_name) DO UPDATE SET rule_json = excluded.rule_json;
+                """;
+            cmd.Parameters.AddWithValue("$topic", topicName);
+            cmd.Parameters.AddWithValue("$sub", subscriptionName);
+            cmd.Parameters.AddWithValue("$rule", ruleName);
+            cmd.Parameters.AddWithValue("$json", ruleJson);
+            cmd.ExecuteNonQuery();
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task DeleteSubscriptionRuleAsync(string topicName, string subscriptionName, string ruleName, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM subscription_rules WHERE topic_name = $topic AND subscription_name = $sub AND rule_name = $rule";
+            cmd.Parameters.AddWithValue("$topic", topicName);
+            cmd.Parameters.AddWithValue("$sub", subscriptionName);
+            cmd.Parameters.AddWithValue("$rule", ruleName);
+            cmd.ExecuteNonQuery();
+        }
+        finally { _gate.Release(); }
+    }
+
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> LoadSubscriptionRules()
+    {
+        _gate.Wait();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            // Rule-name order keeps "which rule's action applies" reproducible across a
+            // restart, matching the ordering the fan-out evaluation itself uses.
+            cmd.CommandText = """
+                SELECT topic_name, subscription_name, rule_json FROM subscription_rules
+                ORDER BY topic_name, subscription_name, rule_name
+                """;
+            using var rdr = cmd.ExecuteReader();
+            var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+            while (rdr.Read())
+            {
+                var key = EntityNames.SubscriptionAddress(rdr.GetString(0), rdr.GetString(1));
+                if (!result.TryGetValue(key, out var rules))
+                {
+                    rules = new List<string>();
+                    result[key] = rules;
+                }
+                ((List<string>)rules).Add(rdr.GetString(2));
+            }
             return result;
         }
         finally { _gate.Release(); }

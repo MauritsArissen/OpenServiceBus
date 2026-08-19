@@ -115,6 +115,29 @@ internal static class SqliteSchema
             descriptor_json TEXT NOT NULL
         );
 
+        -- Subscription descriptor snapshots (JSON). Keyed on topic + subscription rather than
+        -- on the backing-queue address so a rehydration can restore the pub/sub topology
+        -- without parsing addresses back apart. Rows are removed explicitly on delete (of the
+        -- subscription or of its topic) - no FK, because subscriptions are perfectly legal to
+        -- persist for a topic whose own descriptor row is written in a separate statement.
+        CREATE TABLE IF NOT EXISTS subscription_descriptors (
+            topic_name        TEXT NOT NULL COLLATE NOCASE,
+            subscription_name TEXT NOT NULL COLLATE NOCASE,
+            descriptor_json   TEXT NOT NULL,
+            PRIMARY KEY (topic_name, subscription_name)
+        );
+
+        -- Rule snapshots (JSON), one row per rule. Without these every subscription came back
+        -- from a restart holding a single $Default TrueFilter, silently widening the routing
+        -- rules to match-all.
+        CREATE TABLE IF NOT EXISTS subscription_rules (
+            topic_name        TEXT NOT NULL COLLATE NOCASE,
+            subscription_name TEXT NOT NULL COLLATE NOCASE,
+            rule_name         TEXT NOT NULL COLLATE NOCASE,
+            rule_json         TEXT NOT NULL,
+            PRIMARY KEY (topic_name, subscription_name, rule_name)
+        );
+
         -- Topic-level dedup history: one check per publish, before fan-out. No original
         -- sequence number - topics store no messages, only the drop decision matters.
         CREATE TABLE IF NOT EXISTS topic_dedup_history (
