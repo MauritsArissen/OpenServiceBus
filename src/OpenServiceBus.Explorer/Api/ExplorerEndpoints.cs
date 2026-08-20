@@ -1,4 +1,5 @@
 using Azure.Messaging.ServiceBus;
+using OpenServiceBus.Explorer.Helpers.Variables;
 using OpenServiceBus.Explorer.Metrics;
 using OpenServiceBus.Explorer.Sessions;
 
@@ -68,6 +69,10 @@ public static class ExplorerEndpoints
             var strategy = string.Equals(req.Strategy, "PARALLEL", StringComparison.OrdinalIgnoreCase)
                 ? "PARALLEL"
                 : "ATONCE";
+
+            // Process variables in the boy
+            var body = req.Body ?? string.Empty;
+            body = VariablesProcessor.Process(body);
 
             // Each copy gets a unique MessageId. If the user supplied a base id we suffix it (-0, -1, ...);
             // otherwise we generate a fresh Guid per copy. Without distinct ids dedup-enabled entities

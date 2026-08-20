@@ -1,27 +1,82 @@
 import {
-  CableIcon, ChevronRightIcon, EraserIcon, InboxIcon, PlusIcon, RadioIcon, RefreshCwIcon,
-  SearchIcon, WaypointsIcon, XIcon,
+  CableIcon,
+  ChevronRightIcon,
+  EraserIcon,
+  InboxIcon,
+  MessageSquarePlusIcon,
+  MessageSquareReplyIcon,
+  PlusIcon,
+  RadioIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  SettingsIcon,
+  WaypointsIcon,
+  XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible } from "@/components/ui/collapsible";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { explorerApi, type QueueInfo } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
 
-export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function Sidebar({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
   const store = useStore();
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [connOpen, setConnOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const [width, setWidth] = useState(300);
+  const isResizing = useRef(false);
+
+  const cannedMessagesBrowseFileInputRef = useRef<HTMLInputElement>(null);
+
+  const startResizing = useCallback((_: React.MouseEvent) => {
+    isResizing.current = true;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!isResizing.current) return;
+      // Enforce minimum (300px) and maximum (35vw) width constraints
+      const maxAllowed = window.innerWidth * 0.35;
+      const newWidth = Math.min(Math.max(moveEvent.clientX, 300), maxAllowed);
+      setWidth(newWidth);
+    };
+
+    const stopResizing = () => {
+      isResizing.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stopResizing);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stopResizing);
+  }, []);
 
   // Selecting an entity also dismisses the mobile drawer so the detail view is visible.
   // On desktop the drawer is always open, so onClose is a harmless no-op there.
@@ -39,17 +94,22 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       (t) =>
         !f ||
         t.name.toLowerCase().includes(f) ||
-        (store.subsByTopic[t.name] ?? []).some((s) => s.name.toLowerCase().includes(f)),
+        (store.subsByTopic[t.name] ?? []).some((s) =>
+          s.name.toLowerCase().includes(f),
+        ),
     )
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const isSelected = (kind: string, name: string, sub?: string) =>
-    store.selected?.kind === kind && store.selected.name === name && store.selected.sub === sub;
+    store.selected?.kind === kind &&
+    store.selected.name === name &&
+    store.selected.sub === sub;
 
   return (
     <aside
+      style={{ width: `${width}px` }}
       className={cn(
-        "flex min-h-0 w-[300px] max-w-[85vw] flex-col border-r bg-sidebar text-sidebar-foreground",
+        "flex min-h-0 w-[300px] max-w-[35vw] flex-col border-r bg-sidebar text-sidebar-foreground",
         // Mobile: off-canvas drawer that slides in/out. Positioned absolute WITHIN the
         // content container (not viewport-fixed): iOS Safari tints its translucent bars
         // from viewport-anchored fixed elements, and this app never scrolls the document,
@@ -64,7 +124,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       {/* Mobile-only drawer header with a close affordance (desktop hides this). */}
       <div className="flex items-center justify-between border-b px-3 py-2 md:hidden">
         <span className="text-sm font-semibold">Entities</span>
-        <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close sidebar">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onClose}
+          aria-label="Close sidebar"
+        >
           <XIcon />
         </Button>
       </div>
@@ -79,8 +144,14 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           />
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" className="flex-1" onClick={() => void store.refresh()}>
-            <RefreshCwIcon className={cn(store.loading && "animate-spin")} /> Refresh
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onClick={() => void store.refresh()}
+          >
+            <RefreshCwIcon className={cn(store.loading && "animate-spin")} />{" "}
+            Refresh
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -89,15 +160,20 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => store.setDialog({ type: "createQueue" })}>
+              <DropdownMenuItem
+                onClick={() => store.setDialog({ type: "createQueue" })}
+              >
                 <InboxIcon /> Queue
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => store.setDialog({ type: "createTopic" })}>
+              <DropdownMenuItem
+                onClick={() => store.setDialog({ type: "createTopic" })}
+              >
                 <RadioIcon /> Topic
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
-                  if (store.topics.length === 0) toast.error("Create a topic first.");
+                  if (store.topics.length === 0)
+                    toast.error("Create a topic first.");
                   else store.setDialog({ type: "createSubscription" });
                 }}
               >
@@ -123,7 +199,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                       destructive: true,
                       action: async () => {
                         const r = await explorerApi.purge(store.mgmt, {});
-                        toast.success(`Purged ${r.purged} message(s) across ${r.entities ?? 0} entities`);
+                        toast.success(
+                          `Purged ${r.purged} message(s) across ${r.entities ?? 0} entities`,
+                        );
                         await store.refresh();
                       },
                     })
@@ -145,14 +223,19 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-2 pb-3">
         <div>
           <SectionLabel label="Queues" count={queues.length} />
-          {queues.length === 0 && <EmptyRow text={f ? "No matches" : "No queues yet"} />}
+          {queues.length === 0 && (
+            <EmptyRow text={f ? "No matches" : "No queues yet"} />
+          )}
           {queues.map((q) => (
             <EntityRow
               key={q.name}
               icon={InboxIcon}
               name={q.name}
               active={isSelected("queue", q.name)}
-              lockedCount={store.lockedCount(q.name) + store.lockedCount(q.name + "/$DeadLetterQueue")}
+              lockedCount={
+                store.lockedCount(q.name) +
+                store.lockedCount(q.name + "/$DeadLetterQueue")
+              }
               count={q.activeMessageCount}
               onSelect={() => selectAndClose({ kind: "queue", name: q.name })}
             />
@@ -161,7 +244,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
         <div>
           <SectionLabel label="Topics" count={topics.length} />
-          {topics.length === 0 && <EmptyRow text={f ? "No matches" : "No topics yet"} />}
+          {topics.length === 0 && (
+            <EmptyRow text={f ? "No matches" : "No topics yet"} />
+          )}
           {topics.map((t) => {
             const subs: QueueInfo[] = store.subsByTopic[t.name] ?? [];
             const open = expanded.has(t.name) || !!f;
@@ -170,9 +255,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 <div
                   className={cn(
                     "group relative flex h-9 cursor-pointer items-center gap-1.5 rounded-md pl-1.5 pr-1.5 text-sm hover:bg-sidebar-accent",
-                    isSelected("topic", t.name) && "bg-sidebar-accent font-medium",
+                    isSelected("topic", t.name) &&
+                      "bg-sidebar-accent font-medium",
                   )}
-                  onClick={() => selectAndClose({ kind: "topic", name: t.name })}
+                  onClick={() =>
+                    selectAndClose({ kind: "topic", name: t.name })
+                  }
                 >
                   {isSelected("topic", t.name) && (
                     <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />
@@ -183,30 +271,54 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                       e.stopPropagation();
                       setExpanded((s) => {
                         const next = new Set(s);
-                        next.has(t.name) ? next.delete(t.name) : next.add(t.name);
+                        next.has(t.name)
+                          ? next.delete(t.name)
+                          : next.add(t.name);
                         return next;
                       });
                     }}
                   >
-                    <ChevronRightIcon className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+                    <ChevronRightIcon
+                      className={cn(
+                        "size-3.5 transition-transform",
+                        open && "rotate-90",
+                      )}
+                    />
                   </button>
                   <RadioIcon className="size-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{t.name}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-[13px]">
+                    {t.name}
+                  </span>
                   <div className="flex items-center gap-1">
                     <span className="flex opacity-0 transition-opacity group-hover:opacity-100">
                       <Button
-                        variant="ghost" size="icon-sm" title="Add subscription"
-                        onClick={(e) => { e.stopPropagation(); store.setDialog({ type: "createSubscription", topic: t.name }); }}
+                        variant="ghost"
+                        size="icon-sm"
+                        title="Add subscription"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          store.setDialog({
+                            type: "createSubscription",
+                            topic: t.name,
+                          });
+                        }}
                       >
                         <PlusIcon />
                       </Button>
                     </span>
-                    <Badge variant="muted" className="tabular-nums">{subs.length}</Badge>
+                    <Badge variant="muted" className="tabular-nums">
+                      {subs.length}
+                    </Badge>
                   </div>
                 </div>
                 {open &&
                   subs
-                    .filter((s) => !f || s.name.toLowerCase().includes(f) || t.name.toLowerCase().includes(f))
+                    .filter(
+                      (s) =>
+                        !f ||
+                        s.name.toLowerCase().includes(f) ||
+                        t.name.toLowerCase().includes(f),
+                    )
                     .map((s) => (
                       <EntityRow
                         key={s.name}
@@ -215,11 +327,21 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                         indent
                         active={isSelected("subscription", t.name, s.name)}
                         lockedCount={
-                          store.lockedCount(`${t.name}/Subscriptions/${s.name}`) +
-                          store.lockedCount(`${t.name}/Subscriptions/${s.name}/$DeadLetterQueue`)
+                          store.lockedCount(
+                            `${t.name}/Subscriptions/${s.name}`,
+                          ) +
+                          store.lockedCount(
+                            `${t.name}/Subscriptions/${s.name}/$DeadLetterQueue`,
+                          )
                         }
                         count={s.activeMessageCount}
-                        onSelect={() => selectAndClose({ kind: "subscription", name: t.name, sub: s.name })}
+                        onSelect={() =>
+                          selectAndClose({
+                            kind: "subscription",
+                            name: t.name,
+                            sub: s.name,
+                          })
+                        }
                       />
                     ))}
               </div>
@@ -236,8 +358,22 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <CableIcon className="size-3.5" />
             Connection
-            <span className={cn("ml-auto size-1.5 rounded-full", store.status === "ok" ? "bg-emerald-500" : store.status === "err" ? "bg-red-500" : "bg-muted-foreground/50")} />
-            <ChevronRightIcon className={cn("size-3.5 transition-transform", connOpen && "rotate-90")} />
+            <span
+              className={cn(
+                "ml-auto size-1.5 rounded-full",
+                store.status === "ok"
+                  ? "bg-emerald-500"
+                  : store.status === "err"
+                    ? "bg-red-500"
+                    : "bg-muted-foreground/50",
+              )}
+            />
+            <ChevronRightIcon
+              className={cn(
+                "size-3.5 transition-transform",
+                connOpen && "rotate-90",
+              )}
+            />
           </span>
         }
       >
@@ -263,7 +399,11 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             </div>
           </DemoLock>
           {!store.demoMode && (
-            <Button size="sm" className="w-full" onClick={() => void store.connect()}>
+            <Button
+              size="sm"
+              className="w-full"
+              onClick={() => void store.connect()}
+            >
               Connect
             </Button>
           )}
@@ -277,12 +417,83 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
       </Collapsible>
 
+      <Collapsible
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        className="border-t p-3"
+        trigger={
+          <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <SettingsIcon className="size-3.5" />
+            Settings
+            <ChevronRightIcon
+              className={cn(
+                "size-3.5 transition-transform",
+                connOpen && "rotate-90",
+              )}
+            />
+          </span>
+        }
+      >
+        <div className="mt-3 space-y-2.5">
+          <Label>Connection string</Label>
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full"
+            onClick={(e) => {
+              e.stopPropagation();
+              store.setDialog({
+                type: "createCannedMessage",
+                topicOrQueue: undefined,
+              });
+            }}
+          >
+            <MessageSquarePlusIcon
+              className={cn(store.loading && "animate-spin")}
+            />{" "}
+            Create Canned Message
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full"
+            onClick={(e) => {
+              e.stopPropagation();
+              cannedMessagesBrowseFileInputRef.current?.click()
+            }}
+          >
+            <MessageSquareReplyIcon
+              className={cn(store.loading && "animate-spin")}
+            />{" "}
+            Import Canned Message
+          </Button>
+          <input
+            ref={cannedMessagesBrowseFileInputRef}
+            type="file"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                store.importCannedMessages(file);
+              }
+              e.target.value = "";
+            }}
+          />
+        </div>
+      </Collapsible>
+
       {/* Running version - only shown when the image baked one in (OSB_EXPLORER_VERSION). */}
       {store.version && (
         <div className="border-t px-3 py-1.5 text-center text-[11px] text-muted-foreground">
           Explorer <span className="font-mono">v{store.version}</span>
         </div>
       )}
+
+      {/* Resize Handle (Desktop Only) */}
+      <div
+        onMouseDown={startResizing}
+        className="hidden md:block absolute top-0 right-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/30 active:bg-primary transition-colors z-10"
+      />
     </aside>
   );
 }
@@ -290,7 +501,13 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 /** In the hosted demo, wraps the (disabled) connection inputs so hovering the group
  *  shows why they can't be edited. A disabled input swallows hover, so the tooltip lives
  *  on this wrapper. */
-function DemoLock({ locked, children }: { locked: boolean; children: React.ReactNode }) {
+function DemoLock({
+  locked,
+  children,
+}: {
+  locked: boolean;
+  children: React.ReactNode;
+}) {
   if (!locked) return <div className="space-y-2.5">{children}</div>;
   return (
     <Tooltip>
@@ -305,18 +522,30 @@ function DemoLock({ locked, children }: { locked: boolean; children: React.React
 function SectionLabel({ label, count }: { label: string; count: number }) {
   return (
     <div className="flex items-center gap-2 px-1.5 pb-1">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
-      <span className="text-[10px] font-medium tabular-nums text-muted-foreground/70">{count}</span>
+      <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        {label}
+      </span>
+      <span className="text-[10px] font-medium tabular-nums text-muted-foreground/70">
+        {count}
+      </span>
     </div>
   );
 }
 
 function EmptyRow({ text }: { text: string }) {
-  return <div className="px-2 py-1.5 text-xs text-muted-foreground">{text}</div>;
+  return (
+    <div className="px-2 py-1.5 text-xs text-muted-foreground">{text}</div>
+  );
 }
 
 function EntityRow({
-  icon: Icon, name, active, count, lockedCount, indent, onSelect,
+  icon: Icon,
+  name,
+  active,
+  count,
+  lockedCount,
+  indent,
+  onSelect,
 }: {
   icon: typeof InboxIcon;
   name: string;
@@ -335,11 +564,26 @@ function EntityRow({
       )}
       onClick={onSelect}
     >
-      {active && <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />}
-      <Icon className={cn("size-4 shrink-0", active ? "text-primary" : "text-muted-foreground")} />
-      <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{name}</span>
-      {lockedCount > 0 && <Badge variant="warning" className="tabular-nums">{lockedCount}🔒</Badge>}
-      <Badge variant="muted" className="tabular-nums">{count ?? "?"}</Badge>
+      {active && (
+        <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />
+      )}
+      <Icon
+        className={cn(
+          "size-4 shrink-0",
+          active ? "text-primary" : "text-muted-foreground",
+        )}
+      />
+      <span className="min-w-0 flex-1 truncate font-mono text-[13px]">
+        {name}
+      </span>
+      {lockedCount > 0 && (
+        <Badge variant="warning" className="tabular-nums">
+          {lockedCount}🔒
+        </Badge>
+      )}
+      <Badge variant="muted" className="tabular-nums">
+        {count ?? "?"}
+      </Badge>
     </div>
   );
 }

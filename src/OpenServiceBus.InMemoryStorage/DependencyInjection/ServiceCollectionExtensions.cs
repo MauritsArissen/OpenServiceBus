@@ -1,9 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Hosting;
 using OpenServiceBus.Core.Routing;
 using OpenServiceBus.Core.Storage;
 using OpenServiceBus.Core.Transactions;
+using OpenServiceBus.InMemoryStorage.CannedMessages;
 using OpenServiceBus.InMemoryStorage.Lifecycle;
 using OpenServiceBus.InMemoryStorage.Queues;
 using OpenServiceBus.InMemoryStorage.Routing;
@@ -32,6 +32,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IMessageRouter, MessageRouter>();
         services.TryAddSingleton<ITransactionManager, TransactionManager>();
         services.AddHostedService<LockManager>();
+        services.TryAddSingleton<CannedMessagesManager>();
+        services.TryAddSingleton<ICannedMessagesRegistry>(sp => sp.GetRequiredService<CannedMessagesManager>());
         return services;
     }
 }

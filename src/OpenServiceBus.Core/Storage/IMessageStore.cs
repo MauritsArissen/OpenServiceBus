@@ -1,3 +1,4 @@
+using OpenServiceBus.Core.Entities;
 using OpenServiceBus.Core.Messaging;
 
 namespace OpenServiceBus.Core.Storage;
@@ -277,4 +278,8 @@ public interface IMessageStore
 
     /// <summary>Enumerate session ids on the queue that have at least one available message OR a stored state.</summary>
     IReadOnlyList<string> ListSessions(string queueName);
+
+    IReadOnlyList<CannedMessage> ListCannedMessages();
+    Task CreateCannedMessageAsync(string cannedMessageName, CannedMessage cannedMessage, CancellationToken cancellationToken = default);
+    Task DeleteCannedMessageAsync(string name, CancellationToken cancellationToken = default);
 }

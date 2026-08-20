@@ -288,7 +288,7 @@ export function EntityView() {
           </TabsContent>
           {canSend && (
             <TabsContent value="send">
-              <SendTab sel={sel} />
+              <SendTab sel={sel} kind="send" />
             </TabsContent>
           )}
           {canReceive && (

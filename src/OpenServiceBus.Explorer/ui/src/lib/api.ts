@@ -80,9 +80,19 @@ export type SendPayload = {
   strategy: string;
 };
 
+export type CannedMessage = {
+  name: string;
+  topicOrQueue: string;
+  message: SendPayload;
+}
+
 async function api<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
+  const isFormData = options.body instanceof FormData;
   const res = await fetch(path, {
-    headers: options.body ? { "Content-Type": "application/json" } : undefined,
+    headers: {
+      ...(!isFormData && options.body ? { "Content-Type": "application/json" } : {}),
+      ...options.headers,
+    },
     ...options,
   });
   let json: Record<string, unknown> = {};
@@ -105,6 +115,7 @@ async function api<T = unknown>(path: string, options: RequestInit = {}): Promis
 const cs = (connectionString: string) => "?connectionString=" + encodeURIComponent(connectionString);
 const post = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
 const put = (body: unknown): RequestInit => ({ method: "PUT", body: JSON.stringify(body) });
+const form = (data: FormData): RequestInit => ({ method: "POST", body: data });
 
 export type BrokerInfo = {
   name?: string | null;
@@ -133,6 +144,26 @@ export const explorerApi = {
     managementUrl: string,
     target: { queue?: string; topic?: string; subscription?: string; deadLetterOnly?: boolean },
   ) => api<{ purged: number; entities?: number }>("/api/purge", post({ managementUrl, ...target })),
+
+  // OpenServiceBus-native: create a canned message for a topic or queue.
+  createCannedMessage: (
+    managementUrl: string,
+    topicOrQueue: string,
+    name: string,
+    payload: SendPayload | undefined
+  ) => api<{ purged: number; entities?: number }>(
+    "/api/create-canned-message",
+    post({ managementUrl, topicOrQueue, name, sendRequest: payload })),
+
+  // OpenServiceBus-native: list canned messages.
+  listCannedMessages: (
+    managementUrl: string,
+    topicOrQueue?: string,
+  ) => api<CannedMessage[]>("/api/list-canned-messages", post({ managementUrl, topicOrQueue })),
+
+  // OpenServiceBus-native: import canned messages.
+  importCannedMessages: (managementUrl: string, file: File,) =>
+    api<{ imported: number; success: boolean; errors: string[]; }>("/api/import-canned-messages", form(toFormData([[ "managementUrl", managementUrl ], [ "file", file ]]))),
 
   listQueues: (conn: string) => api<QueueInfo[]>("/api/queues" + cs(conn)),
   setStatus: (conn: string, kind: string, name: string, subscription: string | null, status: string) =>
@@ -208,3 +239,9 @@ export const explorerApi = {
 };
 
 export type MetricSample = { t: number; active: number; enqueued: number; completed: number };
+
+function toFormData(entries: [string, string | Blob][]): FormData {
+  const fd = new FormData();
+  for (const [key, value] of entries) fd.append(key, value);
+  return fd;
+}

@@ -19,9 +19,13 @@ public sealed class ConfigBootstrapHostedService : IHostedService
     private const string ConfigFlag = "--config";
     private const string ConfigEnv = "OPENSERVICEBUS_CONFIG";
     private const string DefaultFileName = "config.json";
+    private const string CannedMessagesFlag = "--canned-messages";
+    private const string CannedMessagesEnv = "OPENSERVICEBUS_CANNED_MESSAGES";
+    private const string CannedMessagesDefaultFileName = "canned-messages.json";
 
     private readonly IQueueRegistry _queues;
     private readonly ITopicRegistry? _topics;
+    private readonly ICannedMessagesRegistry _cannedMessages;
     private readonly ILogger<ConfigBootstrapHostedService> _logger;
     private readonly IHostEnvironment _env;
 
@@ -29,15 +33,23 @@ public sealed class ConfigBootstrapHostedService : IHostedService
         IQueueRegistry queues,
         IHostEnvironment env,
         ILogger<ConfigBootstrapHostedService> logger,
+        ICannedMessagesRegistry cannedMessages,
         ITopicRegistry? topics = null)
     {
         _queues = queues;
         _topics = topics;
         _env = env;
         _logger = logger;
+        _cannedMessages = cannedMessages;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await LoadConfig(cancellationToken).ConfigureAwait(false);
+        await LoadCannedMessagesConfig(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task LoadConfig(CancellationToken cancellationToken)
     {
         var path = ResolveConfigPath();
         if (path is null)
@@ -143,6 +155,30 @@ public sealed class ConfigBootstrapHostedService : IHostedService
             result.Queues.Count, result.Topics.Count, result.Subscriptions.Count, result.Rules.Count);
     }
 
+    private async Task LoadCannedMessagesConfig(CancellationToken cancellationToken)
+    {
+        var cannedMessagesPath = ResolveCannedMessagesPath();
+        if (cannedMessagesPath is null)
+        {
+            _logger.LogInformation("No canned messages config found ({Flag}, env {Env}, or {Default} in cwd). Starting with no pre-declared queues.",
+                CannedMessagesFlag, CannedMessagesEnv, CannedMessagesDefaultFileName);
+            return;
+        }
+
+        _logger.LogInformation("Loading canned-message config from {Path}", cannedMessagesPath);
+
+        CannedMessagesLoader.LoadResult cannedMessagesResult;
+        try
+        {
+            cannedMessagesResult = CannedMessagesLoader.LoadFromFile(cannedMessagesPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to parse bootstrap config at {Path}. Continuing without bootstrapping.", cannedMessagesPath);
+            return;
+        }
+    }
+
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     private string? ResolveConfigPath()
@@ -166,6 +202,35 @@ public sealed class ConfigBootstrapHostedService : IHostedService
 
         // 3. Default: config.json in cwd
         var cwdCandidate = Path.Combine(_env.ContentRootPath, DefaultFileName);
+        if (File.Exists(cwdCandidate))
+        {
+            return cwdCandidate;
+        }
+
+        return null;
+    }
+
+    private string? ResolveCannedMessagesPath()
+    {
+        // 1. CLI: --canned-messages <path>
+        var args = Environment.GetCommandLineArgs();
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (string.Equals(args[i], CannedMessagesFlag, StringComparison.Ordinal))
+            {
+                return args[i + 1];
+            }
+        }
+
+        // 2. Env var
+        var envValue = Environment.GetEnvironmentVariable(CannedMessagesEnv);
+        if (!string.IsNullOrWhiteSpace(envValue))
+        {
+            return envValue;
+        }
+
+        // 3. Default: canned-messages.json in cwd
+        var cwdCandidate = Path.Combine(_env.ContentRootPath, CannedMessagesDefaultFileName);
         if (File.Exists(cwdCandidate))
         {
             return cwdCandidate;

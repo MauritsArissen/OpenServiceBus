@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using OpenServiceBus.Core.Entities;
 using OpenServiceBus.Core.Messaging;
 using OpenServiceBus.Core.Storage;
 
@@ -1327,5 +1328,20 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         _connection.Dispose();
         _gate.Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    public IReadOnlyList<CannedMessage> ListCannedMessages()
+    {
+        throw new NotImplementedException();
+    }
+
+    public Task CreateCannedMessageAsync(string cannedMessageName, CannedMessage cannedMessage, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
+    }
+
+    public Task DeleteCannedMessageAsync(string name, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
     }
 }

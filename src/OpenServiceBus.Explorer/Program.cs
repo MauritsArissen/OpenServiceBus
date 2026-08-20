@@ -16,6 +16,7 @@ app.UseStaticFiles();
 
 app.MapExplorerEndpoints();
 app.MapAdminEndpoints();
+app.MapCannedMessagesEndpoints();
 
 await app.RunAsync();
 

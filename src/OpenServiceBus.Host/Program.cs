@@ -82,6 +82,7 @@ app.MapHealthChecks("/health");
 app.MapQueueEndpoints();
 app.MapTopicEndpoints();
 app.MapPurgeEndpoints();
+app.MapCannedMessagesEndpoints();
 
 app.Run();
 

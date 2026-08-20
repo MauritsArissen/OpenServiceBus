@@ -19,6 +19,7 @@ public sealed class InMemoryMessageStore : IMessageStore
 {
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, QueueState> _queues = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CannedMessage> _cannedMessages = new(StringComparer.OrdinalIgnoreCase);
 
     public InMemoryMessageStore() : this(TimeProvider.System) { }
 
@@ -26,6 +27,25 @@ public sealed class InMemoryMessageStore : IMessageStore
     {
         _timeProvider = timeProvider;
     }
+
+
+    public IReadOnlyList<CannedMessage> ListCannedMessages() => _cannedMessages.Values.ToArray();
+
+    public Task CreateCannedMessageAsync(string name, CannedMessage cannedMessage, CancellationToken cancellationToken = default)
+    {
+        _cannedMessages.TryAdd(name, cannedMessage);
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteCannedMessageAsync(string name, CancellationToken cancellationToken = default)
+    {
+        _cannedMessages.Remove(name, out _);
+        return Task.CompletedTask;
+    }
+
+
+
+
 
     public IReadOnlyCollection<string> ListQueueNames() => _queues.Keys.ToArray();
 

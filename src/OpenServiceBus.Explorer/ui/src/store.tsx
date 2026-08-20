@@ -24,6 +24,8 @@ export type DialogState =
   | { type: "createQueue" }
   | { type: "createTopic" }
   | { type: "createSubscription"; topic?: string }
+  | { type: "createCannedMessage"; topicOrQueue?: string }
+  | { type: "importCannedMessages"; }
   | { type: "rule"; topic: string; sub: string; edit?: import("@/lib/api").RuleInfo }
   | { type: "deadletter"; target: string; lockToken: string }
   | { type: "confirm"; title: string; description: string; destructive?: boolean; action: () => Promise<void> | void }
@@ -67,6 +69,8 @@ type Store = {
   untrack: (target: string, key: string) => void;
   updateLockedUntil: (target: string, key: string, until: string) => void;
   clearEntityLocal: (address: string) => void;
+
+  importCannedMessages: (file: File) => Promise<void>;
 
   dialog: DialogState;
   setDialog: (d: DialogState) => void;
@@ -236,6 +240,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const select = useCallback((s: Selected | null) => setSelected(s), []);
 
+  const importCannedMessages = useCallback(async (file: File, mgmtOverride?: string) => {
+    const m = mgmtOverride ?? mgmt;
+    try {
+      await explorerApi.importCannedMessages(m, file);
+      toast.success("Canned messages imported successfully");
+    } catch (e) {
+      toast.error("Import failed: " + (e as Error).message);
+    }
+  }, [conn, mgmt, refresh]);
+
   const value = useMemo<Store>(
     () => ({
       conn, mgmt, setConn, setMgmt, status, pingResult, connect,
@@ -246,6 +260,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       selected, select, descriptorFor, dlqCount,
       locked, peeked, lockedCount, setPeekedFor, trackLocked, untrack, updateLockedUntil, clearEntityLocal,
       dialog, setDialog,
+      importCannedMessages
     }),
     [conn, mgmt, setConn, setMgmt, status, pingResult, connect, demoMode, resetIntervalSeconds, version, queues, topics, subsByTopic, loading,
      refresh, selected, select, descriptorFor, dlqCount, locked, peeked, lockedCount, setPeekedFor, trackLocked,

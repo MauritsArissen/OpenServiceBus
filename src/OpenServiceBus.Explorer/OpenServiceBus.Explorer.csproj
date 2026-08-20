@@ -25,11 +25,9 @@
 
   <!-- Build the SPA into wwwroot before Build/Publish. Runs npm ci + npm run build.
        Guarded by BuildExplorerUi and skipped if node_modules is fresh relative to sources. -->
-  <Target Name="BuildExplorerSpa" BeforeTargets="AssignTargetPaths"
-          Condition="'$(BuildExplorerUi)' == 'true' And Exists('$(SpaRoot)/package.json')">
+  <Target Name="BuildExplorerSpa" BeforeTargets="AssignTargetPaths" Condition="'$(BuildExplorerUi)' == 'true' And Exists('$(SpaRoot)/package.json')">
     <Message Importance="high" Text="Building Explorer UI (npm) from $(SpaRoot)…" />
-    <Exec Command="npm ci" WorkingDirectory="$(SpaRoot)"
-          Condition="!Exists('$(SpaRoot)/node_modules')" />
+    <Exec Command="npm ci" WorkingDirectory="$(SpaRoot)" Condition="!Exists('$(SpaRoot)/node_modules')" />
     <Exec Command="npm run build" WorkingDirectory="$(SpaRoot)" />
   </Target>
 
