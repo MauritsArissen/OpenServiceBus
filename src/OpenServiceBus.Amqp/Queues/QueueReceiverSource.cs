@@ -30,7 +30,10 @@ public sealed class QueueReceiverSource : IMessageSource
     // Annotation symbols match Azure.Messaging.ServiceBus's AmqpMessageConstants exactly.
     private static readonly Symbol EnqueuedTimeUtcSymbol = new("x-opt-enqueued-time");
     private static readonly Symbol SequenceNumberSymbol = new("x-opt-sequence-number");
+    private static readonly Symbol EnqueuedSequenceNumberSymbol = new("x-opt-enqueue-sequence-number");
     private static readonly Symbol LockedUntilSymbol = new("x-opt-locked-until");
+    private static readonly Symbol MessageStateSymbol = new("x-opt-message-state");
+    private const int MessageStateActive = 0;
 
     // Default reason when the SDK calls DeadLetterMessageAsync(msg) with no reason supplied.
     private const string MaxDeliveryReason = "MaxDeliveryCountExceeded";
@@ -450,6 +453,7 @@ public sealed class QueueReceiverSource : IMessageSource
         await _router.RouteAsync(dlqTarget, dlqBytes, expiresAt: null,
             deliveryCount: removed.DeliveryCount + (inFlightDelivery ? 1 : 0),
             forwardSource: string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo) ? null : _entityName,
+            enqueuedSequenceNumber: removed.EnqueuedSequenceNumber,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // Dead-letter counter tagged with the source queue and reason - lets a dashboard
@@ -478,8 +482,10 @@ public sealed class QueueReceiverSource : IMessageSource
 
         amqp.MessageAnnotations ??= new MessageAnnotations();
         amqp.MessageAnnotations.Map[SequenceNumberSymbol] = locked.Message.SequenceNumber;
+        amqp.MessageAnnotations.Map[EnqueuedSequenceNumberSymbol] = locked.Message.EnqueuedSequenceNumber;
         amqp.MessageAnnotations.Map[EnqueuedTimeUtcSymbol] = locked.Message.EnqueuedAt.UtcDateTime;
         amqp.MessageAnnotations.Map[LockedUntilSymbol] = locked.LockedUntil.UtcDateTime;
+        amqp.MessageAnnotations.Map[MessageStateSymbol] = MessageStateActive;
     }
 
     private static Message DecodeMessage(byte[] encoded)

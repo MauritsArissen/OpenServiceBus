@@ -68,6 +68,58 @@ public class AnnotationsTests
     }
 
     [Fact]
+    public async Task Receive_Delivery_CarriesEnqueuedSequenceNumberMessageStateAndPartitionKeyAnnotations()
+    {
+        // Arrange
+        await using var harness = await TestListenerHarness.StartAsync();
+        await harness.Queues.CreateAsync(new QueueDescriptor { Name = "stamped" });
+        var factory = CreateClientFactory();
+        var conn = await factory.CreateAsync(new Address(harness.AmqpUri));
+        try
+        {
+            var session = new Session(conn);
+            var sender = new SenderLink(session, "s", "stamped");
+            var message = new Message("payload")
+            {
+                Properties = new Properties { MessageId = "m-1" },
+                MessageAnnotations = new MessageAnnotations(),
+            };
+            message.MessageAnnotations.Map[new Symbol("x-opt-partition-key")] = "pk-1";
+            message.MessageAnnotations.Map[new Symbol("x-opt-via-partition-key")] = "via-pk-1";
+            await sender.SendAsync(message);
+            var receiver = new ReceiverLink(session, "r", "stamped");
+
+            // Act
+            var received = await receiver.ReceiveAsync(TimeSpan.FromSeconds(5));
+
+            // Assert
+            received.ShouldNotBeNull();
+            received.MessageAnnotations.ShouldNotBeNull();
+            var map = received.MessageAnnotations.Map;
+
+            map.ContainsKey(new Symbol("x-opt-enqueue-sequence-number")).ShouldBeTrue("x-opt-enqueue-sequence-number missing");
+            Convert.ToInt64(map[new Symbol("x-opt-enqueue-sequence-number")]).ShouldBe(1L,
+                "a direct send gets the enqueued sequence number of its own entity");
+            Convert.ToInt64(map[new Symbol("x-opt-sequence-number")]).ShouldBe(1L);
+
+            map.ContainsKey(new Symbol("x-opt-message-state")).ShouldBeTrue("x-opt-message-state missing");
+            Convert.ToInt32(map[new Symbol("x-opt-message-state")]).ShouldBe(0, "a normal delivery is Active (0)");
+
+            map[new Symbol("x-opt-partition-key")].ShouldBe("pk-1", "the sender's partition key must round-trip");
+            map[new Symbol("x-opt-via-partition-key")].ShouldBe("via-pk-1", "the sender's via-partition-key must round-trip");
+
+            receiver.Accept(received);
+            await receiver.CloseAsync();
+            await sender.CloseAsync();
+            await session.CloseAsync();
+        }
+        finally
+        {
+            await conn.CloseAsync();
+        }
+    }
+
+    [Fact]
     public async Task Receive_RepeatedReleasesOnSameMessage_IncrementsHeaderDeliveryCountEachRedelivery()
     {
         // Arrange

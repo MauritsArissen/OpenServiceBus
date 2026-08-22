@@ -86,6 +86,8 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
     private static readonly Symbol MessageStateSymbol = new("x-opt-message-state");
     private static readonly Symbol EnqueuedTimeUtcSymbol = new("x-opt-enqueued-time");
     private static readonly Symbol SequenceNumberSymbol = new("x-opt-sequence-number");
+    private static readonly Symbol EnqueuedSequenceNumberSymbol = new("x-opt-enqueue-sequence-number");
+    private static readonly Symbol LockTokenDeliveryAnnotationSymbol = new("x-opt-lock-token");
 
     // Service Bus message states the SDK reports via ServiceBusReceivedMessage.State.
     private const int MessageStateActive = 0;
@@ -418,6 +420,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
             amqp.Header.DeliveryCount = (uint)stored.DeliveryCount;
             amqp.MessageAnnotations ??= new MessageAnnotations();
             amqp.MessageAnnotations.Map[SequenceNumberSymbol] = stored.SequenceNumber;
+            amqp.MessageAnnotations.Map[EnqueuedSequenceNumberSymbol] = stored.EnqueuedSequenceNumber;
             amqp.MessageAnnotations.Map[EnqueuedTimeUtcSymbol] = stored.EnqueuedAt.UtcDateTime;
             amqp.MessageAnnotations.Map[MessageStateSymbol] = stored.ScheduledEnqueueTime is not null
                 ? MessageStateScheduled
@@ -475,8 +478,15 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
             amqp.Header.DeliveryCount = (uint)locked.Message.DeliveryCount;
             amqp.MessageAnnotations ??= new MessageAnnotations();
             amqp.MessageAnnotations.Map[SequenceNumberSymbol] = locked.Message.SequenceNumber;
+            amqp.MessageAnnotations.Map[EnqueuedSequenceNumberSymbol] = locked.Message.EnqueuedSequenceNumber;
             amqp.MessageAnnotations.Map[EnqueuedTimeUtcSymbol] = locked.Message.EnqueuedAt.UtcDateTime;
             amqp.MessageAnnotations.Map[new Symbol("x-opt-locked-until")] = locked.LockedUntil.UtcDateTime;
+            amqp.MessageAnnotations.Map[MessageStateSymbol] = MessageStateDeferred;
+            // Real Service Bus also embeds the lock token in the returned message's delivery
+            // annotations; the Python SDK reads it from there (it ignores the map entry) and
+            // would otherwise settle deferred messages with a null token.
+            amqp.DeliveryAnnotations ??= new DeliveryAnnotations();
+            amqp.DeliveryAnnotations.Map[LockTokenDeliveryAnnotationSymbol] = locked.LockToken;
 
             entries.Add(new Map
             {
@@ -595,7 +605,8 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
         // Management-plane dead-letter always settles a delivery the client is holding
         // (receive-by-sequence / deferred), so that delivery counts toward the history.
         await _router.RouteAsync(dlqTarget, dlqBytes, deliveryCount: removed.DeliveryCount + 1,
-            forwardSource: string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo) ? null : _entityName).ConfigureAwait(false);
+            forwardSource: string.IsNullOrEmpty(_descriptor.ForwardDeadLetteredMessagesTo) ? null : _entityName,
+            enqueuedSequenceNumber: removed.EnqueuedSequenceNumber).ConfigureAwait(false);
         return true;
     }
 

@@ -133,6 +133,11 @@ public interface IMessageStore
     /// <see cref="StoredMessage"/> in that case is the *original* one. Null disables dedup
     /// for this send regardless of any queue configuration.
     /// </param>
+    /// <param name="enqueuedSequenceNumber">
+    /// The sequence number the message was assigned by the entity it was ORIGINALLY sent to.
+    /// Null for fresh sends (the store sets it equal to the newly assigned sequence number);
+    /// forward/fan-out/dead-letter re-enqueues pass the original value so it survives the copy.
+    /// </param>
     Task<StoredMessage> EnqueueAsync(
         string queueName,
         byte[] encodedMessage,
@@ -142,7 +147,18 @@ public interface IMessageStore
         string? messageId = null,
         TimeSpan? duplicateDetectionWindow = null,
         int deliveryCount = 0,
+        long? enqueuedSequenceNumber = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bump the entity's sequence counter and return the allocated number WITHOUT storing a
+    /// message. The router uses this to mint the publish-side sequence number on the original
+    /// entity when a send is transparently redirected (auto-forward) or fanned out (topics),
+    /// so <see cref="StoredMessage.EnqueuedSequenceNumber"/> reflects the entity the client
+    /// actually sent to. Creates the counter on first use for entities (topics) that have
+    /// never stored a message.
+    /// </summary>
+    Task<long> AllocateSequenceNumberAsync(string entityName, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Move any scheduled messages whose <see cref="StoredMessage.ScheduledEnqueueTime"/>

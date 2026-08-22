@@ -329,10 +329,12 @@ public sealed class QueueSenderProcessor : IMessageProcessor
         {
             if (!string.IsNullOrEmpty(_descriptor.ForwardTo))
             {
+                var originalSequence = await _store.AllocateSequenceNumberAsync(_queueName).ConfigureAwait(false);
                 await _router.RouteAsync(
                     _descriptor.ForwardTo, encoded, expiresAt, scheduledFor,
                     sessionId, messageId, dedupWindow, filterContext,
-                    forwardSource: _queueName).ConfigureAwait(false);
+                    forwardSource: _queueName,
+                    enqueuedSequenceNumber: originalSequence).ConfigureAwait(false);
             }
             else
             {

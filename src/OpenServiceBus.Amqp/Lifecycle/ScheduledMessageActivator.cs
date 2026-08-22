@@ -113,6 +113,7 @@ public sealed class ScheduledMessageActivator : BackgroundService
         var landed = await router.RouteAsync(
             topicName, locked.Message.EncodedMessage, locked.Message.ExpiresAt,
             scheduledEnqueueTime: null, sessionId: null, filterContext: filterContext,
+            enqueuedSequenceNumber: locked.Message.EnqueuedSequenceNumber,
             cancellationToken: cancellationToken).ConfigureAwait(false);
         _logger.LogDebug("Activated scheduled publish seq#{Seq} on topic {Topic} to {Count} subscriber(s)",
             locked.Message.SequenceNumber, topicName, landed.Count);

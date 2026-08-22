@@ -434,6 +434,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         string? messageId = null,
         TimeSpan? duplicateDetectionWindow = null,
         int deliveryCount = 0,
+        long? enqueuedSequenceNumber = null,
         CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -471,9 +472,10 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                     cmd.CommandText = """
                         INSERT INTO messages
                             (queue_name, sequence_number, enqueued_at, encoded_message,
-                             delivery_count, expires_at, scheduled_enqueue_time, is_deferred, session_id)
+                             delivery_count, expires_at, scheduled_enqueue_time, is_deferred, session_id,
+                             enqueued_sequence_number)
                         VALUES
-                            ($q, $seq, $enq, $body, $dc, $exp, $sched, 0, $sid)
+                            ($q, $seq, $enq, $body, $dc, $exp, $sched, 0, $sid, $eseq)
                         """;
                     cmd.Parameters.AddWithValue("$q", queueName);
                     cmd.Parameters.AddWithValue("$dc", deliveryCount);
@@ -483,6 +485,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                     cmd.Parameters.AddWithValue("$exp", (object?)ToUnixMs(expiresAt) ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("$sched", (object?)ToUnixMs(effectiveSchedule) ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("$sid", (object?)sessionId ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$eseq", enqueuedSequenceNumber ?? seq);
                     cmd.ExecuteNonQuery();
                 }
 
@@ -507,6 +510,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                 var message = new StoredMessage
                 {
                     SequenceNumber = seq,
+                    EnqueuedSequenceNumber = enqueuedSequenceNumber ?? seq,
                     EnqueuedAt = now,
                     EncodedMessage = encodedMessage,
                     ExpiresAt = expiresAt,
@@ -553,6 +557,20 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             : Convert.ToInt64(result);
     }
 
+    public async Task<long> AllocateSequenceNumberAsync(string entityName, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return WithTransaction(tx =>
+            {
+                EnsureQueueRow(tx, entityName);
+                return AllocateSequence(tx, entityName);
+            });
+        }
+        finally { _gate.Release(); }
+    }
+
     private void EnsureQueueRow(SqliteTransaction tx, string queueName)
     {
         // Called inside the gate; idempotent - handles the "enqueue to a queue created
@@ -589,7 +607,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         cmd.CommandText = """
             SELECT d.original_sequence_number,
                    m.enqueued_at, m.encoded_message, m.delivery_count,
-                   m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id
+                   m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id, m.enqueued_sequence_number
             FROM dedup_history d
             LEFT JOIN messages m
               ON m.queue_name = d.queue_name AND m.sequence_number = d.original_sequence_number
@@ -608,6 +626,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             return new StoredMessage
             {
                 SequenceNumber = rdr.GetInt64(0),
+                EnqueuedSequenceNumber = rdr.GetInt64(0),
                 EnqueuedAt = now,
                 EncodedMessage = Array.Empty<byte>(),
             };
@@ -642,7 +661,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
                 SELECT sequence_number, enqueued_at, encoded_message, delivery_count,
-                       expires_at, scheduled_enqueue_time, is_deferred, session_id
+                       expires_at, scheduled_enqueue_time, is_deferred, session_id, enqueued_sequence_number
                 FROM messages
                 WHERE queue_name = $q AND sequence_number >= $seq
                 ORDER BY sequence_number
@@ -715,7 +734,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             {
                 select.CommandText = """
                     SELECT m.sequence_number, m.enqueued_at, m.encoded_message, m.delivery_count,
-                           m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id
+                           m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id, m.enqueued_sequence_number
                     FROM messages m
                     WHERE m.queue_name = $q
                       AND m.expires_at IS NOT NULL
@@ -811,7 +830,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             select.CommandText = sessionId is null
                 ? """
                   SELECT m.sequence_number, m.enqueued_at, m.encoded_message, m.delivery_count,
-                         m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id
+                         m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id, m.enqueued_sequence_number
                   FROM messages m
                   WHERE m.queue_name = $q
                     AND m.is_deferred = 0
@@ -825,7 +844,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                   """
                 : """
                   SELECT m.sequence_number, m.enqueued_at, m.encoded_message, m.delivery_count,
-                         m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id
+                         m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id, m.enqueued_sequence_number
                   FROM messages m
                   WHERE m.queue_name = $q
                     AND m.session_id = $sid
@@ -901,7 +920,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
                 SELECT m.sequence_number, m.enqueued_at, m.encoded_message, m.delivery_count,
-                       m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id
+                       m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id, m.enqueued_sequence_number
                 FROM locks l
                 JOIN messages m ON m.queue_name = l.queue_name AND m.sequence_number = l.sequence_number
                 WHERE l.lock_token = $t AND l.locked_until > $now
@@ -1080,7 +1099,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                 sel.Transaction = tx;
                 sel.CommandText = """
                     SELECT sequence_number, enqueued_at, encoded_message, delivery_count,
-                           expires_at, scheduled_enqueue_time, is_deferred, session_id
+                           expires_at, scheduled_enqueue_time, is_deferred, session_id, enqueued_sequence_number
                     FROM messages
                     WHERE queue_name = $q AND sequence_number = $seq
                     """;
@@ -1131,7 +1150,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             sel.Transaction = tx;
             sel.CommandText = """
                 SELECT sequence_number, enqueued_at, encoded_message, delivery_count,
-                       expires_at, scheduled_enqueue_time, is_deferred, session_id
+                       expires_at, scheduled_enqueue_time, is_deferred, session_id, enqueued_sequence_number
                 FROM messages
                 WHERE queue_name = $q AND sequence_number = $seq AND is_deferred = 1
                 """;
@@ -1556,7 +1575,9 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
     /// <summary>
     /// Reads a <see cref="StoredMessage"/> from a row whose columns start at
     /// <paramref name="sequenceColIndex"/> in the order: seq, enqueued_at, body, delivery_count,
-    /// expires_at, scheduled_enqueue_time, is_deferred, session_id.
+    /// expires_at, scheduled_enqueue_time, is_deferred, session_id, enqueued_sequence_number.
+    /// A NULL enqueued_sequence_number (rows written by pre-migration schema versions) falls
+    /// back to the row's own sequence number.
     /// </summary>
     private static StoredMessage ReadStoredMessage(SqliteDataReader rdr, int sequenceColIndex)
     {
@@ -1571,6 +1592,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             ScheduledEnqueueTime = rdr.IsDBNull(i + 5) ? null : FromUnixMs(rdr.GetInt64(i + 5)),
             IsDeferred = rdr.GetInt64(i + 6) != 0,
             SessionId = rdr.IsDBNull(i + 7) ? null : rdr.GetString(i + 7),
+            EnqueuedSequenceNumber = rdr.IsDBNull(i + 8) ? rdr.GetInt64(i + 0) : rdr.GetInt64(i + 8),
         };
     }
 

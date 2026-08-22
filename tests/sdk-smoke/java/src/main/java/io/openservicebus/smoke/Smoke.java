@@ -11,6 +11,7 @@ import com.azure.messaging.servicebus.ServiceBusFailureReason;
 import com.azure.messaging.servicebus.ServiceBusSessionReceiverClient;
 import com.azure.messaging.servicebus.models.AbandonOptions;
 import com.azure.messaging.servicebus.models.DeadLetterOptions;
+import com.azure.messaging.servicebus.models.ServiceBusMessageState;
 import com.azure.messaging.servicebus.models.SubQueue;
 
 import java.net.URI;
@@ -32,7 +33,7 @@ import java.util.regex.Pattern;
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
  *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
  *   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
- *   -> topic schedule -> correlation filter
+ *   -> topic schedule -> correlation filter -> system props
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -797,6 +798,57 @@ public final class Smoke {
                 : "FAIL correlation filter: rule " + corrRuleResp.statusCode() + ", got " + corrCount + " msg(s), id " + corrId);
             http.send(
                 HttpRequest.newBuilder(URI.create(base + "/" + corrTopic + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+            // 27. system props - broker-stamped system properties (issue #55): a scheduled
+            // message peeks as SCHEDULED; the delivery carries state ACTIVE, the original
+            // scheduled enqueue time, the round-tripped partition key, and the enqueued
+            // sequence number; deferred retrieval reports state DEFERRED.
+            String spQueue = "smoke-sysprops-" + stamp;
+            http.send(atomPut.apply(spQueue,
+                "<QueueDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            boolean spOk = false;
+            String spDetail = "scheduled message never arrived";
+            try (ServiceBusSenderClient spSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(spQueue).buildClient();
+                 ServiceBusReceiverClient spReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(spQueue).disableAutoComplete().buildClient()) {
+                ServiceBusMessage spMsg = new ServiceBusMessage("sys props");
+                spMsg.setMessageId("sp-" + stamp);
+                spMsg.setPartitionKey("pk-" + stamp);
+                OffsetDateTime spWhen = OffsetDateTime.now().plusSeconds(2);
+                Long spSeq = spSender.scheduleMessage(spMsg, spWhen);
+                ServiceBusReceivedMessage spPeeked = spReceiver.peekMessage(spSeq);
+                ServiceBusReceivedMessage spReceived = null;
+                for (ServiceBusReceivedMessage m : spReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    spReceived = m;
+                }
+                if (spReceived != null) {
+                    spReceiver.defer(spReceived);
+                    ServiceBusReceivedMessage spDeferred = spReceiver.receiveDeferredMessage(spReceived.getSequenceNumber());
+                    if (spDeferred != null) {
+                        spReceiver.complete(spDeferred);
+                    }
+                    spOk = spPeeked != null && spPeeked.getState() == ServiceBusMessageState.SCHEDULED
+                        && spReceived.getState() == ServiceBusMessageState.ACTIVE
+                        && ("pk-" + stamp).equals(spReceived.getPartitionKey())
+                        && spReceived.getEnqueuedSequenceNumber() == spSeq
+                        && spReceived.getScheduledEnqueueTime() != null
+                        && Math.abs(Duration.between(spReceived.getScheduledEnqueueTime(), spWhen).toMillis()) < 1000
+                        && spDeferred != null && spDeferred.getState() == ServiceBusMessageState.DEFERRED;
+                    spDetail = spOk ? ""
+                        : "peek=" + (spPeeked == null ? "miss" : spPeeked.getState())
+                        + " state=" + spReceived.getState()
+                        + " pk=" + spReceived.getPartitionKey()
+                        + " eseq=" + spReceived.getEnqueuedSequenceNumber() + "/" + spSeq
+                        + " sched=" + spReceived.getScheduledEnqueueTime()
+                        + " deferred=" + (spDeferred == null ? "miss" : spDeferred.getState());
+                }
+            }
+            results.add(spOk ? "PASS system props" : "FAIL system props: " + spDetail);
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + spQueue + "?api-version=2021-05")).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);

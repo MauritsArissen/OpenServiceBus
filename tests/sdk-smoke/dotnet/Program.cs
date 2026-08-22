@@ -5,7 +5,7 @@
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
-//   -> topic schedule -> correlation filter
+//   -> topic schedule -> correlation filter -> system props
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -459,6 +459,41 @@ try
     Check("correlation filter", corrOk,
         corrOk ? "" : corrGot is null ? "no message" : corrExtra is null ? corrGot.MessageId! : "non-matching message leaked");
     await admin.DeleteTopicAsync(corrTopic);
+    // 27. system props - broker-stamped system properties (issue #55): a scheduled message
+    // peeks as Scheduled; the delivery carries State=Active, the original scheduled enqueue
+    // time, the round-tripped PartitionKey, and EnqueuedSequenceNumber; deferred retrieval
+    // reports State=Deferred.
+    var spQueue = $"smoke-sysprops-{stamp}";
+    await admin.CreateQueueAsync(spQueue);
+    var spSender = client.CreateSender(spQueue);
+    var spWhen = DateTimeOffset.UtcNow.AddSeconds(2);
+    var spSeq = await spSender.ScheduleMessageAsync(
+        new ServiceBusMessage("sys props") { MessageId = $"sp-{stamp}", PartitionKey = $"pk-{stamp}" }, spWhen);
+    var spReceiver = client.CreateReceiver(spQueue);
+    var spPeeked = (await spReceiver.PeekMessagesAsync(10, fromSequenceNumber: 1)).FirstOrDefault(m => m.MessageId == $"sp-{stamp}");
+    var spReceived = await spReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    var spOk = false;
+    var spDetail = "scheduled message never arrived";
+    if (spReceived is not null)
+    {
+        await spReceiver.DeferMessageAsync(spReceived);
+        var spDeferred = await spReceiver.ReceiveDeferredMessageAsync(spReceived.SequenceNumber);
+        if (spDeferred is not null) await spReceiver.CompleteMessageAsync(spDeferred);
+        spOk = spPeeked is not null && spPeeked.State == ServiceBusMessageState.Scheduled
+            && spReceived.State == ServiceBusMessageState.Active
+            && spReceived.PartitionKey == $"pk-{stamp}"
+            && spReceived.EnqueuedSequenceNumber == spSeq
+            && Math.Abs((spReceived.ScheduledEnqueueTime - spWhen).TotalSeconds) < 1
+            && spDeferred is not null && spDeferred.State == ServiceBusMessageState.Deferred;
+        spDetail = spOk ? "" :
+            $"peek={spPeeked?.State.ToString() ?? "miss"} state={spReceived.State} pk={spReceived.PartitionKey ?? "<null>"}" +
+            $" eseq={spReceived.EnqueuedSequenceNumber}/{spSeq} sched={spReceived.ScheduledEnqueueTime:O}" +
+            $" deferred={spDeferred?.State.ToString() ?? "miss"}";
+    }
+    Check("system props", spOk, spDetail);
+    await spSender.CloseAsync();
+    await spReceiver.CloseAsync();
+    await admin.DeleteQueueAsync(spQueue);
 }
 catch (Exception e)
 {

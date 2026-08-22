@@ -9,6 +9,15 @@ public sealed record StoredMessage
 {
     public required long SequenceNumber { get; init; }
 
+    /// <summary>
+    /// The sequence number assigned by the entity the message was ORIGINALLY sent to.
+    /// Equal to <see cref="SequenceNumber"/> for direct sends; differs after auto-forwarding,
+    /// topic fan-out and dead-letter moves, where the copy gets a fresh sequence number on the
+    /// destination but keeps the publish-side value here. Stamped onto deliveries as
+    /// <c>x-opt-enqueue-sequence-number</c>.
+    /// </summary>
+    public long EnqueuedSequenceNumber { get; init; }
+
     public required DateTimeOffset EnqueuedAt { get; init; }
 
     /// <summary>The raw AMQP-encoded message bytes (an opaque <c>Message.Encode()</c> payload).</summary>

@@ -5,7 +5,7 @@
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
-//   -> topic schedule -> correlation filter
+//   -> topic schedule -> correlation filter -> system props
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -523,6 +523,43 @@ const run = async () => {
     corrOk ? "" : `rule ${corrRuleResp.status}, got ${corrGot.length} msg(s), extra ${corrExtra.length}`,
   );
   await fetch(`${httpBase}/${corrTopic}?api-version=2021-05`, { method: "DELETE" });
+  // 27. system props - broker-stamped system properties (issue #55): a scheduled message
+  // peeks as "scheduled"; the delivery carries state "active", the original scheduled
+  // enqueue time, the round-tripped partitionKey, and enqueuedSequenceNumber; deferred
+  // retrieval reports state "deferred".
+  const spQueue = `smoke-sysprops-${stamp}`;
+  await atomPut(spQueue,
+    '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  const spSender = client.createSender(spQueue);
+  const spWhen = new Date(Date.now() + 2000);
+  const [spSeq] = await spSender.scheduleMessages(
+    { body: "sys props", messageId: `sp-${stamp}`, partitionKey: `pk-${stamp}` }, spWhen);
+  const spReceiver = client.createReceiver(spQueue);
+  const spPeeked = (await spReceiver.peekMessages(10, { fromSequenceNumber: Long.fromNumber(1) }))
+    .find((m) => m.messageId === `sp-${stamp}`);
+  const [spReceived] = await spReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  let spOk = false;
+  let spDetail = "scheduled message never arrived";
+  if (spReceived) {
+    await spReceiver.deferMessage(spReceived);
+    const [spDeferred] = await spReceiver.receiveDeferredMessages([spReceived.sequenceNumber]);
+    if (spDeferred) await spReceiver.completeMessage(spDeferred);
+    spOk =
+      spPeeked?.state === "scheduled" &&
+      spReceived.state === "active" &&
+      spReceived.partitionKey === `pk-${stamp}` &&
+      Long.fromValue(spReceived.enqueuedSequenceNumber ?? 0).equals(spSeq) &&
+      Math.abs(spReceived.scheduledEnqueueTimeUtc.getTime() - spWhen.getTime()) < 1000 &&
+      spDeferred?.state === "deferred";
+    spDetail = spOk ? "" :
+      `peek=${spPeeked?.state ?? "miss"} state=${spReceived.state} pk=${spReceived.partitionKey ?? "<null>"}` +
+      ` eseq=${spReceived.enqueuedSequenceNumber}/${spSeq} sched=${spReceived.scheduledEnqueueTimeUtc?.toISOString()}` +
+      ` deferred=${spDeferred?.state ?? "miss"}`;
+  }
+  check("system props", spOk, spDetail);
+  await spSender.close();
+  await spReceiver.close();
+  await fetch(`${httpBase}/${spQueue}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>

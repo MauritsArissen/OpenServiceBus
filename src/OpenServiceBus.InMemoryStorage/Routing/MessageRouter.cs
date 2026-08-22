@@ -50,13 +50,14 @@ public sealed class MessageRouter : IMessageRouter
         MessageFilterContext? filterContext = null,
         int deliveryCount = 0,
         string? forwardSource = null,
+        long? enqueuedSequenceNumber = null,
         CancellationToken cancellationToken = default)
     {
         var landed = new List<string>();
         await RouteInternalAsync(
             targetEntityName, encodedMessage, expiresAt, scheduledEnqueueTime,
             sessionId, messageId, duplicateDetectionWindow, filterContext, deliveryCount,
-            depth: 0, landed, forwardSource, cancellationToken).ConfigureAwait(false);
+            depth: 0, landed, forwardSource, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
         return landed;
     }
 
@@ -73,6 +74,7 @@ public sealed class MessageRouter : IMessageRouter
         int depth,
         List<string> landed,
         string? forwardSource,
+        long? enqueuedSequenceNumber,
         CancellationToken cancellationToken)
     {
         var maxDepth = ((IMessageRouter)this).MaxForwardDepth;
@@ -83,7 +85,7 @@ public sealed class MessageRouter : IMessageRouter
                 await TransferDeadLetterAsync(
                     forwardSource, encoded, "MaxTransferHopCountExceeded",
                     $"The maximum number of transfer hops ({maxDepth}) was exceeded while forwarding to '{targetEntityName}'.",
-                    deliveryCount, landed, cancellationToken).ConfigureAwait(false);
+                    deliveryCount, landed, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
                 return;
             }
             _logger.LogWarning(
@@ -106,7 +108,7 @@ public sealed class MessageRouter : IMessageRouter
                         await TransferDeadLetterAsync(
                             forwardSource, encoded, "MessagingEntityDisabled",
                             $"The forward target topic '{topic.Name}' is {topic.Status} and does not accept messages.",
-                            deliveryCount, landed, cancellationToken).ConfigureAwait(false);
+                            deliveryCount, landed, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
                         return;
                     }
                     var topicUsage = await TopicUsageBytesAsync(topic.Name, cancellationToken).ConfigureAwait(false);
@@ -115,7 +117,7 @@ public sealed class MessageRouter : IMessageRouter
                         await TransferDeadLetterAsync(
                             forwardSource, encoded, "QuotaExceeded",
                             $"The forward target topic '{topic.Name}' has reached its {topic.MaxSizeInMegabytes} MB quota.",
-                            deliveryCount, landed, cancellationToken).ConfigureAwait(false);
+                            deliveryCount, landed, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
                         return;
                     }
                 }
@@ -128,6 +130,10 @@ public sealed class MessageRouter : IMessageRouter
                         topic.Name);
                     return;
                 }
+
+                // The publish-side sequence number lives on the topic: every fan-out copy
+                // carries the same x-opt-enqueue-sequence-number, allocated once per publish.
+                enqueuedSequenceNumber ??= await _store.AllocateSequenceNumberAsync(topic.Name, cancellationToken).ConfigureAwait(false);
 
                 var matched = _topics.EvaluateSubscriberMatches(topic.Name, filterContext);
 
@@ -160,7 +166,7 @@ public sealed class MessageRouter : IMessageRouter
                     {
                         await RouteInternalAsync(sub.ForwardTo, subEncoded, expiresAt, scheduledFor,
                             sessionId, messageId, dedupWindow, filterContext, deliveryCount,
-                            depth + 1, landed, sub.BackingQueueName, cancellationToken).ConfigureAwait(false);
+                            depth + 1, landed, sub.BackingQueueName, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
                         continue;
                     }
 
@@ -170,7 +176,7 @@ public sealed class MessageRouter : IMessageRouter
                         var dlq = sub.BackingQueueName + "/$DeadLetterQueue";
                         await _store.EnqueueAsync(
                             dlq, subEncoded, expiresAt, scheduledFor,
-                            sessionId: null, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
+                            sessionId: null, messageId, dedupWindow, deliveryCount, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
                         landed.Add(dlq);
                         _logger.LogWarning(
                             "Message without a session id matched session-enabled subscription '{Subscription}' - copy dead-lettered.",
@@ -180,7 +186,7 @@ public sealed class MessageRouter : IMessageRouter
 
                     await _store.EnqueueAsync(
                         sub.BackingQueueName, subEncoded, expiresAt, scheduledFor,
-                        subSessionId, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
+                        subSessionId, messageId, dedupWindow, deliveryCount, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
                     landed.Add(sub.BackingQueueName);
                     _activity?.Touch(sub.BackingQueueName);
                 }
@@ -197,7 +203,7 @@ public sealed class MessageRouter : IMessageRouter
                 await TransferDeadLetterAsync(
                     forwardSource, encoded, "MessagingEntityNotFound",
                     $"The forward target '{targetEntityName}' does not exist.",
-                    deliveryCount, landed, cancellationToken).ConfigureAwait(false);
+                    deliveryCount, landed, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
                 return;
             }
             _logger.LogWarning("Routing target '{Target}' resolves to neither a topic nor a queue - message dropped.", targetEntityName);
@@ -209,15 +215,19 @@ public sealed class MessageRouter : IMessageRouter
             await TransferDeadLetterAsync(
                 forwardSource, encoded, "MessagingEntityDisabled",
                 $"The forward target '{queue.Name}' is {queue.Status} and does not accept messages.",
-                deliveryCount, landed, cancellationToken).ConfigureAwait(false);
+                deliveryCount, landed, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
             return;
         }
 
         if (!string.IsNullOrEmpty(queue.ForwardTo))
         {
+            // A forwarding queue is a transparent passthrough that never stores the message,
+            // but it IS the entity the client sent to - mint its sequence number here so the
+            // final copy's x-opt-enqueue-sequence-number reflects the original entity.
+            enqueuedSequenceNumber ??= await _store.AllocateSequenceNumberAsync(queue.Name, cancellationToken).ConfigureAwait(false);
             await RouteInternalAsync(queue.ForwardTo, encoded, expiresAt, scheduledFor,
                 sessionId, messageId, dedupWindow, filterContext, deliveryCount,
-                depth + 1, landed, queue.Name, cancellationToken).ConfigureAwait(false);
+                depth + 1, landed, queue.Name, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -231,14 +241,14 @@ public sealed class MessageRouter : IMessageRouter
                 await TransferDeadLetterAsync(
                     forwardSource, encoded, "QuotaExceeded",
                     $"The forward target '{queue.Name}' has reached its {queue.MaxSizeInMegabytes} MB quota.",
-                    deliveryCount, landed, cancellationToken).ConfigureAwait(false);
+                    deliveryCount, landed, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
                 return;
             }
         }
 
         await _store.EnqueueAsync(
             queue.Name, encoded, expiresAt, scheduledFor,
-            sessionId, messageId, dedupWindow, deliveryCount, cancellationToken).ConfigureAwait(false);
+            sessionId, messageId, dedupWindow, deliveryCount, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
         landed.Add(queue.Name);
         _activity?.Touch(queue.Name);
     }
@@ -255,6 +265,7 @@ public sealed class MessageRouter : IMessageRouter
         string description,
         int deliveryCount,
         List<string> landed,
+        long? enqueuedSequenceNumber,
         CancellationToken cancellationToken)
     {
         var target = sourceEntity + EntityNames.TransferDeadLetterSuffix;
@@ -264,7 +275,7 @@ public sealed class MessageRouter : IMessageRouter
             await _store.EnqueueAsync(
                 target, stamped, expiresAt: null, scheduledEnqueueTime: null,
                 sessionId: null, messageId: null, duplicateDetectionWindow: null,
-                deliveryCount, cancellationToken).ConfigureAwait(false);
+                deliveryCount, enqueuedSequenceNumber, cancellationToken).ConfigureAwait(false);
         }
         catch (InvalidOperationException)
         {

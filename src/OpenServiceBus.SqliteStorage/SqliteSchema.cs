@@ -43,6 +43,10 @@ internal static class SqliteSchema
             scheduled_enqueue_time  INTEGER NULL,
             is_deferred             INTEGER NOT NULL DEFAULT 0,
             session_id              TEXT NULL,
+            -- The sequence number on the entity the message was ORIGINALLY sent to,
+            -- preserved across forward/fan-out/dead-letter re-enqueues. NULL on rows written
+            -- by older schema versions and means "same as sequence_number".
+            enqueued_sequence_number INTEGER NULL,
             PRIMARY KEY (queue_name, sequence_number),
             FOREIGN KEY (queue_name) REFERENCES queues(name) ON DELETE CASCADE
         );
@@ -168,6 +172,7 @@ internal static class SqliteSchema
         using var cmd = connection.CreateCommand();
         cmd.CommandText = ConnectionPragmas + "\n" + Sql;
         cmd.ExecuteNonQuery();
+        AddColumnIfMissing(connection, "messages", "enqueued_sequence_number", "INTEGER NULL");
         AddColumnIfMissing(connection, "session_state", "updated_at", "INTEGER NULL");
     }
 
