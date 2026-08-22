@@ -1070,7 +1070,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                 return null;
             }
 
-            var newUntil = _timeProvider.GetUtcNow() + lockDuration;
+            var newUntil = LockDeadlines.Advance(entry.LockedUntil, _timeProvider.GetUtcNow() + lockDuration);
             using (var upd = _connection.CreateCommand())
             {
                 upd.Transaction = tx;
@@ -1387,13 +1387,14 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         {
             using var tx = _connection.BeginTransaction();
             string? link = null;
+            DateTimeOffset previousUntil;
             using (var sel = _connection.CreateCommand())
             {
                 sel.Transaction = tx;
                 // An expired session lock cannot be revived by a late renew - same deadline
                 // semantics as message locks.
                 sel.CommandText = """
-                    SELECT link_name FROM session_locks
+                    SELECT link_name, locked_until FROM session_locks
                     WHERE queue_name = $q AND session_id = $sid AND locked_until > $now
                     """;
                 sel.Parameters.AddWithValue("$q", queueName);
@@ -1402,6 +1403,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                 using var rdr = sel.ExecuteReader();
                 if (!rdr.Read()) { tx.Commit(); return null; }
                 link = rdr.IsDBNull(0) ? null : rdr.GetString(0);
+                previousUntil = FromUnixMs(rdr.GetInt64(1));
             }
             if (link is not null && requestingLinkName is not null
                 && !string.Equals(link, requestingLinkName, StringComparison.Ordinal))
@@ -1410,7 +1412,7 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
                 return null;
             }
 
-            var newUntil = _timeProvider.GetUtcNow() + lockDuration;
+            var newUntil = LockDeadlines.Advance(previousUntil, _timeProvider.GetUtcNow() + lockDuration);
             using (var upd = _connection.CreateCommand())
             {
                 upd.Transaction = tx;

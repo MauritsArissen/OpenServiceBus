@@ -81,7 +81,7 @@ $management       → ManagementRequestProcessor (renew, peek, schedule, session
 $cbs              → CbsRequestProcessor (token validation when SAS enabled)
 ```
 
-Four wire details worth knowing about dispositions, matching real Service Bus:
+Five wire details worth knowing about dispositions and locks, matching real Service Bus:
 
 - A settle or renew against an expired/unknown lock FAILS instead of silently
   succeeding: link dispositions are settled `Rejected` with
@@ -92,6 +92,12 @@ Four wire details worth knowing about dispositions, matching real Service Bus:
   detached with the condition instead of going silent. The lock DEADLINE is what counts -
   an expired lock refuses settlement even before the sweeper reclaims it, and the message
   becomes available for redelivery immediately.
+
+- A lock renewal (message or session) always moves the deadline strictly FORWARD at
+  millisecond granularity - AMQP timestamps carry milliseconds, so a renew that lands
+  within the same millisecond as the previous deadline reports the previous value plus
+  1 ms instead of an equal timestamp. Without this, a fast receive-then-renew round trip
+  could report an unchanged `LockedUntil` to the SDK.
 
 - Settling a peek-lock disposition ECHOES the receiver's outcome (Rejected for
   dead-letter, Modified for abandon/defer, Accepted for complete) instead of blanket

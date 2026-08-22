@@ -508,7 +508,7 @@ public sealed class InMemoryMessageStore : IMessageStore
                 return Task.FromResult<DateTimeOffset?>(null);
             }
 
-            var newUntil = _timeProvider.GetUtcNow() + lockDuration;
+            var newUntil = LockDeadlines.Advance(entry.LockedUntil, _timeProvider.GetUtcNow() + lockDuration);
             entry.LockedUntil = newUntil;
             return Task.FromResult<DateTimeOffset?>(newUntil);
         }
@@ -780,7 +780,7 @@ public sealed class InMemoryMessageStore : IMessageStore
             {
                 return Task.FromResult<DateTimeOffset?>(null);
             }
-            session.Lock.LockedUntil = _timeProvider.GetUtcNow() + lockDuration;
+            session.Lock.LockedUntil = LockDeadlines.Advance(session.Lock.LockedUntil, _timeProvider.GetUtcNow() + lockDuration);
             return Task.FromResult<DateTimeOffset?>(session.Lock.LockedUntil);
         }
     }
