@@ -5,7 +5,7 @@
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
-//   -> topic schedule
+//   -> topic schedule -> correlation filter
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -430,6 +430,35 @@ try
     Check("topic schedule", schedOk,
         schedOk ? "" : dueMsg is null ? "scheduled message never arrived" : "cancelled message leaked");
     await admin.DeleteTopicAsync(schedTopic);
+
+    // 26. correlation filter - a correlation rule with a numeric application property
+    // matches across property-name casing and AMQP numeric width (issue #56): the rule
+    // value is a long while the published property is a plain int.
+    var corrTopic = $"smoke-corr-{stamp}";
+    await admin.CreateTopicAsync(corrTopic);
+    await admin.CreateSubscriptionAsync(corrTopic, "cf");
+    await admin.DeleteRuleAsync(corrTopic, "cf", "$Default");
+    var corrRule = new CorrelationRuleFilter();
+    corrRule.ApplicationProperties["Priority"] = 5L;
+    await admin.CreateRuleAsync(corrTopic, "cf", new CreateRuleOptions("prio", corrRule));
+    var corrSender = client.CreateSender(corrTopic);
+    var corrMatch = new ServiceBusMessage("corr-match") { MessageId = $"corr-match-{stamp}" };
+    corrMatch.ApplicationProperties["priority"] = 5;
+    var corrMiss = new ServiceBusMessage("corr-miss") { MessageId = $"corr-miss-{stamp}" };
+    corrMiss.ApplicationProperties["priority"] = 7;
+    await corrSender.SendMessageAsync(corrMatch);
+    await corrSender.SendMessageAsync(corrMiss);
+    await corrSender.CloseAsync();
+    var corrReceiver = client.CreateReceiver(corrTopic, "cf");
+    var corrGot = await corrReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    if (corrGot is not null) await corrReceiver.CompleteMessageAsync(corrGot);
+    var corrExtra = await corrReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2));
+    if (corrExtra is not null) await corrReceiver.CompleteMessageAsync(corrExtra);
+    await corrReceiver.CloseAsync();
+    var corrOk = corrGot?.MessageId == $"corr-match-{stamp}" && corrExtra is null;
+    Check("correlation filter", corrOk,
+        corrOk ? "" : corrGot is null ? "no message" : corrExtra is null ? corrGot.MessageId! : "non-matching message leaked");
+    await admin.DeleteTopicAsync(corrTopic);
 }
 catch (Exception e)
 {

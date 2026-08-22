@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
  *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
  *   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
- *   -> topic schedule
+ *   -> topic schedule -> correlation filter
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -744,6 +744,59 @@ public final class Smoke {
             results.add(schedOk ? "PASS topic schedule" : "FAIL topic schedule: " + schedDetail);
             http.send(
                 HttpRequest.newBuilder(URI.create(base + "/" + schedTopic + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+            // 26. correlation filter - a correlation rule with a numeric application
+            // property matches across property-name casing and AMQP numeric width (issue
+            // #56): the rule value is a long while the published property is a plain int.
+            String corrTopic = "smoke-corr-" + stamp;
+            http.send(atomPut.apply(corrTopic,
+                "<TopicDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            http.send(atomPut.apply(corrTopic + "/subscriptions/cf",
+                "<SubscriptionDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + corrTopic + "/subscriptions/cf/rules/$Default?api-version=2021-05"))
+                    .DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> corrRuleResp = http.send(atomPut.apply(corrTopic + "/subscriptions/cf/rules/prio",
+                "<RuleDescription xmlns:i=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns=\"" + sbNs + "\">"
+                + "<Filter i:type=\"CorrelationFilter\"><Properties><KeyValueOfstringanyType><Key>Priority</Key>"
+                + "<Value xmlns:d6p1=\"http://www.w3.org/2001/XMLSchema\" i:type=\"d6p1:long\">5</Value>"
+                + "</KeyValueOfstringanyType></Properties></Filter></RuleDescription>"),
+                HttpResponse.BodyHandlers.ofString());
+            try (ServiceBusSenderClient corrSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().topicName(corrTopic).buildClient()) {
+                ServiceBusMessage corrMatch = new ServiceBusMessage("corr-match");
+                corrMatch.setMessageId("corr-match-" + stamp);
+                corrMatch.getApplicationProperties().put("priority", 5);
+                corrSender.sendMessage(corrMatch);
+                ServiceBusMessage corrMiss = new ServiceBusMessage("corr-miss");
+                corrMiss.setMessageId("corr-miss-" + stamp);
+                corrMiss.getApplicationProperties().put("priority", 7);
+                corrSender.sendMessage(corrMiss);
+            }
+            String corrId = null;
+            int corrCount = 0;
+            try (ServiceBusReceiverClient corrReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().topicName(corrTopic).subscriptionName("cf")
+                    .disableAutoComplete().buildClient()) {
+                for (ServiceBusReceivedMessage m : corrReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    corrId = m.getMessageId();
+                    corrCount++;
+                    corrReceiver.complete(m);
+                }
+                for (ServiceBusReceivedMessage m : corrReceiver.receiveMessages(1, Duration.ofSeconds(2))) {
+                    corrCount++;
+                    corrReceiver.complete(m);
+                }
+            }
+            results.add(corrRuleResp.statusCode() == 201 && corrCount == 1 && ("corr-match-" + stamp).equals(corrId)
+                ? "PASS correlation filter"
+                : "FAIL correlation filter: rule " + corrRuleResp.statusCode() + ", got " + corrCount + " msg(s), id " + corrId);
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + corrTopic + "?api-version=2021-05")).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);
