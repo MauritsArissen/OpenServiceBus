@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
  *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
  *   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
- *   -> topic schedule -> correlation filter -> system props
+ *   -> topic schedule -> correlation filter -> system props -> batch receive
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -849,6 +849,43 @@ public final class Smoke {
             results.add(spOk ? "PASS system props" : "FAIL system props: " + spDetail);
             http.send(
                 HttpRequest.newBuilder(URI.create(base + "/" + spQueue + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+            // 28. batch receive - one receiveMessages call returns a multi-message batch,
+            // a short queue yields a partial batch, and an empty queue honors the wait time.
+            String brQueue = "smoke-batch-" + stamp;
+            http.send(atomPut.apply(brQueue,
+                "<QueueDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            List<String> brSeen = new ArrayList<>();
+            int brExtra = 0;
+            try (ServiceBusSenderClient brSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(brQueue).buildClient();
+                 ServiceBusReceiverClient brReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(brQueue).disableAutoComplete().buildClient()) {
+                for (int i = 0; i < 3; i++) {
+                    ServiceBusMessage brMsg = new ServiceBusMessage("batch-" + i);
+                    brMsg.setMessageId("br-" + i + "-" + stamp);
+                    brSender.sendMessage(brMsg);
+                }
+                for (ServiceBusReceivedMessage m : brReceiver.receiveMessages(5, Duration.ofSeconds(10))) {
+                    brSeen.add(m.getMessageId());
+                    brReceiver.complete(m);
+                }
+                for (ServiceBusReceivedMessage m : brReceiver.receiveMessages(5, Duration.ofSeconds(2))) {
+                    brExtra++;
+                    brReceiver.complete(m);
+                }
+            }
+            boolean brOk = brSeen.size() == 3 && brExtra == 0;
+            for (int i = 0; brOk && i < 3; i++) {
+                brOk = brSeen.get(i).equals("br-" + i + "-" + stamp);
+            }
+            results.add(brOk ? "PASS batch receive"
+                : "FAIL batch receive: got " + brSeen.size() + " then " + brExtra);
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + brQueue + "?api-version=2021-05")).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);

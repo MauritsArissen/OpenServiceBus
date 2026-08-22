@@ -5,7 +5,7 @@
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
-//   -> topic schedule -> correlation filter -> system props
+//   -> topic schedule -> correlation filter -> system props -> batch receive
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -494,6 +494,28 @@ try
     await spSender.CloseAsync();
     await spReceiver.CloseAsync();
     await admin.DeleteQueueAsync(spQueue);
+
+    // 28. batch receive - one ReceiveMessagesAsync call returns a multi-message batch,
+    // a short queue yields a partial batch, and an empty queue honors maxWaitTime.
+    var brQueue = $"smoke-batch-{stamp}";
+    await admin.CreateQueueAsync(brQueue);
+    var brSender = client.CreateSender(brQueue);
+    for (var i = 0; i < 3; i++)
+    {
+        await brSender.SendMessageAsync(new ServiceBusMessage($"batch-{i}") { MessageId = $"br-{i}-{stamp}" });
+    }
+    await brSender.CloseAsync();
+    var brReceiver = client.CreateReceiver(brQueue);
+    var brBatch = await brReceiver.ReceiveMessagesAsync(maxMessages: 5, maxWaitTime: TimeSpan.FromSeconds(10));
+    foreach (var brMsg in brBatch) await brReceiver.CompleteMessageAsync(brMsg);
+    var brEmpty = await brReceiver.ReceiveMessagesAsync(maxMessages: 5, maxWaitTime: TimeSpan.FromSeconds(2));
+    await brReceiver.CloseAsync();
+    var brOk = brBatch.Count == 3
+        && brBatch.Select(m => m.MessageId).SequenceEqual(Enumerable.Range(0, 3).Select(i => $"br-{i}-{stamp}"))
+        && brEmpty.Count == 0;
+    Check("batch receive", brOk,
+        brOk ? "" : $"got {brBatch.Count} then {brEmpty.Count}");
+    await admin.DeleteQueueAsync(brQueue);
 }
 catch (Exception e)
 {

@@ -5,7 +5,7 @@
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
-//   -> topic schedule -> correlation filter -> system props
+//   -> topic schedule -> correlation filter -> system props -> batch receive
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -560,6 +560,29 @@ const run = async () => {
   await spSender.close();
   await spReceiver.close();
   await fetch(`${httpBase}/${spQueue}?api-version=2021-05`, { method: "DELETE" });
+
+  // 28. batch receive - one receiveMessages call returns a multi-message batch, a short
+  // queue yields a partial batch, and an empty queue honors maxWaitTimeInMs.
+  const brQueue = `smoke-batch-${stamp}`;
+  await atomPut(brQueue,
+    '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  const brSender = client.createSender(brQueue);
+  await brSender.sendMessages([0, 1, 2].map((i) => ({
+    body: `batch-${i}`,
+    messageId: `br-${i}-${stamp}`,
+  })));
+  await brSender.close();
+  const brReceiver = client.createReceiver(brQueue);
+  const brBatch = await brReceiver.receiveMessages(5, { maxWaitTimeInMs: 10_000 });
+  for (const brMsg of brBatch) await brReceiver.completeMessage(brMsg);
+  const brEmpty = await brReceiver.receiveMessages(5, { maxWaitTimeInMs: 2_000 });
+  await brReceiver.close();
+  const brOk =
+    brBatch.length === 3 &&
+    brBatch.every((m, i) => m.messageId === `br-${i}-${stamp}`) &&
+    brEmpty.length === 0;
+  check("batch receive", brOk, brOk ? "" : `got ${brBatch.length} then ${brEmpty.length}`);
+  await fetch(`${httpBase}/${brQueue}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>

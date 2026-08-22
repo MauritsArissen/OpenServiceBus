@@ -81,7 +81,7 @@ $management       → ManagementRequestProcessor (renew, peek, schedule, session
 $cbs              → CbsRequestProcessor (token validation when SAS enabled)
 ```
 
-Five wire details worth knowing about dispositions and locks, matching real Service Bus:
+Six wire details worth knowing about dispositions and locks, matching real Service Bus:
 
 - A settle or renew against an expired/unknown lock FAILS instead of silently
   succeeding: link dispositions are settled `Rejected` with
@@ -98,6 +98,13 @@ Five wire details worth knowing about dispositions and locks, matching real Serv
   within the same millisecond as the previous deadline reports the previous value plus
   1 ms instead of an equal timestamp. Without this, a fast receive-then-renew round trip
   could report an unchanged `LockedUntil` to the SDK.
+
+- Closing a receiver link does NOT abandon its unsettled deliveries: the peek-locks stay
+  alive until their deadline and the lock tokens remain settleable through the
+  `$management` node, exactly like Azure. The JS and Java SDKs rely on this - both
+  recycle the receive link after a drain-terminated batch receive and settle the
+  collected messages via `$management` afterwards. A message whose receiver went away
+  without settling reappears when its lock expires, with a bumped delivery count.
 
 - Settling a peek-lock disposition ECHOES the receiver's outcome (Rejected for
   dead-letter, Modified for abandon/defer, Accepted for complete) instead of blanket

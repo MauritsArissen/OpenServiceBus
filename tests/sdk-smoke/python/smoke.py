@@ -5,7 +5,7 @@ Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
   -> queue dedup -> topic dedup -> batch dedup -> lock lost -> topic schedule
-  -> correlation filter -> system props
+  -> correlation filter -> system props -> batch receive
   (-> abandon props runs in the other three smokes; azure-servicebus for Python does not
    expose propertiesToModify on its settlement methods, so there is nothing to exercise)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
@@ -573,6 +573,28 @@ def run() -> None:
                 )
         check("system props", sp_ok, sp_detail)
         http("DELETE", f"{base}/{sp_queue}?api-version=2021-05")
+
+        # 28. batch receive - one receive_messages call returns a multi-message batch, a
+        # short queue yields a partial batch, and an empty queue honors max_wait_time.
+        br_queue = f"smoke-batch-{stamp}"
+        http("PUT", f"{base}/{br_queue}?api-version=2021-05", atom_entry(
+            '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        with client.get_queue_sender(br_queue) as br_sender:
+            br_sender.send_messages([
+                ServiceBusMessage(f"batch-{i}", message_id=f"br-{i}-{stamp}") for i in range(3)
+            ])
+        with client.get_queue_receiver(br_queue, max_wait_time=10) as br_receiver:
+            br_batch = br_receiver.receive_messages(max_message_count=5, max_wait_time=10)
+            for br_msg in br_batch:
+                br_receiver.complete_message(br_msg)
+            br_empty = br_receiver.receive_messages(max_message_count=5, max_wait_time=2)
+        br_ok = (
+            len(br_batch) == 3
+            and [m.message_id for m in br_batch] == [f"br-{i}-{stamp}" for i in range(3)]
+            and not br_empty
+        )
+        check("batch receive", br_ok, "" if br_ok else f"got {len(br_batch)} then {len(br_empty)}")
+        http("DELETE", f"{base}/{br_queue}?api-version=2021-05")
 
 
 try:

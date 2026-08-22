@@ -212,6 +212,18 @@ public sealed class QueueReceiverSource : IMessageSource
             return;
         }
 
+        // A Released state on an already-closed link is AMQPNetLite's PerformCleanup
+        // synthesizing dispositions for the deliveries the client never settled - not a
+        // client outcome. Real Service Bus keeps the peek-lock alive when a receiver link
+        // detaches: the lock holds until its deadline and the token remains settleable
+        // through the $management node (the JS and Java SDKs recycle the link after a
+        // drained batch and settle exactly that way). Leave the lock untouched.
+        if (dispositionContext.DeliveryState is Released && receiveContext.Link.IsClosed)
+        {
+            dispositionContext.Complete();
+            return;
+        }
+
         // Settle activity covers the whole disposition pipeline. We tag the outcome at the
         // end (post-switch) so transactional and non-transactional paths both produce one span.
         using var activity = OpenServiceBusDiagnostics.ActivitySource.StartActivity(
