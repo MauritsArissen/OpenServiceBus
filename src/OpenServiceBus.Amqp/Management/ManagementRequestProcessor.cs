@@ -61,6 +61,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
     private const string SessionStateBodyKey = "session-state";
     private const string ExpirationBodyKey = "expiration";
     private const string SessionsIdsBodyKey = "sessions-ids";
+    private const string LastUpdatedTimeBodyKey = "last-updated-time";
 
     private const string LockTokensBodyKey = "lock-tokens";
     private const string LockTokenBodyKey = "lock-token";
@@ -748,16 +749,51 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
 
     private Message HandleGetMessageSessions(Message request)
     {
-        var sessions = _store.ListSessions(_entityName);
+        DateTimeOffset? stateUpdatedAfter = null;
+        var skip = 0;
+        var top = int.MaxValue;
+        if (request.Body is Map body)
+        {
+            // The SDKs send DateTime.MaxValue as the "all live sessions" sentinel; any other
+            // last-updated-time switches to filtering on the session-state update instant.
+            // AMQPNetLite clamps the year-10000 wire encoding of the sentinel to DateTime.MaxValue.
+            if (body.TryGetValue(LastUpdatedTimeBodyKey, out var lastUpdatedObj)
+                && ReadUtcTimestamp(lastUpdatedObj) is { } lastUpdated
+                && lastUpdated < DateTime.MaxValue)
+            {
+                stateUpdatedAfter = new DateTimeOffset(lastUpdated);
+            }
+            if (body.TryGetValue(EnumerateSkipKey, out var skipObj) && skipObj is not null)
+            {
+                skip = Math.Max(Convert.ToInt32(skipObj), 0);
+            }
+            if (body.TryGetValue(EnumerateTopKey, out var topObj) && topObj is not null)
+            {
+                top = Convert.ToInt32(topObj);
+            }
+        }
+
+        var sessions = _store.ListSessions(_entityName, stateUpdatedAfter, skip, top);
         if (sessions.Count == 0)
         {
-            return BuildResponse(request, 204, "NoContent");
+            return BuildResponse(request, 204, "NoContent", Routing.ServiceBusErrors.SessionNotFound);
         }
-        var responseBody = new Map { [SessionsIdsBodyKey] = sessions.ToArray() };
+        var responseBody = new Map
+        {
+            [SessionsIdsBodyKey] = sessions.ToArray(),
+            [EnumerateSkipKey] = skip + sessions.Count,
+        };
         var response = BuildResponse(request, 200, "OK");
         response.BodySection = new AmqpValue { Value = responseBody };
         return response;
     }
+
+    private static DateTime? ReadUtcTimestamp(object? value) => value switch
+    {
+        DateTime dt => dt.Kind == DateTimeKind.Local ? dt.ToUniversalTime() : DateTime.SpecifyKind(dt, DateTimeKind.Utc),
+        DateTimeOffset dto => dto.UtcDateTime,
+        _ => null,
+    };
 
     private Message HandleCancelScheduledMessage(Message request)
     {

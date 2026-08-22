@@ -219,4 +219,90 @@ public class SessionsTests
         // Assert
         ids.OrderBy(s => s).ShouldBe(new[] { "with-messages", "with-state-only" });
     }
+
+    [Fact]
+    public async Task ListSessions_OrdersBySessionIdOrdinal_AndPagesWithSkipAndTop()
+    {
+        // Arrange
+        var store = new InMemoryMessageStore();
+        await store.CreateQueueAsync("q");
+        foreach (var id in new[] { "s-3", "s-1", "s-5", "s-2", "s-4" })
+        {
+            await store.EnqueueAsync("q", [1], sessionId: id);
+        }
+
+        // Act
+        var all = store.ListSessions("q");
+        var page1 = store.ListSessions("q", skip: 0, top: 2);
+        var page2 = store.ListSessions("q", skip: 2, top: 2);
+        var page3 = store.ListSessions("q", skip: 4, top: 2);
+        var beyond = store.ListSessions("q", skip: 5, top: 2);
+
+        // Assert
+        all.ShouldBe(new[] { "s-1", "s-2", "s-3", "s-4", "s-5" }, "ordinal order makes skip paging deterministic");
+        page1.ShouldBe(new[] { "s-1", "s-2" });
+        page2.ShouldBe(new[] { "s-3", "s-4" });
+        page3.ShouldBe(new[] { "s-5" });
+        beyond.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ListSessions_NonPositiveTopOrNegativeSkip_AreHandled()
+    {
+        // Arrange
+        var store = new InMemoryMessageStore();
+        await store.CreateQueueAsync("q");
+        await store.EnqueueAsync("q", [1], sessionId: "s-1");
+
+        // Act + Assert
+        store.ListSessions("q", top: 0).ShouldBeEmpty("top 0 asks for an empty page");
+        store.ListSessions("q", top: -1).ShouldBeEmpty();
+        store.ListSessions("q", skip: -5, top: 10).ShouldBe(new[] { "s-1" }, "negative skip clamps to 0");
+    }
+
+    [Fact]
+    public async Task ListSessions_WithStateUpdatedAfter_FiltersOnStateUpdateInstant()
+    {
+        // Arrange
+        var clock = new FakeTimeProvider();
+        var store = new InMemoryMessageStore(clock);
+        await store.CreateQueueAsync("q");
+        await store.SetSessionStateAsync("q", "old-state", new byte[] { 1 });
+        var cutoff = clock.GetUtcNow();
+        clock.Advance(TimeSpan.FromMinutes(5));
+        await store.SetSessionStateAsync("q", "fresh-state", new byte[] { 2 });
+        await store.EnqueueAsync("q", [3], sessionId: "messages-only");
+
+        // Act
+        var filtered = store.ListSessions("q", stateUpdatedAfter: cutoff);
+        var unfiltered = store.ListSessions("q");
+
+        // Assert
+        filtered.ShouldBe(new[] { "fresh-state" }, "only state updated strictly after the cutoff matches");
+        unfiltered.ShouldBe(new[] { "fresh-state", "messages-only", "old-state" });
+    }
+
+    [Fact]
+    public async Task ListSessions_FilterMode_ExcludesClearedState_AndReSetStateMatchesAgain()
+    {
+        // Arrange
+        var clock = new FakeTimeProvider();
+        var store = new InMemoryMessageStore(clock);
+        await store.CreateQueueAsync("q");
+        var cutoff = clock.GetUtcNow();
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await store.SetSessionStateAsync("q", "s-1", new byte[] { 1 });
+
+        // Act + Assert
+        store.ListSessions("q", stateUpdatedAfter: cutoff).ShouldBe(new[] { "s-1" });
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await store.SetSessionStateAsync("q", "s-1", null);
+        store.ListSessions("q", stateUpdatedAfter: cutoff).ShouldBeEmpty("cleared state never matches filter mode");
+        store.ListSessions("q").ShouldBeEmpty("cleared state does not count as stored state");
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await store.SetSessionStateAsync("q", "s-1", new byte[] { 2 });
+        store.ListSessions("q", stateUpdatedAfter: cutoff).ShouldBe(new[] { "s-1" });
+    }
 }

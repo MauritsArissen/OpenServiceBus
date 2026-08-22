@@ -376,6 +376,17 @@ public interface IMessageStore
     /// </summary>
     Task<bool> IsSessionLockHeldAsync(string queueName, string sessionId, string? linkName = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Enumerate session ids on the queue that have at least one available message OR a stored state.</summary>
-    IReadOnlyList<string> ListSessions(string queueName);
+    /// <summary>
+    /// Enumerate session ids on the queue, ordered by session id (ordinal ascending) so
+    /// skip-based paging is deterministic. When <paramref name="stateUpdatedAfter"/> is null,
+    /// returns sessions that have at least one available message OR a non-null stored state.
+    /// When it is set, returns only sessions whose stored state was set or updated after that
+    /// instant. <paramref name="skip"/> and <paramref name="top"/> select one page of the
+    /// ordered result; a non-positive <paramref name="top"/> yields an empty page.
+    /// </summary>
+    IReadOnlyList<string> ListSessions(
+        string queueName,
+        DateTimeOffset? stateUpdatedAfter = null,
+        int skip = 0,
+        int top = int.MaxValue);
 }
