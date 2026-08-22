@@ -54,9 +54,9 @@ public sealed class CorrelationFilter : RuleFilter
 
         foreach (var (key, expected) in Properties)
         {
-            if (!message.ApplicationProperties.TryGetValue(key, out var actual))
+            if (!message.TryResolve("user", key, out var actual))
                 return false;
-            if (!Equals(expected, actual))
+            if (!PropertyValuesEqual(expected, actual))
                 return false;
         }
         return true;
@@ -64,4 +64,10 @@ public sealed class CorrelationFilter : RuleFilter
 
     private static bool Match(string? expected, string? actual) =>
         expected is null || string.Equals(expected, actual, StringComparison.Ordinal);
+
+    private static bool PropertyValuesEqual(object? expected, object? actual)
+    {
+        if (expected is null || actual is null) return expected is null && actual is null;
+        return FilterValueComparer.AreEqual(expected, actual);
+    }
 }

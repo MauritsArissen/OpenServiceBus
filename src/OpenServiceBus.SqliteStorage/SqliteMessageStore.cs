@@ -1455,13 +1455,14 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO session_state(queue_name, session_id, state)
-                VALUES ($q, $sid, $state)
-                ON CONFLICT(queue_name, session_id) DO UPDATE SET state = excluded.state
+                INSERT INTO session_state(queue_name, session_id, state, updated_at)
+                VALUES ($q, $sid, $state, $updatedAt)
+                ON CONFLICT(queue_name, session_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at
                 """;
             cmd.Parameters.AddWithValue("$q", queueName);
             cmd.Parameters.AddWithValue("$sid", sessionId);
             cmd.Parameters.AddWithValue("$state", (object?)state ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$updatedAt", ToUnixMs(_timeProvider.GetUtcNow()));
             cmd.ExecuteNonQuery();
         }
         finally { _gate.Release(); }
@@ -1482,22 +1483,48 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
-    public IReadOnlyList<string> ListSessions(string queueName)
+    public IReadOnlyList<string> ListSessions(string queueName, DateTimeOffset? stateUpdatedAfter = null, int skip = 0, int top = int.MaxValue)
     {
+        if (top <= 0) return Array.Empty<string>();
         _gate.Wait();
         try
         {
-            // A session is "live" if it has any non-deferred message OR a stored state - same
-            // contract as the in-memory store, used by the $management get-message-sessions op.
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = """
-                SELECT DISTINCT session_id FROM (
-                    SELECT session_id FROM messages WHERE queue_name = $q AND session_id IS NOT NULL
-                    UNION
-                    SELECT session_id FROM session_state WHERE queue_name = $q
-                )
-                """;
+            if (stateUpdatedAfter is null)
+            {
+                cmd.CommandText = """
+                    SELECT DISTINCT session_id FROM (
+                        SELECT m.session_id AS session_id FROM messages m
+                        WHERE m.queue_name = $q AND m.session_id IS NOT NULL
+                          AND m.is_deferred = 0
+                          AND (m.scheduled_enqueue_time IS NULL OR m.scheduled_enqueue_time <= $now)
+                          AND NOT EXISTS (
+                              SELECT 1 FROM locks l
+                              WHERE l.queue_name = m.queue_name
+                                AND l.sequence_number = m.sequence_number
+                                AND l.locked_until > $now)
+                        UNION
+                        SELECT session_id FROM session_state WHERE queue_name = $q AND state IS NOT NULL
+                    )
+                    ORDER BY session_id
+                    LIMIT $top OFFSET $skip
+                    """;
+                cmd.Parameters.AddWithValue("$now", ToUnixMs(_timeProvider.GetUtcNow()));
+            }
+            else
+            {
+                cmd.CommandText = """
+                    SELECT session_id FROM session_state
+                    WHERE queue_name = $q AND state IS NOT NULL
+                      AND updated_at IS NOT NULL AND updated_at > $after
+                    ORDER BY session_id
+                    LIMIT $top OFFSET $skip
+                    """;
+                cmd.Parameters.AddWithValue("$after", ToUnixMs(stateUpdatedAfter.Value));
+            }
             cmd.Parameters.AddWithValue("$q", queueName);
+            cmd.Parameters.AddWithValue("$top", top);
+            cmd.Parameters.AddWithValue("$skip", Math.Max(skip, 0));
             using var rdr = cmd.ExecuteReader();
             var ids = new List<string>();
             while (rdr.Read()) if (!rdr.IsDBNull(0)) ids.Add(rdr.GetString(0));

@@ -812,6 +812,7 @@ public sealed class InMemoryMessageStore : IMessageStore
         var queue = GetQueue(queueName);
         var session = queue.GetOrAddSession(sessionId);
         session.State = state;
+        session.StateUpdatedAt = _timeProvider.GetUtcNow();
         return Task.CompletedTask;
     }
 
@@ -825,13 +826,17 @@ public sealed class InMemoryMessageStore : IMessageStore
         return Task.FromResult<byte[]?>(null);
     }
 
-    public IReadOnlyList<string> ListSessions(string queueName)
+    public IReadOnlyList<string> ListSessions(string queueName, DateTimeOffset? stateUpdatedAfter = null, int skip = 0, int top = int.MaxValue)
     {
-        if (!_queues.TryGetValue(queueName, out var state)) return Array.Empty<string>();
-        // Surface sessions that still hold messages OR carry state.
+        if (!_queues.TryGetValue(queueName, out var state) || top <= 0) return Array.Empty<string>();
         return state.Sessions
-            .Where(kv => kv.Value.Available.Reader.Count > 0 || kv.Value.State is not null)
+            .Where(kv => stateUpdatedAfter is null
+                ? kv.Value.Available.Reader.Count > 0 || kv.Value.State is not null
+                : kv.Value.State is not null && kv.Value.StateUpdatedAt is { } updatedAt && updatedAt > stateUpdatedAfter.Value)
             .Select(kv => kv.Key)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .Skip(Math.Max(skip, 0))
+            .Take(top)
             .ToArray();
     }
 
@@ -939,6 +944,9 @@ public sealed class InMemoryMessageStore : IMessageStore
 
         /// <summary>Opaque user-supplied state blob. Null means no state has been set (or it was cleared).</summary>
         public byte[]? State;
+
+        /// <summary>When the state blob was last set or updated; null until the first set.</summary>
+        public DateTimeOffset? StateUpdatedAt;
 
         /// <summary>The current session lock, or null if the session is unlocked.</summary>
         public SessionLockEntry? Lock;

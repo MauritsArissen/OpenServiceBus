@@ -93,6 +93,7 @@ internal static class SqliteSchema
             queue_name  TEXT NOT NULL COLLATE NOCASE,
             session_id  TEXT NOT NULL,
             state       BLOB NULL,
+            updated_at  INTEGER NULL,
             PRIMARY KEY (queue_name, session_id),
             FOREIGN KEY (queue_name) REFERENCES queues(name) ON DELETE CASCADE
         );
@@ -172,13 +173,11 @@ internal static class SqliteSchema
         cmd.CommandText = ConnectionPragmas + "\n" + Sql;
         cmd.ExecuteNonQuery();
         AddColumnIfMissing(connection, "messages", "enqueued_sequence_number", "INTEGER NULL");
+        AddColumnIfMissing(connection, "session_state", "updated_at", "INTEGER NULL");
     }
 
-    /// <summary>
-    /// Additive migration for databases created before a column existed. CREATE TABLE IF NOT
-    /// EXISTS never alters an existing table, so new columns are added here; guarded by a
-    /// pragma_table_info check to stay idempotent across the per-connection Apply calls.
-    /// </summary>
+    // Additive column migration for databases created before the column existed - the
+    // CREATE TABLE IF NOT EXISTS above is a no-op there, so the column is bolted on here.
     private static void AddColumnIfMissing(SqliteConnection connection, string table, string column, string definition)
     {
         using var check = connection.CreateCommand();

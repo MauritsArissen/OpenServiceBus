@@ -5,7 +5,7 @@ Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
   -> queue dedup -> topic dedup -> batch dedup -> lock lost -> topic schedule
-  -> system props
+  -> correlation filter -> system props
   (-> abandon props runs in the other three smokes; azure-servicebus for Python does not
    expose propertiesToModify on its settlement methods, so there is nothing to exercise)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
@@ -489,7 +489,46 @@ def run() -> None:
               "" if sched_ok else ("scheduled message never arrived" if not due else "cancelled message leaked"))
         http("DELETE", f"{base}/{sched_topic}?api-version=2021-05")
 
-        # 26. system props - broker-stamped system properties (issue #55): a scheduled
+        # 26. correlation filter - a correlation rule with a numeric application property
+        # matches across property-name casing and AMQP numeric width (issue #56): the rule
+        # value is a long while the published property is a plain Python int.
+        corr_topic = f"smoke-corr-{stamp}"
+        http("PUT", f"{base}/{corr_topic}?api-version=2021-05", atom_entry(
+            '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        http("PUT", f"{base}/{corr_topic}/subscriptions/cf?api-version=2021-05", atom_entry(
+            '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        http("DELETE", f"{base}/{corr_topic}/subscriptions/cf/rules/$Default?api-version=2021-05")
+        corr_rule_status, _ = http("PUT", f"{base}/{corr_topic}/subscriptions/cf/rules/prio?api-version=2021-05", atom_entry(
+            '<RuleDescription xmlns:i="http://www.w3.org/2001/XMLSchema-instance" '
+            'xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
+            '<Filter i:type="CorrelationFilter"><Properties><KeyValueOfstringanyType><Key>Priority</Key>'
+            '<Value xmlns:d6p1="http://www.w3.org/2001/XMLSchema" i:type="d6p1:long">5</Value>'
+            '</KeyValueOfstringanyType></Properties></Filter></RuleDescription>'))
+        with client.get_topic_sender(corr_topic) as corr_sender:
+            corr_sender.send_messages(ServiceBusMessage(
+                "corr-match", message_id=f"corr-match-{stamp}", application_properties={"priority": 5}))
+            corr_sender.send_messages(ServiceBusMessage(
+                "corr-miss", message_id=f"corr-miss-{stamp}", application_properties={"priority": 7}))
+        with client.get_subscription_receiver(corr_topic, "cf", max_wait_time=10) as corr_receiver:
+            corr_got = corr_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+            if corr_got:
+                corr_receiver.complete_message(corr_got[0])
+            corr_extra = corr_receiver.receive_messages(max_message_count=1, max_wait_time=2)
+            if corr_extra:
+                corr_receiver.complete_message(corr_extra[0])
+        corr_ok = (
+            corr_rule_status == 201
+            and len(corr_got) == 1
+            and corr_got[0].message_id == f"corr-match-{stamp}"
+            and not corr_extra
+        )
+        check(
+            "correlation filter",
+            corr_ok,
+            "" if corr_ok else f"rule {corr_rule_status}, got {len(corr_got)} msg(s), extra {len(corr_extra)}",
+        )
+        http("DELETE", f"{base}/{corr_topic}?api-version=2021-05")
+        # 27. system props - broker-stamped system properties (issue #55): a scheduled
         # message peeks as SCHEDULED; the delivery carries state ACTIVE, the original
         # scheduled enqueue time, the round-tripped partition_key, and
         # enqueued_sequence_number; deferred retrieval reports state DEFERRED.

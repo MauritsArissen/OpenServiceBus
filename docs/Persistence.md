@@ -10,7 +10,7 @@ transactions, auto-forwarding, …) works against either.
 | Concurrency      | Lock-free channels + ConcurrentDictionary | Single connection, async-serialized via SemaphoreSlim                  |
 | Best for         | Tests, ephemeral dev                      | Docker, long-running brokers, fixtures that need restart               |
 | Dequeue latency  | Sub-millisecond                           | Sub-millisecond on hot path; polling fallback at `DequeuePollInterval` |
-| Schema migration | N/A                                       | Idempotent DDL on every open (`IF NOT EXISTS`)                         |
+| Schema migration | N/A                                       | Idempotent DDL on every open (`IF NOT EXISTS` + additive `ALTER`s)     |
 
 ## Enable SQLite
 
@@ -86,7 +86,7 @@ CREATE TABLE locks (
 );
 
 CREATE TABLE session_locks    ( queue_name, session_id, locked_until, link_name );
-CREATE TABLE session_state    ( queue_name, session_id, state BLOB );
+CREATE TABLE session_state    ( queue_name, session_id, state BLOB, updated_at INTEGER );
 CREATE TABLE dedup_history    ( queue_name, message_id, original_sequence_number, expires_at );
 
 -- Entity settings, as opaque JSON snapshots written on every create/update.
@@ -143,7 +143,9 @@ can `sqlite3 broker.db` and inspect everything by hand.
 
 When the broker restarts against an existing `.db` file:
 
-1. SQLite opens, applies idempotent DDL (`IF NOT EXISTS`).
+1. SQLite opens, applies idempotent DDL (`IF NOT EXISTS`) and adds any columns
+   newer broker versions introduced (currently `session_state.updated_at`) via a
+   guarded `ALTER TABLE`, so databases from older versions keep working.
 2. `QueueRehydrationHostedService` runs after the config bootstrap and hands off to
    `EntityRehydrator`, which restores, in order:
    1. **Topics** from `topic_descriptors` - full settings (status, TTL, duplicate
