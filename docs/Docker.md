@@ -65,9 +65,11 @@ services:
       OPENSERVICEBUS__STORAGE__MODE: Sqlite
       OPENSERVICEBUS__STORAGE__DATASOURCE: /data/broker.db
       OPENSERVICEBUS_CONFIG: /etc/openservicebus/config.json
+      OSB_EXPLORER_CANNED_FILE: /etc/openservicebus/canned-messages.json
     volumes:
       - osb-data:/data
       - ./config.json:/etc/openservicebus/config.json:ro
+      - ./canned-messages.json:/etc/openservicebus/canned-messages.json
     restart: unless-stopped
 
 volumes:
@@ -76,6 +78,14 @@ volumes:
 
 `docker compose up -d` and you've got the broker + Explorer + persistent storage in one
 shot.
+
+The `canned-messages.json` mount is optional: it feeds the Explorer's
+[canned message library](Explorer#canned-messages) so the whole team gets the same saved
+payloads, committed to git next to the compose file. Mounted read-write (no `:ro`),
+edits made in the Explorer write straight back into the repo checkout - "tweak in the
+UI, `git diff`, commit" is the whole workflow. Mount it `:ro` instead to lock the
+library: the Explorer still loads it, but UI edits stay in memory until a restart.
+Leave the variable unset and the library is simply in-memory, as before.
 
 ## Reference `config.json`
 

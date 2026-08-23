@@ -1,5 +1,6 @@
 import {
-  ArrowLeftIcon, BookmarkIcon, CopyIcon, PencilIcon, PlusIcon, SendIcon, Trash2Icon, UploadIcon,
+  ArrowLeftIcon, BookmarkIcon, CopyIcon, DownloadIcon, FileJsonIcon, PencilIcon, PlusIcon,
+  RefreshCwIcon, SendIcon, Trash2Icon, UploadIcon,
 } from "lucide-react";
 import { useRef } from "react";
 import { toast } from "sonner";
@@ -58,6 +59,35 @@ export function CannedMessagesPage() {
     }
   };
 
+  const exportLibrary = async () => {
+    try {
+      const res = await fetch("/api/canned/export");
+      if (!res.ok) throw new Error(res.statusText);
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "canned-messages.json";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error("Export failed: " + (e as Error).message);
+    }
+  };
+
+  const reloadFromFile = () =>
+    store.setDialog({
+      type: "confirm",
+      title: "Reload the library from its file?",
+      description: "Everything added or changed since the file was last written is discarded and the file's current contents (e.g. after a git pull) are loaded.",
+      destructive: true,
+      action: async () => {
+        const res = await fetch("/api/canned/reset", { method: "POST" });
+        if (!res.ok) throw new Error(res.statusText);
+        await store.refreshCanned();
+        toast.success("Library reloaded from file");
+      },
+    });
+
   const remove = (name: string) =>
     store.setDialog({
       type: "confirm",
@@ -108,6 +138,41 @@ export function CannedMessagesPage() {
           <Button variant="outline" onClick={() => fileInput.current?.click()}>
             <UploadIcon /> Import JSON
           </Button>
+          <Button variant="outline" onClick={() => void exportLibrary()}>
+            <DownloadIcon /> Export JSON
+          </Button>
+          {store.cannedFile?.configured && (
+            <Button variant="outline" onClick={reloadFromFile}>
+              <RefreshCwIcon /> Reload from file
+            </Button>
+          )}
+        </div>
+
+        <div className="flex items-start gap-2 rounded-md border bg-muted/40 p-2.5 text-xs text-muted-foreground">
+          <FileJsonIcon className="mt-0.5 size-3.5 shrink-0" />
+          {store.cannedFile?.configured ? (
+            store.cannedFile.writable ? (
+              <p>
+                Persisted to{" "}
+                {store.cannedFile.path ? <code className="font-mono">{store.cannedFile.path}</code> : "the configured library file"}
+                {" "}- every change here writes back to it, so commit that file to share the
+                library with your team.
+              </p>
+            ) : (
+              <p>
+                The configured library file is <span className="font-medium text-amber-600 dark:text-amber-400">read-only</span>
+                {store.cannedFile.path && <> (<code className="font-mono">{store.cannedFile.path}</code>)</>}
+                {" "}- changes made here live in memory until the Explorer restarts or reloads.
+                Export and commit the JSON to make them stick.
+              </p>
+            )
+          ) : (
+            <p>
+              In-memory only. Point <code className="font-mono">OSB_EXPLORER_CANNED_FILE</code> at a
+              JSON file (or mount one in docker compose) to persist the library and commit it
+              to git with your team.
+            </p>
+          )}
         </div>
 
         {store.canned.length === 0 ? (

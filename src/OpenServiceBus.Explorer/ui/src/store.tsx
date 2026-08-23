@@ -49,6 +49,8 @@ type Store = {
   resetIntervalSeconds: number;
   /** The Explorer's release version (from /api/config); null on local/source runs. */
   version: string | null;
+  /** Canned message library file backing (from /api/config). */
+  cannedFile: { configured: boolean; writable: boolean; path: string | null } | null;
 
   queues: QueueInfo[];
   topics: QueueInfo[];
@@ -108,6 +110,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [demoMode, setDemoMode] = useState(false);
   const [resetIntervalSeconds, setResetIntervalSeconds] = useState(1800);
   const [version, setVersion] = useState<string | null>(null);
+  const [cannedFile, setCannedFile] = useState<Store["cannedFile"]>(null);
 
   const setConn = useCallback((v: string) => {
     setConnState(v);
@@ -169,6 +172,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       try {
         const cfg = await fetch("/api/config").then((r) => r.json());
         if (cfg?.version) setVersion(String(cfg.version));
+        if (cfg?.cannedFile) setCannedFile(cfg.cannedFile);
         if (cfg?.demoMode) {
           setDemoMode(true);
           setResetIntervalSeconds(cfg.resetIntervalSeconds ?? 1800);
@@ -309,7 +313,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     () => ({
       conn, mgmt, setConn, setMgmt, status, pingResult, connect,
       purgeCapable: pingResult?.broker?.capabilities?.includes("purge") ?? false,
-      demoMode, resetIntervalSeconds, version,
+      demoMode, resetIntervalSeconds, version, cannedFile,
       queues: queues.filter((q) => isMainQueue(q.name)),
       topics, subsByTopic, loading, refresh,
       selected, select, descriptorFor, dlqCount,
@@ -319,7 +323,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       canned, refreshCanned,
       view, setView,
     }),
-    [conn, mgmt, setConn, setMgmt, status, pingResult, connect, demoMode, resetIntervalSeconds, version, queues, topics, subsByTopic, loading,
+    [conn, mgmt, setConn, setMgmt, status, pingResult, connect, demoMode, resetIntervalSeconds, version, cannedFile, queues, topics, subsByTopic, loading,
      refresh, selected, select, descriptorFor, dlqCount, locked, peeked, peekCursor, lockedCount, setPeekedFor, setPeekCursor, trackLocked,
      untrack, untrackMany, updateLockedUntil, clearEntityLocal, dialog, canned, refreshCanned, view],
   );

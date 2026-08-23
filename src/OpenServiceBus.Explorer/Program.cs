@@ -6,7 +6,9 @@ using OpenServiceBus.Explorer.Sessions;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<SessionManager>();
-builder.Services.AddSingleton<CannedMessageLibrary>();
+builder.Services.AddSingleton<CannedMessageFileStore>();
+builder.Services.AddSingleton<CannedMessageLibrary>(sp =>
+    new CannedMessageLibrary(sp.GetRequiredService<CannedMessageFileStore>()));
 builder.Services.AddHostedService<DemoLibraryResetService>();
 builder.Services.AddSingleton<MetricsCollector>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricsCollector>());
