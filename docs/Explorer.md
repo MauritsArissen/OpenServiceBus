@@ -114,12 +114,20 @@ Save a fully configured Send form under a name and replay it later with one clic
   strategy) and hit "Save as canned". A canned message is scoped to the entity it was
   saved on or to "any entity"; the Send tab's picker only offers the ones that apply to
   the selected entity.
-- **Manage** - the sidebar's "Canned messages" block lists the library with duplicate
-  and delete actions. Editing = load one into the Send tab, tweak it, and save it again
-  under the same name (the dialog offers overwrite on a name collision).
-- **Import** - the sidebar block imports a JSON array of canned messages (the export
-  shape of the API's `GET /api/canned`). Imports merge by name: existing names are
-  skipped by default, and the result toast offers a one-click "Replace existing".
+- **Manage** - the sidebar's "Canned messages" entry (and the Send tab's Manage button)
+  opens a full management page: every canned message as a card with its body preview,
+  scope, send settings and detected variables, plus edit (a full-form dialog with every
+  Send field), duplicate, delete and create-from-scratch. Works on phones - cards stack
+  and the editor dialog scrolls.
+- **Import** - on the management page: a JSON array of canned messages (the export shape
+  of the API's `GET /api/canned`). Imports merge by name: existing names are skipped by
+  default, and the result toast offers a one-click "Replace existing".
+- **Variable highlighting + legend** - while composing (Send tab and the editor), body
+  text like `{{$guid}}` is colored green when the variable is valid and amber with a
+  wavy underline when unknown or malformed. A chips row under the body lists every
+  variable found across all fields - hovering a chip explains what it resolves to (the
+  same surface a future environments feature will use to show the active value) - and a
+  "Variables" button opens a legend of everything available with examples.
 - **Dynamic variables** - resolved at send time, independently for every copy of a
   multi-count send, in the body, MessageId, CorrelationId, Subject, ReplyTo, To,
   SessionId, PartitionKey and application property values:

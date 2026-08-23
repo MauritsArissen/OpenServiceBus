@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Toaster } from "sonner";
+import { CannedMessagesPage } from "@/components/CannedMessagesPage";
 import { DialogHost } from "@/components/DialogHost";
 import { EntityView } from "@/components/EntityView";
 import { Sidebar } from "@/components/Sidebar";
@@ -7,7 +8,7 @@ import { Topbar } from "@/components/Topbar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { useMediaQuery } from "@/lib/useMediaQuery";
-import { StoreProvider } from "@/store";
+import { StoreProvider, useStore } from "@/store";
 
 export default function App() {
   // On phones the sidebar becomes an off-canvas drawer; on md+ it's a static column
@@ -34,7 +35,7 @@ export default function App() {
                 onClick={() => setSidebarOpen(false)}
               />
             )}
-            <EntityView />
+            <MainView />
           </div>
         </div>
         <DialogHost />
@@ -43,4 +44,9 @@ export default function App() {
       </TooltipProvider>
     </StoreProvider>
   );
+}
+
+function MainView() {
+  const store = useStore();
+  return store.view === "canned" ? <CannedMessagesPage /> : <EntityView />;
 }
