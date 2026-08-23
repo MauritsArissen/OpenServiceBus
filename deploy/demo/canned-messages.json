@@ -1,0 +1,85 @@
+[
+  {
+    "name": "order-created",
+    "targetEntity": "orders",
+    "body": "{\n  \"orderId\": \"{{$guid}}\",\n  \"customerId\": \"cust-{{$guid upper}}\",\n  \"sku\": \"OSB-TSHIRT-L\",\n  \"quantity\": 2,\n  \"totalCents\": 4998,\n  \"createdAt\": \"{{$datetime iso8601}}\"\n}",
+    "messageId": "order-{{$guid}}",
+    "correlationId": null,
+    "subject": "OrderCreated",
+    "contentType": "application/json",
+    "replyTo": null,
+    "to": null,
+    "sessionId": null,
+    "partitionKey": null,
+    "timeToLiveSeconds": null,
+    "scheduledDelaySeconds": null,
+    "properties": {
+      "source": "checkout",
+      "region": "eu"
+    },
+    "count": 1,
+    "strategy": "ATONCE"
+  },
+  {
+    "name": "order-burst",
+    "targetEntity": "orders",
+    "body": "{\n  \"orderId\": \"{{$guid}}\",\n  \"sku\": \"OSB-STICKER-PACK\",\n  \"quantity\": 1,\n  \"totalCents\": 499,\n  \"createdAt\": \"{{$datetime iso8601}}\"\n}",
+    "messageId": "burst-{{$guid}}",
+    "correlationId": null,
+    "subject": "OrderCreated",
+    "contentType": "application/json",
+    "replyTo": null,
+    "to": null,
+    "sessionId": null,
+    "partitionKey": null,
+    "timeToLiveSeconds": null,
+    "scheduledDelaySeconds": null,
+    "properties": {
+      "source": "flash-sale"
+    },
+    "count": 5,
+    "strategy": "PARALLEL"
+  },
+  {
+    "name": "refund-requested",
+    "targetEntity": "payments",
+    "body": "{\n  \"refundId\": \"{{$guid}}\",\n  \"orderId\": \"{{$guid}}\",\n  \"amountCents\": 4998,\n  \"reason\": \"damaged in transit\",\n  \"requestedAt\": \"{{$datetime iso8601}}\",\n  \"purchasedAt\": \"{{$datetime iso8601 -3d}}\"\n}",
+    "messageId": "refund-{{$guid}}",
+    "correlationId": "order-{{$guid}}",
+    "subject": "RefundRequested",
+    "contentType": "application/json",
+    "replyTo": null,
+    "to": null,
+    "sessionId": null,
+    "partitionKey": null,
+    "timeToLiveSeconds": null,
+    "scheduledDelaySeconds": null,
+    "properties": {
+      "source": "support-portal"
+    },
+    "count": 1,
+    "strategy": "ATONCE"
+  },
+  {
+    "name": "payment-failed-alert",
+    "targetEntity": "events",
+    "body": "{\n  \"paymentId\": \"{{$guid upper}}\",\n  \"orderId\": \"{{$guid}}\",\n  \"gatewayError\": \"card_declined\",\n  \"occurredAt\": \"{{$datetime iso8601}}\",\n  \"retryAfter\": \"{{$datetime iso8601 15m}}\"\n}",
+    "messageId": "alert-{{$guid}}",
+    "correlationId": null,
+    "subject": "PaymentFailed",
+    "contentType": "application/json",
+    "replyTo": null,
+    "to": null,
+    "sessionId": null,
+    "partitionKey": null,
+    "timeToLiveSeconds": 1800,
+    "scheduledDelaySeconds": null,
+    "properties": {
+      "eventType": "payment.failed",
+      "level": "error",
+      "source": "payment-gateway"
+    },
+    "count": 1,
+    "strategy": "ATONCE"
+  }
+]

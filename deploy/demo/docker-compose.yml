@@ -21,6 +21,12 @@ services:
       OSB_EXPLORER_CONNECTION: "Endpoint=sb://127.0.0.1:5672;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true"
       OSB_EXPLORER_MGMT_URL: "http://127.0.0.1:5300"
       OSB_EXPLORER_RESET_INTERVAL_SECONDS: "1800"
+      # Demo canned message library. Mounted read-only: visitors can add and tweak canned
+      # messages in the Explorer (kept in memory), and the 30-minute demo reset reloads
+      # these defaults from the file.
+      OSB_EXPLORER_CANNED_FILE: /etc/openservicebus/canned-messages.json
+    volumes:
+      - ./canned-messages.json:/etc/openservicebus/canned-messages.json:ro
     ports:
       - "127.0.0.1:5400:5400"   # Explorer UI (nginx proxies demo.openservicebus.net here)
 
