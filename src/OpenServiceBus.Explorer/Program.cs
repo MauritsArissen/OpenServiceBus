@@ -1,10 +1,13 @@
 using OpenServiceBus.Explorer.Api;
+using OpenServiceBus.Explorer.CannedMessages;
 using OpenServiceBus.Explorer.Metrics;
 using OpenServiceBus.Explorer.Sessions;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<SessionManager>();
+builder.Services.AddSingleton<CannedMessageLibrary>();
+builder.Services.AddHostedService<DemoLibraryResetService>();
 builder.Services.AddSingleton<MetricsCollector>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricsCollector>());
 builder.Services.AddHttpClient();
@@ -16,6 +19,7 @@ app.UseStaticFiles();
 
 app.MapExplorerEndpoints();
 app.MapAdminEndpoints();
+app.MapCannedMessagesEndpoints();
 
 await app.RunAsync();
 

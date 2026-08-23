@@ -225,9 +225,41 @@ export const explorerApi = {
     api<{ entity: MetricSample[]; dlq: MetricSample[] }>(
       `/api/metrics?entity=${encodeURIComponent(entity)}&windowSeconds=${windowSeconds}`,
     ),
+
+  listCanned: () => api<CannedMessage[]>("/api/canned"),
+  createCanned: (message: CannedMessage) => api<CannedMessage>("/api/canned", post(message)),
+  updateCanned: (name: string, message: CannedMessage) =>
+    api<CannedMessage>(`/api/canned/${encodeURIComponent(name)}`, put(message)),
+  deleteCanned: (name: string) =>
+    api(`/api/canned/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  duplicateCanned: (name: string) =>
+    api<CannedMessage>(`/api/canned/${encodeURIComponent(name)}/duplicate`, { method: "POST" }),
+  importCanned: (messages: CannedMessage[], conflictMode: "replace" | "skip" | null) =>
+    api<CannedImportSummary>("/api/canned/import", post({ messages, conflictMode })),
 };
 
 export type MetricSample = { t: number; active: number; enqueued: number; completed: number };
+
+export type CannedMessage = {
+  name: string;
+  targetEntity: string | null;
+  body: string | null;
+  messageId: string | null;
+  correlationId: string | null;
+  subject: string | null;
+  contentType: string | null;
+  replyTo: string | null;
+  to: string | null;
+  sessionId: string | null;
+  partitionKey: string | null;
+  timeToLiveSeconds: number | null;
+  scheduledDelaySeconds: number | null;
+  properties: Record<string, string> | null;
+  count: number | null;
+  strategy: string | null;
+};
+
+export type CannedImportSummary = { added: number; replaced: number; skipped: number };
 
 export type ResendItemResult = { sequenceNumber: number; ok: boolean; messageId: string | null; error: string | null };
 export type ResendResult = {

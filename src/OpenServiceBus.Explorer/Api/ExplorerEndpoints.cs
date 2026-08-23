@@ -1,4 +1,5 @@
 using Azure.Messaging.ServiceBus;
+using OpenServiceBus.Explorer.CannedMessages;
 using OpenServiceBus.Explorer.Metrics;
 using OpenServiceBus.Explorer.Sessions;
 
@@ -72,26 +73,32 @@ public static class ExplorerEndpoints
 
             // Each copy gets a unique MessageId. If the user supplied a base id we suffix it (-0, -1, ...);
             // otherwise we generate a fresh Guid per copy. Without distinct ids dedup-enabled entities
-            // would collapse the bulk into a single delivery.
+            // would collapse the bulk into a single delivery. A MessageId carrying a dynamic
+            // variable is already unique per copy, so it is used as resolved, without the suffix.
             var baseId = string.IsNullOrWhiteSpace(req.MessageId) ? null : req.MessageId;
+            var idHasVariables = DynamicVariables.ContainsVariables(baseId);
+            var now = DateTimeOffset.UtcNow;
             ServiceBusMessage BuildOne(int index)
             {
-                var msg = new ServiceBusMessage(req.Body ?? string.Empty);
+                string? R(string? value) => DynamicVariables.Resolve(value, now);
+                var msg = new ServiceBusMessage(R(req.Body) ?? string.Empty);
                 msg.MessageId = baseId is null
                     ? Guid.NewGuid().ToString("N")
-                    : (count == 1 ? baseId : $"{baseId}-{index}");
-                if (!string.IsNullOrWhiteSpace(req.CorrelationId)) msg.CorrelationId = req.CorrelationId;
-                if (!string.IsNullOrWhiteSpace(req.Subject)) msg.Subject = req.Subject;
+                    : idHasVariables
+                        ? R(baseId)!
+                        : (count == 1 ? baseId : $"{baseId}-{index}");
+                if (!string.IsNullOrWhiteSpace(req.CorrelationId)) msg.CorrelationId = R(req.CorrelationId);
+                if (!string.IsNullOrWhiteSpace(req.Subject)) msg.Subject = R(req.Subject);
                 if (!string.IsNullOrWhiteSpace(req.ContentType)) msg.ContentType = req.ContentType;
-                if (!string.IsNullOrWhiteSpace(req.ReplyTo)) msg.ReplyTo = req.ReplyTo;
-                if (!string.IsNullOrWhiteSpace(req.To)) msg.To = req.To;
-                if (!string.IsNullOrWhiteSpace(req.SessionId)) msg.SessionId = req.SessionId;
-                if (!string.IsNullOrWhiteSpace(req.PartitionKey)) msg.PartitionKey = req.PartitionKey;
+                if (!string.IsNullOrWhiteSpace(req.ReplyTo)) msg.ReplyTo = R(req.ReplyTo);
+                if (!string.IsNullOrWhiteSpace(req.To)) msg.To = R(req.To);
+                if (!string.IsNullOrWhiteSpace(req.SessionId)) msg.SessionId = R(req.SessionId);
+                if (!string.IsNullOrWhiteSpace(req.PartitionKey)) msg.PartitionKey = R(req.PartitionKey);
                 if (req.TimeToLiveSeconds is > 0) msg.TimeToLive = TimeSpan.FromSeconds(req.TimeToLiveSeconds.Value);
                 if (req.ScheduledEnqueueTime is { } scheduled) msg.ScheduledEnqueueTime = scheduled;
                 if (req.Properties is { Count: > 0 })
                 {
-                    foreach (var (k, v) in req.Properties) msg.ApplicationProperties[k] = v;
+                    foreach (var (k, v) in req.Properties) msg.ApplicationProperties[k] = R(v);
                 }
                 return msg;
             }

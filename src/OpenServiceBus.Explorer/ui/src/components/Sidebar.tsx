@@ -1,8 +1,8 @@
 import {
-  CableIcon, ChevronRightIcon, EraserIcon, InboxIcon, PlusIcon, RadioIcon, RefreshCwIcon,
-  SearchIcon, WaypointsIcon, XIcon,
+  BookmarkIcon, CableIcon, ChevronRightIcon, CopyIcon, EraserIcon, InboxIcon, PlusIcon,
+  RadioIcon, RefreshCwIcon, SearchIcon, Trash2Icon, UploadIcon, WaypointsIcon, XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { explorerApi, type QueueInfo } from "@/lib/api";
+import { explorerApi, type CannedMessage, type QueueInfo } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store";
 
@@ -228,6 +228,8 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
       </div>
 
+      <CannedLibrary />
+
       <Collapsible
         open={connOpen}
         onOpenChange={setConnOpen}
@@ -284,6 +286,123 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
       )}
     </aside>
+  );
+}
+
+/** Settings block managing the canned message library: import a JSON file, duplicate or
+ *  delete entries. Creating and editing happens on the Send tab ("Save as canned"). */
+function CannedLibrary() {
+  const store = useStore();
+  const [open, setOpen] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const importFile = async (file: File) => {
+    try {
+      const parsed: unknown = JSON.parse(await file.text());
+      const items = (Array.isArray(parsed) ? parsed : [parsed]) as CannedMessage[];
+      if (items.length === 0 || items.some((m) => typeof m?.name !== "string" || m.name.trim() === "")) {
+        toast.error("Import needs a JSON array of canned messages, each with a name.");
+        return;
+      }
+      const summary = await explorerApi.importCanned(items, "skip");
+      await store.refreshCanned();
+      if (summary.skipped > 0) {
+        toast.warning(`Imported ${summary.added}, skipped ${summary.skipped} existing`, {
+          action: {
+            label: "Replace existing",
+            onClick: () => {
+              void explorerApi.importCanned(items, "replace").then(async (r) => {
+                await store.refreshCanned();
+                toast.success(`Replaced ${r.replaced} canned message(s)`);
+              });
+            },
+          },
+        });
+      } else {
+        toast.success(`Imported ${summary.added} canned message(s)`);
+      }
+    } catch (e) {
+      toast.error("Import failed: " + (e as Error).message);
+    }
+  };
+
+  const remove = (name: string) =>
+    store.setDialog({
+      type: "confirm",
+      title: `Delete canned message '${name}'?`,
+      description: "This removes it from the library for everyone using this Explorer.",
+      destructive: true,
+      action: async () => {
+        await explorerApi.deleteCanned(name);
+        await store.refreshCanned();
+        toast.success(`Deleted '${name}'`);
+      },
+    });
+
+  const duplicate = async (name: string) => {
+    try {
+      const copy = await explorerApi.duplicateCanned(name);
+      await store.refreshCanned();
+      toast.success(`Duplicated as '${copy.name}'`);
+    } catch (e) {
+      toast.error("Duplicate failed: " + (e as Error).message);
+    }
+  };
+
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="border-t p-3"
+      trigger={
+        <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <BookmarkIcon className="size-3.5" />
+          Canned messages
+          <span className="ml-auto text-[10px] font-medium tabular-nums text-muted-foreground/70">{store.canned.length}</span>
+          <ChevronRightIcon className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+        </span>
+      }
+    >
+      <div className="mt-2 space-y-1">
+        {store.canned.length === 0 && (
+          <EmptyRow text="None yet - fill the Send tab and hit 'Save as canned'." />
+        )}
+        {store.canned.map((m) => (
+          <div key={m.name} className="group flex h-8 items-center gap-1.5 rounded-md px-1.5 text-xs hover:bg-sidebar-accent">
+            <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{m.name}</span>
+            <Badge variant="muted" className="max-w-24 truncate font-mono text-[10px]">
+              {m.targetEntity && m.targetEntity !== "*" ? m.targetEntity : "any"}
+            </Badge>
+            <Button
+              variant="ghost" size="icon" className="size-6 opacity-0 group-hover:opacity-100"
+              onClick={() => void duplicate(m.name)} title="Duplicate"
+            >
+              <CopyIcon className="size-3.5" />
+            </Button>
+            <Button
+              variant="ghost" size="icon" className="size-6 opacity-0 group-hover:opacity-100"
+              onClick={() => remove(m.name)} title="Delete"
+            >
+              <Trash2Icon className="size-3.5 text-destructive" />
+            </Button>
+          </div>
+        ))}
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) void importFile(file);
+          }}
+        />
+        <Button variant="outline" size="sm" className="w-full" onClick={() => fileInput.current?.click()}>
+          <UploadIcon /> Import from JSON
+        </Button>
+      </div>
+    </Collapsible>
   );
 }
 

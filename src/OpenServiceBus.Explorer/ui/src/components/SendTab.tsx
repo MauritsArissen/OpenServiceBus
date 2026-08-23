@@ -1,4 +1,4 @@
-import { ChevronRightIcon, PlusIcon, SendIcon, XIcon } from "lucide-react";
+import { BookmarkIcon, ChevronRightIcon, PlusIcon, SendIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { explorerApi } from "@/lib/api";
+import { explorerApi, type CannedMessage } from "@/lib/api";
 import { formatTime, type Selected } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { entityAddress, useStore } from "@/store";
@@ -41,6 +41,57 @@ export function SendTab({ sel }: { sel: Selected }) {
   const intOrNull = (v: string) => {
     const p = parseInt(v, 10);
     return Number.isFinite(p) && p > 0 ? p : null;
+  };
+
+  const availableCanned = store.canned.filter(
+    (m) => !m.targetEntity || m.targetEntity === "*" || m.targetEntity === target,
+  );
+
+  const applyCanned = (m: CannedMessage) => {
+    setMessageId(m.messageId ?? "");
+    setCorrelationId(m.correlationId ?? "");
+    setSubject(m.subject ?? "");
+    setBody(m.body ?? "");
+    setContentType(m.contentType ?? "");
+    setReplyTo(m.replyTo ?? "");
+    setTo(m.to ?? "");
+    setSessionId(m.sessionId ?? "");
+    setPartitionKey(m.partitionKey ?? "");
+    setTtl(m.timeToLiveSeconds ? String(m.timeToLiveSeconds) : "");
+    setScheduledSecs(m.scheduledDelaySeconds ? String(m.scheduledDelaySeconds) : "");
+    setProps(Object.entries(m.properties ?? {}).map(([key, value]) => ({ key, value })));
+    setCount(String(m.count ?? 1));
+    setStrategy(m.strategy === "PARALLEL" ? "PARALLEL" : "ATONCE");
+    toast.success(`Loaded '${m.name}'`);
+  };
+
+  const saveAsCanned = () => {
+    const collected: Record<string, string> = {};
+    for (const r of props) {
+      const k = r.key.trim();
+      if (k) collected[k] = r.value;
+    }
+    store.setDialog({
+      type: "saveCanned",
+      draft: {
+        name: "",
+        targetEntity: target,
+        body: orNull(body),
+        messageId: orNull(messageId),
+        correlationId: orNull(correlationId),
+        subject: orNull(subject),
+        contentType: orNull(contentType),
+        replyTo: orNull(replyTo),
+        to: orNull(to),
+        sessionId: orNull(sessionId),
+        partitionKey: orNull(partitionKey),
+        timeToLiveSeconds: intOrNull(ttl),
+        scheduledDelaySeconds: intOrNull(scheduledSecs),
+        properties: Object.keys(collected).length > 0 ? collected : null,
+        count: n,
+        strategy,
+      },
+    });
   };
 
   const send = async () => {
@@ -88,6 +139,34 @@ export function SendTab({ sel }: { sel: Selected }) {
   return (
     <Card>
       <CardContent className="space-y-4 pt-5">
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-48 space-y-1">
+            <Label>Canned message</Label>
+            <Select
+              value=""
+              onValueChange={(name) => {
+                const m = availableCanned.find((c) => c.name === name);
+                if (m) applyCanned(m);
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-64">
+                <SelectValue placeholder={availableCanned.length === 0 ? "(none saved yet)" : "Load a canned message…"} />
+              </SelectTrigger>
+              <SelectContent>
+                {availableCanned.map((m) => (
+                  <SelectItem key={m.name} value={m.name}>
+                    {m.name}
+                    {m.targetEntity && m.targetEntity !== "*" ? "" : " (any)"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button variant="outline" onClick={saveAsCanned}>
+            <BookmarkIcon /> Save as canned
+          </Button>
+        </div>
+
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="MessageId">
             <Input value={messageId} onChange={(e) => setMessageId(e.target.value)} placeholder="(auto-generated)" />

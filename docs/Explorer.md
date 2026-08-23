@@ -106,6 +106,41 @@ port) and messaging through the real `ServiceBusClient` - the JSON REST API (def
   whole UI works on a phone.
 - **Light/dark theme** with persisted preference.
 
+## Canned messages
+
+Save a fully configured Send form under a name and replay it later with one click.
+
+- **Save** - fill the Send tab (body, system properties, application properties, copies,
+  strategy) and hit "Save as canned". A canned message is scoped to the entity it was
+  saved on or to "any entity"; the Send tab's picker only offers the ones that apply to
+  the selected entity.
+- **Manage** - the sidebar's "Canned messages" block lists the library with duplicate
+  and delete actions. Editing = load one into the Send tab, tweak it, and save it again
+  under the same name (the dialog offers overwrite on a name collision).
+- **Import** - the sidebar block imports a JSON array of canned messages (the export
+  shape of the API's `GET /api/canned`). Imports merge by name: existing names are
+  skipped by default, and the result toast offers a one-click "Replace existing".
+- **Dynamic variables** - resolved at send time, independently for every copy of a
+  multi-count send, in the body, MessageId, CorrelationId, Subject, ReplyTo, To,
+  SessionId, PartitionKey and application property values:
+
+  | Variable | Result |
+  | -------- | ------ |
+  | `{{$guid}}` | random guid, lowercase (also `{{$guid upper}}` / `{{$guid lower}}`) |
+  | `{{$datetime iso8601}}` | current UTC time, ISO 8601 round-trip format |
+  | `{{$datetime rfc1123}}` | current UTC time, RFC 1123 format |
+  | `{{$datetime iso8601 -5d}}` | with an offset: `[+-]N` plus `y M w d h m s` (months are capital `M`) |
+
+  A MessageId containing a variable is used as resolved - the usual `-0…-N` suffixing
+  for multi-count sends is skipped because each copy is already unique. Unknown or
+  malformed variables are left in the text verbatim.
+- **Library storage** - the library lives in the Explorer backend (in-memory), shared by
+  every browser connected to it. `POST /api/canned/reset` restores it to its startup
+  defaults on demand; in the hosted live demo (`OSB_EXPLORER_DEMO=true`) the Explorer
+  also restores it automatically on the same wall-clock cadence as the rest of the demo
+  reset (`OSB_EXPLORER_RESET_INTERVAL_SECONDS`, default 30 minutes), so demo visitors
+  always find a clean library. A normal Explorer never resets on its own.
+
 ## Connection panel
 
 Bottom of the sidebar is a collapsible **Connection** drawer with the SDK connection
