@@ -106,6 +106,49 @@ port) and messaging through the real `ServiceBusClient` - the JSON REST API (def
   whole UI works on a phone.
 - **Light/dark theme** with persisted preference.
 
+## Canned messages
+
+Save a fully configured Send form under a name and replay it later with one click.
+
+- **Save** - fill the Send tab (body, system properties, application properties, copies,
+  strategy) and hit "Save as canned". A canned message is scoped to the entity it was
+  saved on or to "any entity"; the Send tab's picker only offers the ones that apply to
+  the selected entity.
+- **Manage** - the sidebar's "Canned messages" entry (and the Send tab's Manage button)
+  opens a full management page: every canned message as a card with its body preview,
+  scope, send settings and detected variables, plus edit (a full-form dialog with every
+  Send field), duplicate, delete and create-from-scratch. Works on phones - cards stack
+  and the editor dialog scrolls.
+- **Import** - on the management page: a JSON array of canned messages (the export shape
+  of the API's `GET /api/canned`). Imports merge by name: existing names are skipped by
+  default, and the result toast offers a one-click "Replace existing".
+- **Variable highlighting + legend** - while composing (Send tab and the editor), body
+  text like `{{$guid}}` is colored green when the variable is valid and amber with a
+  wavy underline when unknown or malformed. A chips row under the body lists every
+  variable found across all fields - hovering a chip explains what it resolves to (the
+  same surface a future environments feature will use to show the active value) - and a
+  "Variables" button opens a legend of everything available with examples.
+- **Dynamic variables** - resolved at send time, independently for every copy of a
+  multi-count send, in the body, MessageId, CorrelationId, Subject, ReplyTo, To,
+  SessionId, PartitionKey and application property values:
+
+  | Variable | Result |
+  | -------- | ------ |
+  | `{{$guid}}` | random guid, lowercase (also `{{$guid upper}}` / `{{$guid lower}}`) |
+  | `{{$datetime iso8601}}` | current UTC time, ISO 8601 round-trip format |
+  | `{{$datetime rfc1123}}` | current UTC time, RFC 1123 format |
+  | `{{$datetime iso8601 -5d}}` | with an offset: `[+-]N` plus `y M w d h m s` (months are capital `M`) |
+
+  A MessageId containing a variable is used as resolved - the usual `-0…-N` suffixing
+  for multi-count sends is skipped because each copy is already unique. Unknown or
+  malformed variables are left in the text verbatim.
+- **Library storage** - the library lives in the Explorer backend (in-memory), shared by
+  every browser connected to it. `POST /api/canned/reset` restores it to its startup
+  defaults on demand; in the hosted live demo (`OSB_EXPLORER_DEMO=true`) the Explorer
+  also restores it automatically on the same wall-clock cadence as the rest of the demo
+  reset (`OSB_EXPLORER_RESET_INTERVAL_SECONDS`, default 30 minutes), so demo visitors
+  always find a clean library. A normal Explorer never resets on its own.
+
 ## Connection panel
 
 Bottom of the sidebar is a collapsible **Connection** drawer with the SDK connection

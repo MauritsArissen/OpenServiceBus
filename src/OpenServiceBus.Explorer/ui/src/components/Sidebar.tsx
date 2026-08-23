@@ -1,6 +1,6 @@
 import {
-  CableIcon, ChevronRightIcon, EraserIcon, InboxIcon, PlusIcon, RadioIcon, RefreshCwIcon,
-  SearchIcon, WaypointsIcon, XIcon,
+  BookmarkIcon, CableIcon, ChevronRightIcon, EraserIcon, InboxIcon, PlusIcon,
+  RadioIcon, RefreshCwIcon, SearchIcon, WaypointsIcon, XIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -226,6 +226,21 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             );
           })}
         </div>
+      </div>
+
+      <div className="border-t p-3">
+        <button
+          className="flex w-full items-center gap-2 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground"
+          onClick={() => {
+            store.setView("canned");
+            onClose();
+          }}
+        >
+          <BookmarkIcon className="size-3.5" />
+          Canned messages
+          <span className="ml-auto text-[10px] font-medium tabular-nums text-muted-foreground/70">{store.canned.length}</span>
+          <ChevronRightIcon className="size-3.5" />
+        </button>
       </div>
 
       <Collapsible

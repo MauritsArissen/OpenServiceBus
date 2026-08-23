@@ -1,4 +1,4 @@
-import { ChevronRightIcon, PlusIcon, SendIcon, XIcon } from "lucide-react";
+import { BookmarkIcon, ChevronRightIcon, PlusIcon, SendIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -7,10 +7,12 @@ import { Collapsible } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { explorerApi } from "@/lib/api";
+import { explorerApi, type CannedMessage } from "@/lib/api";
 import { formatTime, type Selected } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { HighlightedBodyEditor } from "@/components/variables/HighlightedBodyEditor";
+import { VariableChips } from "@/components/variables/VariableChips";
+import { VariableLegend } from "@/components/variables/VariableLegend";
 import { entityAddress, useStore } from "@/store";
 
 type PropRow = { key: string; value: string };
@@ -41,6 +43,57 @@ export function SendTab({ sel }: { sel: Selected }) {
   const intOrNull = (v: string) => {
     const p = parseInt(v, 10);
     return Number.isFinite(p) && p > 0 ? p : null;
+  };
+
+  const availableCanned = store.canned.filter(
+    (m) => !m.targetEntity || m.targetEntity === "*" || m.targetEntity === target,
+  );
+
+  const applyCanned = (m: CannedMessage) => {
+    setMessageId(m.messageId ?? "");
+    setCorrelationId(m.correlationId ?? "");
+    setSubject(m.subject ?? "");
+    setBody(m.body ?? "");
+    setContentType(m.contentType ?? "");
+    setReplyTo(m.replyTo ?? "");
+    setTo(m.to ?? "");
+    setSessionId(m.sessionId ?? "");
+    setPartitionKey(m.partitionKey ?? "");
+    setTtl(m.timeToLiveSeconds ? String(m.timeToLiveSeconds) : "");
+    setScheduledSecs(m.scheduledDelaySeconds ? String(m.scheduledDelaySeconds) : "");
+    setProps(Object.entries(m.properties ?? {}).map(([key, value]) => ({ key, value })));
+    setCount(String(m.count ?? 1));
+    setStrategy(m.strategy === "PARALLEL" ? "PARALLEL" : "ATONCE");
+    toast.success(`Loaded '${m.name}'`);
+  };
+
+  const saveAsCanned = () => {
+    const collected: Record<string, string> = {};
+    for (const r of props) {
+      const k = r.key.trim();
+      if (k) collected[k] = r.value;
+    }
+    store.setDialog({
+      type: "saveCanned",
+      draft: {
+        name: "",
+        targetEntity: target,
+        body: orNull(body),
+        messageId: orNull(messageId),
+        correlationId: orNull(correlationId),
+        subject: orNull(subject),
+        contentType: orNull(contentType),
+        replyTo: orNull(replyTo),
+        to: orNull(to),
+        sessionId: orNull(sessionId),
+        partitionKey: orNull(partitionKey),
+        timeToLiveSeconds: intOrNull(ttl),
+        scheduledDelaySeconds: intOrNull(scheduledSecs),
+        properties: Object.keys(collected).length > 0 ? collected : null,
+        count: n,
+        strategy,
+      },
+    });
   };
 
   const send = async () => {
@@ -88,6 +141,47 @@ export function SendTab({ sel }: { sel: Selected }) {
   return (
     <Card>
       <CardContent className="space-y-4 pt-5">
+        <div className="flex flex-col gap-2 rounded-md border bg-muted/40 p-2.5 sm:flex-row sm:items-center">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <BookmarkIcon className="size-4 shrink-0 text-muted-foreground" />
+            <Select
+              value=""
+              onValueChange={(name) => {
+                const m = availableCanned.find((c) => c.name === name);
+                if (m) applyCanned(m);
+              }}
+            >
+              <SelectTrigger className="h-8 min-w-0 flex-1 sm:max-w-72">
+                <SelectValue
+                  placeholder={
+                    availableCanned.length === 0
+                      ? "No canned messages for this entity"
+                      : `Load a canned message (${availableCanned.length})`
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {availableCanned.map((m) => (
+                  <SelectItem key={m.name} value={m.name}>
+                    <span className="font-mono text-xs">{m.name}</span>
+                    {(!m.targetEntity || m.targetEntity === "*") && (
+                      <span className="ml-1.5 text-[10px] text-muted-foreground">any</span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={saveAsCanned}>
+              Save as canned
+            </Button>
+            <Button variant="ghost" size="sm" className="flex-1 sm:flex-none" onClick={() => store.setView("canned")}>
+              Manage
+            </Button>
+          </div>
+        </div>
+
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="MessageId">
             <Input value={messageId} onChange={(e) => setMessageId(e.target.value)} placeholder="(auto-generated)" />
@@ -100,9 +194,21 @@ export function SendTab({ sel }: { sel: Selected }) {
           </Field>
         </div>
 
-        <Field label="Body">
-          <Textarea rows={7} value={body} onChange={(e) => setBody(e.target.value)} className="font-mono text-xs" />
-        </Field>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <Label>Body</Label>
+            <VariableLegend />
+          </div>
+          <HighlightedBodyEditor value={body} onChange={setBody} placeholder='{"orderId": "{{$guid}}"}' />
+          <VariableChips
+            fields={{
+              Body: body, MessageId: messageId, CorrelationId: correlationId, Subject: subject,
+              ReplyTo: replyTo, To: to, SessionId: sessionId, PartitionKey: partitionKey,
+              ...Object.fromEntries(props.filter((r) => r.key.trim()).map((r) => [`prop ${r.key}`, r.value])),
+            }}
+            className="pt-1"
+          />
+        </div>
 
         <Collapsible
           open={advancedOpen}

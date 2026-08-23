@@ -28,6 +28,8 @@ export type DialogState =
   | { type: "deadletter"; target: string; lockTokens: string[] }
   | { type: "resend"; target: string; sequenceNumbers: number[] }
   | { type: "confirm"; title: string; description: string; destructive?: boolean; action: () => Promise<void> | void }
+  | { type: "saveCanned"; draft: import("@/lib/api").CannedMessage }
+  | { type: "editCanned"; edit?: import("@/lib/api").CannedMessage }
   | null;
 
 type Store = {
@@ -75,6 +77,13 @@ type Store = {
 
   dialog: DialogState;
   setDialog: (d: DialogState) => void;
+
+  canned: import("@/lib/api").CannedMessage[];
+  refreshCanned: () => Promise<void>;
+
+  /** Main content area: an entity's tabs, or the canned message management page. */
+  view: "entity" | "canned";
+  setView: (v: "entity" | "canned") => void;
 };
 
 const StoreContext = createContext<Store>(null!);
@@ -94,6 +103,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [peeked, setPeeked] = useState<Record<string, MessageDto[]>>({});
   const [peekCursor, setPeekCursorState] = useState<Record<string, number>>({});
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [canned, setCanned] = useState<import("@/lib/api").CannedMessage[]>([]);
+  const [view, setView] = useState<"entity" | "canned">("entity");
   const [demoMode, setDemoMode] = useState(false);
   const [resetIntervalSeconds, setResetIntervalSeconds] = useState(1800);
   const [version, setVersion] = useState<string | null>(null);
@@ -278,7 +289,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const select = useCallback((s: Selected | null) => setSelected(s), []);
+  const select = useCallback((s: Selected | null) => {
+    setSelected(s);
+    setView("entity");
+  }, []);
+
+  const refreshCanned = useCallback(async () => {
+    try {
+      setCanned(await explorerApi.listCanned());
+    } catch {
+      setCanned([]);
+    }
+  }, []);
+  useEffect(() => {
+    void refreshCanned();
+  }, [refreshCanned]);
 
   const value = useMemo<Store>(
     () => ({
@@ -291,10 +316,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       locked, peeked, peekCursor, lockedCount, setPeekedFor, setPeekCursor, trackLocked, untrack, untrackMany,
       updateLockedUntil, clearEntityLocal,
       dialog, setDialog,
+      canned, refreshCanned,
+      view, setView,
     }),
     [conn, mgmt, setConn, setMgmt, status, pingResult, connect, demoMode, resetIntervalSeconds, version, queues, topics, subsByTopic, loading,
      refresh, selected, select, descriptorFor, dlqCount, locked, peeked, peekCursor, lockedCount, setPeekedFor, setPeekCursor, trackLocked,
-     untrack, untrackMany, updateLockedUntil, clearEntityLocal, dialog],
+     untrack, untrackMany, updateLockedUntil, clearEntityLocal, dialog, canned, refreshCanned, view],
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
