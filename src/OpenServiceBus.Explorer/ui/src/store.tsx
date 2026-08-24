@@ -30,8 +30,6 @@ export type DialogState =
   | { type: "resend"; target: string; sequenceNumbers: number[] }
   | { type: "confirm"; title: string; description: string; destructive?: boolean; action: () => Promise<void> | void }
   | { type: "saveCanned"; draft: import("@/lib/api").CannedMessage }
-  | { type: "editCanned"; edit?: import("@/lib/api").CannedMessage }
-  | { type: "editEnvironment"; edit?: import("@/lib/api").ExplorerEnvironment }
   | null;
 
 type Store = {
