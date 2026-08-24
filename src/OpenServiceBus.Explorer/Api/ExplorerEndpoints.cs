@@ -40,7 +40,7 @@ public static class ExplorerEndpoints
         // pins the connection to the co-located broker and tells the UI to lock the
         // connection inputs and show a reset countdown. Empty/false everywhere else, so a
         // normal Explorer is completely unaffected.
-        api.MapGet("/config", () =>
+        api.MapGet("/config", (CannedMessages.CannedMessageFileStore cannedFiles) =>
         {
             static string? Env(string name) =>
                 Environment.GetEnvironmentVariable(name) is { Length: > 0 } v ? v : null;
@@ -54,6 +54,12 @@ public static class ExplorerEndpoints
                 managementUrl = Env("OSB_EXPLORER_MGMT_URL"),
                 resetIntervalSeconds = reset,
                 version = Env("OSB_EXPLORER_VERSION"),
+                cannedFile = new
+                {
+                    configured = cannedFiles.IsConfigured,
+                    writable = cannedFiles.IsWritable,
+                    path = demo ? null : cannedFiles.FilePath,
+                },
             });
         });
 

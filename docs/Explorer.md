@@ -142,12 +142,25 @@ Save a fully configured Send form under a name and replay it later with one clic
   A MessageId containing a variable is used as resolved - the usual `-0…-N` suffixing
   for multi-count sends is skipped because each copy is already unique. Unknown or
   malformed variables are left in the text verbatim.
-- **Library storage** - the library lives in the Explorer backend (in-memory), shared by
-  every browser connected to it. `POST /api/canned/reset` restores it to its startup
-  defaults on demand; in the hosted live demo (`OSB_EXPLORER_DEMO=true`) the Explorer
-  also restores it automatically on the same wall-clock cadence as the rest of the demo
-  reset (`OSB_EXPLORER_RESET_INTERVAL_SECONDS`, default 30 minutes), so demo visitors
-  always find a clean library. A normal Explorer never resets on its own.
+- **Library file (optional)** - point `OSB_EXPLORER_CANNED_FILE` at a JSON file and the
+  library becomes team-shareable config you commit to git: the Explorer loads it at
+  startup, every UI edit writes back to it (pretty-printed, stable order - clean git
+  diffs), and the management page shows which file backs the library. The file IS the
+  import/export format, so Export downloads exactly what would be committed. A read-only
+  file (`:ro` docker mount) still loads, but edits stay in memory until restart - the
+  management page flags that. A missing file starts empty and is created on the first
+  save; an unreadable or invalid file logs a warning and starts empty instead of
+  crashing. See [Docker](Docker) for the compose mount example.
+- **Reload & reset** - `POST /api/canned/reset` (the management page's "Reload from
+  file" button) re-reads the file as it is on disk right now, discarding unsaved
+  session state - the way to pick up a `git pull` without restarting. Without a file
+  the reset restores the startup state. In the hosted live demo (`OSB_EXPLORER_DEMO=true`)
+  the Explorer also resets automatically on the same wall-clock cadence as the rest of
+  the demo reset (`OSB_EXPLORER_RESET_INTERVAL_SECONDS`, default 30 minutes), so demo
+  visitors always find a clean library. A normal Explorer never resets on its own.
+- **Library storage** - without the file variable the library lives in the Explorer
+  backend in-memory, shared by every browser connected to it - broker state is never
+  involved, so it works identically with both storage modes and against real Azure.
 
 ## Connection panel
 

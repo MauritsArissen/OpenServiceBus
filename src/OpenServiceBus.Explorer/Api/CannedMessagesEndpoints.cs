@@ -59,6 +59,11 @@ public static class CannedMessagesEndpoints
             return Results.Ok(summary);
         });
 
+        api.MapGet("export", (CannedMessageLibrary library) => Results.File(
+            System.Text.Encoding.UTF8.GetBytes(CannedMessageFileStore.Serialize(library.List())),
+            "application/json",
+            "canned-messages.json"));
+
         api.MapPost("reset", (CannedMessageLibrary library) =>
         {
             library.ResetToDefaults();

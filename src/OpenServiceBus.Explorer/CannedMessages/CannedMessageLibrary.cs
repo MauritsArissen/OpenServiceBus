@@ -4,7 +4,24 @@ public sealed class CannedMessageLibrary
 {
     private readonly object _sync = new();
     private readonly Dictionary<string, CannedMessage> _messages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly CannedMessageFileStore? _files;
     private IReadOnlyList<CannedMessage> _defaults = [];
+
+    public CannedMessageLibrary()
+    {
+    }
+
+    public CannedMessageLibrary(CannedMessageFileStore files)
+    {
+        _files = files;
+        if (files.IsConfigured && files.TryLoad() is { } loaded)
+        {
+            foreach (var message in loaded)
+            {
+                _messages[message.Name] = message;
+            }
+        }
+    }
 
     public void SeedDefaults(IEnumerable<CannedMessage> defaults)
     {
@@ -39,7 +56,9 @@ public sealed class CannedMessageLibrary
     {
         lock (_sync)
         {
-            return _messages.TryAdd(message.Name, message);
+            if (!_messages.TryAdd(message.Name, message)) return false;
+            Persist();
+            return true;
         }
     }
 
@@ -52,6 +71,7 @@ public sealed class CannedMessageLibrary
             if (renaming && _messages.ContainsKey(message.Name)) return UpdateResult.NameConflict;
             _messages.Remove(existingName);
             _messages[message.Name] = message;
+            Persist();
             return UpdateResult.Updated;
         }
     }
@@ -60,7 +80,9 @@ public sealed class CannedMessageLibrary
     {
         lock (_sync)
         {
-            return _messages.Remove(name);
+            if (!_messages.Remove(name)) return false;
+            Persist();
+            return true;
         }
     }
 
@@ -76,6 +98,7 @@ public sealed class CannedMessageLibrary
             }
             var copy = source with { Name = copyName };
             _messages[copyName] = copy;
+            Persist();
             return copy;
         }
     }
@@ -105,6 +128,7 @@ public sealed class CannedMessageLibrary
                     added++;
                 }
             }
+            if (added + replaced > 0) Persist();
             return new ImportSummary(added, replaced, skipped);
         }
     }
@@ -121,12 +145,18 @@ public sealed class CannedMessageLibrary
     {
         lock (_sync)
         {
+            var baseline = _files is { IsConfigured: true } ? _files.TryLoad() ?? [] : _defaults;
             _messages.Clear();
-            foreach (var message in _defaults)
+            foreach (var message in baseline)
             {
                 _messages[message.Name] = message;
             }
         }
+    }
+
+    private void Persist()
+    {
+        _files?.TrySave(_messages.Values.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase).ToList());
     }
 }
 

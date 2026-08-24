@@ -46,6 +46,16 @@ deploy)
 
     docker rm -f "$NAME-seeder" "$NAME" 2>/dev/null || true
 
+    # Demo canned message library, synced by the workflow next to this script. Mounted
+    # read-only, same as the live demo; previews of branches whose image predates the
+    # feature just ignore the env var.
+    CANNED_ARGS=""
+    CANNED_FILE=/srv/osb-previews/share/canned-messages.json
+    if [ -f "$CANNED_FILE" ]; then
+        CANNED_ARGS="-v $CANNED_FILE:/etc/openservicebus/canned-messages.json:ro -e OSB_EXPLORER_CANNED_FILE=/etc/openservicebus/canned-messages.json"
+    fi
+
+    # shellcheck disable=SC2086 # CANNED_ARGS is intentionally word-split docker args
     docker run -d --name "$NAME" \
         --restart unless-stopped \
         --memory 768m --cpus 1.0 \
@@ -55,6 +65,7 @@ deploy)
         -e OSB_EXPLORER_CONNECTION="$CONNECTION" \
         -e OSB_EXPLORER_MGMT_URL="http://127.0.0.1:5300" \
         -e OSB_EXPLORER_RESET_INTERVAL_SECONDS=1800 \
+        $CANNED_ARGS \
         "$APP_IMAGE"
 
     docker run -d --name "$NAME-seeder" \
