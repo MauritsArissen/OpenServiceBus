@@ -1,4 +1,4 @@
-import { MenuIcon, MoonIcon, RefreshCwIcon, RotateCcwIcon, SunIcon } from "lucide-react";
+import { GlobeIcon, MenuIcon, MoonIcon, RefreshCwIcon, RotateCcwIcon, SunIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -17,7 +17,7 @@ const STATUS_META = {
 } as const;
 
 export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
-  const { status, selected, demoMode, resetIntervalSeconds } = useStore();
+  const { status, selected, demoMode, resetIntervalSeconds, environments, activeEnvironment, setActiveEnvironment } = useStore();
   const [dark, setDark] = useState(() => (localStorage.getItem(LS_THEME) ?? "light") === "dark");
 
   useEffect(() => {
@@ -52,6 +52,28 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
         </div>
       )}
       <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+        {environments.length > 0 && (
+          <Select
+            value={activeEnvironment ?? "@none"}
+            onValueChange={(v) => setActiveEnvironment(v === "@none" ? null : v)}
+          >
+            <SelectTrigger
+              className="h-8 w-9 gap-1 px-2 text-xs sm:w-44 [&>svg:last-child]:hidden sm:[&>svg:last-child]:block"
+              title="Active environment"
+            >
+              <GlobeIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="hidden min-w-0 truncate sm:block">
+                <SelectValue placeholder="No environment" />
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="@none">No environment</SelectItem>
+              {environments.map((e) => (
+                <SelectItem key={e.name} value={e.name}>{e.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         {demoMode && <ResetCountdown intervalSeconds={resetIntervalSeconds} />}
         <RefreshInterval />
         <span className="flex items-center gap-2 rounded-full border px-2 py-1 text-xs text-muted-foreground sm:px-3">

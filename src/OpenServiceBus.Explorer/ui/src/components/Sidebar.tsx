@@ -1,5 +1,5 @@
 import {
-  BookmarkIcon, CableIcon, ChevronRightIcon, EraserIcon, InboxIcon, PlusIcon,
+  BookmarkIcon, CableIcon, ChevronRightIcon, EraserIcon, GlobeIcon, InboxIcon, PlusIcon,
   RadioIcon, RefreshCwIcon, SearchIcon, WaypointsIcon, XIcon,
 } from "lucide-react";
 import { useState } from "react";
@@ -228,7 +228,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
       </div>
 
-      <div className="border-t p-3">
+      <div className="space-y-2.5 border-t p-3">
         <button
           className="flex w-full items-center gap-2 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground"
           onClick={() => {
@@ -239,6 +239,25 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           <BookmarkIcon className="size-3.5" />
           Canned messages
           <span className="ml-auto text-[10px] font-medium tabular-nums text-muted-foreground/70">{store.canned.length}</span>
+          <ChevronRightIcon className="size-3.5" />
+        </button>
+        <button
+          className="flex w-full items-center gap-2 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground"
+          onClick={() => {
+            store.setView("environments");
+            onClose();
+          }}
+        >
+          <GlobeIcon className="size-3.5" />
+          Environments
+          <span className="ml-auto flex items-center gap-1.5">
+            {store.activeEnvironment && (
+              <span className="max-w-24 truncate rounded-sm bg-sky-500/10 px-1 font-mono text-[10px] text-sky-600 dark:text-sky-400">
+                {store.activeEnvironment}
+              </span>
+            )}
+            <span className="text-[10px] font-medium tabular-nums text-muted-foreground/70">{store.environments.length}</span>
+          </span>
           <ChevronRightIcon className="size-3.5" />
         </button>
       </div>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Toaster } from "sonner";
 import { CannedMessagesPage } from "@/components/CannedMessagesPage";
+import { EnvironmentsPage } from "@/components/EnvironmentsPage";
 import { DialogHost } from "@/components/DialogHost";
 import { EntityView } from "@/components/EntityView";
 import { Sidebar } from "@/components/Sidebar";
@@ -48,5 +49,7 @@ export default function App() {
 
 function MainView() {
   const store = useStore();
-  return store.view === "canned" ? <CannedMessagesPage /> : <EntityView />;
+  if (store.view === "canned") return <CannedMessagesPage />;
+  if (store.view === "environments") return <EnvironmentsPage />;
+  return <EntityView />;
 }

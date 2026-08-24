@@ -78,6 +78,7 @@ export type SendPayload = {
   properties: Record<string, string> | null;
   count: number;
   strategy: string;
+  environment?: string | null;
 };
 
 async function api<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
@@ -236,6 +237,18 @@ export const explorerApi = {
     api<CannedMessage>(`/api/canned/${encodeURIComponent(name)}/duplicate`, { method: "POST" }),
   importCanned: (messages: CannedMessage[], conflictMode: "replace" | "skip" | null) =>
     api<CannedImportSummary>("/api/canned/import", post({ messages, conflictMode })),
+
+  listEnvironments: () => api<ExplorerEnvironment[]>("/api/environments"),
+  createEnvironment: (environment: ExplorerEnvironment) =>
+    api<ExplorerEnvironment>("/api/environments", post(environment)),
+  updateEnvironment: (name: string, environment: ExplorerEnvironment) =>
+    api<ExplorerEnvironment>(`/api/environments/${encodeURIComponent(name)}`, put(environment)),
+  deleteEnvironment: (name: string) =>
+    api(`/api/environments/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  duplicateEnvironment: (name: string) =>
+    api<ExplorerEnvironment>(`/api/environments/${encodeURIComponent(name)}/duplicate`, { method: "POST" }),
+  importEnvironments: (environments: ExplorerEnvironment[], conflictMode: "replace" | "skip" | null) =>
+    api<CannedImportSummary>("/api/environments/import", post({ environments, conflictMode })),
 };
 
 export type MetricSample = { t: number; active: number; enqueued: number; completed: number };
@@ -260,6 +273,10 @@ export type CannedMessage = {
 };
 
 export type CannedImportSummary = { added: number; replaced: number; skipped: number };
+
+export type EnvironmentValue = { key: string; value: string; enabled: boolean };
+
+export type ExplorerEnvironment = { name: string; values: EnvironmentValue[] };
 
 export type ResendItemResult = { sequenceNumber: number; ok: boolean; messageId: string | null; error: string | null };
 export type ResendResult = {

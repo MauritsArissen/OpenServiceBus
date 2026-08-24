@@ -81,5 +81,26 @@
     },
     "count": 1,
     "strategy": "ATONCE"
+  },
+  {
+    "name": "card-charged",
+    "targetEntity": "payments",
+    "body": "{\n  \"chargeId\": \"{{$guid}}\",\n  \"cardnr\": {{cardnumber}},\n  \"cardholder\": \"{{cardholder}}\",\n  \"amountCents\": 3000,\n  \"chargedAt\": \"{{$datetime iso8601}}\"\n}",
+    "messageId": "charge-{{$guid}}",
+    "correlationId": null,
+    "subject": "CardCharged for {{cardholder}}",
+    "contentType": "application/json",
+    "replyTo": null,
+    "to": null,
+    "sessionId": null,
+    "partitionKey": null,
+    "timeToLiveSeconds": null,
+    "scheduledDelaySeconds": null,
+    "properties": {
+      "region": "{{region}}",
+      "source": "card-gateway"
+    },
+    "count": 1,
+    "strategy": "ATONCE"
   }
 ]

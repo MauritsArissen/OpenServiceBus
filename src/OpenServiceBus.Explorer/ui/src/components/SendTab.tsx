@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { explorerApi, type CannedMessage } from "@/lib/api";
+import { collectVariables } from "@/lib/variables";
 import { formatTime, type Selected } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { HighlightedBodyEditor } from "@/components/variables/HighlightedBodyEditor";
@@ -105,6 +106,20 @@ export function SendTab({ sel }: { sel: Selected }) {
         if (k) collected[k] = r.value;
       }
       const schedSecs = intOrNull(scheduledSecs);
+      const unresolved = collectVariables(
+        {
+          Body: body, MessageId: messageId, CorrelationId: correlationId, Subject: subject,
+          ReplyTo: replyTo, To: to, SessionId: sessionId, PartitionKey: partitionKey,
+          ...Object.fromEntries(props.filter((r) => r.key.trim()).map((r) => [`prop ${r.key}`, r.value])),
+        },
+        store.activeEnvValues,
+      ).filter((t) => t.kind === "env" && !t.valid);
+      if (unresolved.length > 0) {
+        toast.warning(
+          `Sent with unresolved ${unresolved.map((t) => t.raw).join(", ")} - ` +
+            (store.activeEnvironment ? "no value in the active environment." : "no environment is active."),
+        );
+      }
       const result = await explorerApi.send({
         connectionString: store.conn,
         queue: target,
@@ -122,6 +137,7 @@ export function SendTab({ sel }: { sel: Selected }) {
         properties: Object.keys(collected).length > 0 ? collected : null,
         count: n,
         strategy,
+        environment: store.activeEnvironment,
       });
       if (result.scheduledFor) {
         toast.success(`Scheduled ${result.sentCount} for ${formatTime(result.scheduledFor)} (${result.strategy})`);
@@ -199,13 +215,14 @@ export function SendTab({ sel }: { sel: Selected }) {
             <Label>Body</Label>
             <VariableLegend />
           </div>
-          <HighlightedBodyEditor value={body} onChange={setBody} placeholder='{"orderId": "{{$guid}}"}' />
+          <HighlightedBodyEditor value={body} onChange={setBody} placeholder='{"orderId": "{{$guid}}"}' env={store.activeEnvValues} />
           <VariableChips
             fields={{
               Body: body, MessageId: messageId, CorrelationId: correlationId, Subject: subject,
               ReplyTo: replyTo, To: to, SessionId: sessionId, PartitionKey: partitionKey,
               ...Object.fromEntries(props.filter((r) => r.key.trim()).map((r) => [`prop ${r.key}`, r.value])),
             }}
+            env={store.activeEnvValues}
             className="pt-1"
           />
         </div>

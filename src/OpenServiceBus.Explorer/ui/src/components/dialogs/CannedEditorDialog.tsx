@@ -129,13 +129,14 @@ export function CannedEditorDialog({ edit }: { edit?: CannedMessage }) {
             <Label>Body</Label>
             <VariableLegend />
           </div>
-          <HighlightedBodyEditor value={body} onChange={setBody} placeholder='{"orderId": "{{$guid}}"}' />
+          <HighlightedBodyEditor value={body} onChange={setBody} placeholder='{"orderId": "{{$guid}}"}' env={store.activeEnvValues} />
           <VariableChips
             fields={{
               Body: body, MessageId: messageId, CorrelationId: correlationId, Subject: subject,
               ReplyTo: replyTo, To: to, SessionId: sessionId, PartitionKey: partitionKey,
               ...Object.fromEntries(props.filter((r) => r.key.trim()).map((r) => [`prop ${r.key}`, r.value])),
             }}
+            env={store.activeEnvValues}
             className="pt-1"
           />
         </div>
