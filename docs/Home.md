@@ -19,6 +19,8 @@ in the repo - every page here is committed in source.
 - **[Docker](Docker)** - image, compose, ports, persistence, healthcheck.
 - **[Persistence](Persistence)** - SQLite store, schema, restart semantics.
 - **[Explorer UI](Explorer)** - browser-based console for testing.
+- **[Canned messages & environments](Canned-Messages)** - reusable payloads with dynamic
+  variables and Postman-style environments, committable to git.
 
 ### Service Bus features
 

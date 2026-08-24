@@ -118,6 +118,28 @@ const FAQS: QA[] = [
     ),
   },
   {
+    q: "Can I save reusable test messages and share them with my team?",
+    a: (
+      <>
+        Yes - the Explorer has <strong>canned messages</strong>: save a fully
+        configured message (body, system properties, application properties,
+        copies, strategy) under a name and replay it with one click. Payloads
+        can use <strong>dynamic variables</strong> like <code>{"{{$guid}}"}</code>,{" "}
+        <code>{"{{$datetime iso8601 -5d}}"}</code>, <code>{"{{$sequence}}"}</code>{" "}
+        and <code>{"{{$randomInt 1 100}}"}</code> - resolved fresh for every copy
+        of a multi-count send - and <strong>Postman-style environments</strong>{" "}
+        (<code>{"{{cardnumber}}"}</code> with a switchable active set; Postman
+        environment exports import directly). Point{" "}
+        <code>OSB_EXPLORER_CANNED_FILE</code> and{" "}
+        <code>OSB_EXPLORER_ENVIRONMENTS_FILE</code> at JSON files mounted in
+        docker compose and the whole setup is committed to git: edits in the UI
+        write back to the files, and a reload picks up a <code>git pull</code>{" "}
+        without restarting. Because values are materialized before the SDK send,
+        all of it also works against a real Azure Service Bus namespace.
+      </>
+    ),
+  },
+  {
     q: "How does it differ from the Microsoft emulator?",
     a: (
       <>

@@ -115,10 +115,11 @@ Save a fully configured Send form under a name and replay it later with one clic
   saved on or to "any entity"; the Send tab's picker only offers the ones that apply to
   the selected entity.
 - **Manage** - the sidebar's "Canned messages" entry (and the Send tab's Manage button)
-  opens a full management page: every canned message as a card with its body preview,
-  scope, send settings and detected variables, plus edit (a full-form dialog with every
-  Send field), duplicate, delete and create-from-scratch. Works on phones - cards stack
-  and the editor dialog scrolls.
+  opens a master-detail management page: a row list of the library on the left, an
+  INLINE editor on the right with every Send field, explicit Save/Revert with an
+  unsaved-changes indicator, plus duplicate, delete and create-from-scratch - no
+  modals. On phones the list comes first and a row opens the editor with a back
+  button.
 - **Import** - on the management page: a JSON array of canned messages (the export shape
   of the API's `GET /api/canned`). Imports merge by name: existing names are skipped by
   default, and the result toast offers a one-click "Replace existing".
@@ -198,10 +199,12 @@ active per browser, referenced in payloads as `{{key}}`.
   ReplyTo, To, SessionId, PartitionKey, application property values - in the Send tab
   and canned messages alike. The active environment is a per-browser choice
   (localStorage); the library of environments is shared Explorer state.
-- **Manage** via the sidebar's Environments entry: cards with value previews, per-value
-  enable toggles in the editor, set-active, duplicate, delete, import and export.
-  Import accepts Postman environment exports directly (extra Postman fields are
-  ignored); export downloads the same shape.
+- **Manage** via the sidebar's Environments entry: the same master-detail page as the
+  canned library - environment rows on the left (active one marked), an inline editor
+  on the right with per-value enable toggles and Save/Revert, plus set-active,
+  duplicate, delete, import and export. The topbar's globe pill switches the active
+  environment from anywhere. Import accepts Postman environment exports directly
+  (extra Postman fields are ignored); export downloads the same shape.
 - **File backing** - `OSB_EXPLORER_ENVIRONMENTS_FILE` works exactly like the canned
   message library file: loaded at startup, written back on edit, `Reload from file`
   (or `POST /api/environments/reset`) re-reads the disk, read-only mounts keep edits
@@ -235,5 +238,7 @@ increments delivery count; dead-lettering routes to the real DLQ.
 
 ## See also
 
+- [Canned Messages & Environments](Canned-Messages) - the full reference: library file
+  workflow, environments, every dynamic variable, and the /api endpoints.
 - [Configuration](Configuration) - every per-entity setting the modals expose.
 - [Architecture](Architecture) - how the Explorer fits in the assembly graph.
