@@ -137,6 +137,37 @@ public class CannedMessagesEndpointTests
     }
 
     [Fact]
+    public async Task Send_IndexAndSequence_ResolvePerCopyThroughTheSendPath()
+    {
+        await using var broker = await OpenServiceBusTestHost.StartAsync();
+        await broker.CreateQueueAsync("catalogue-send");
+        await using var factory = new WebApplicationFactory<Program>();
+        using var http = factory.CreateClient();
+
+        var resp = await http.PostAsJsonAsync("/api/send", new
+        {
+            connectionString = broker.ConnectionString,
+            queue = "catalogue-send",
+            body = "copy={{$index}} seq={{$sequence 500}} ulid={{$ulid}}",
+            count = 3,
+            strategy = "ATONCE",
+        });
+        resp.StatusCode.ShouldBe(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+
+        await using var client = new ServiceBusClient(broker.ConnectionString);
+        var receiver = client.CreateReceiver("catalogue-send");
+        var received = await receiver.ReceiveMessagesAsync(3, TimeSpan.FromSeconds(10));
+        received.Count.ShouldBe(3);
+
+        var bodies = received.Select(m => m.Body.ToString()).OrderBy(b => b).ToList();
+        bodies.Select(b => b.Split(' ')[0]).ShouldBe(["copy=0", "copy=1", "copy=2"]);
+        bodies.Select(b => b.Split(' ')[1]).Distinct().Count().ShouldBe(3, "each copy gets its own sequence value");
+        bodies.Select(b => b.Split(' ')[1][4..]).Select(long.Parse).Min().ShouldBe(500);
+        bodies.Select(b => b.Split(' ')[2][5..]).ShouldAllBe(u => u.Length == 26);
+        foreach (var m in received) await receiver.CompleteMessageAsync(m);
+    }
+
+    [Fact]
     public async Task Send_WithDynamicVariables_ResolvesPerCopy()
     {
         await using var broker = await OpenServiceBusTestHost.StartAsync();

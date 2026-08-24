@@ -105,12 +105,13 @@ public static class ExplorerEndpoints
             var now = DateTimeOffset.UtcNow;
             ServiceBusMessage BuildOne(int index)
             {
-                string? R(string? value) => DynamicVariables.Resolve(EnvironmentVariables.Resolve(value, env), now);
+                string? R(string? value) => DynamicVariables.Resolve(
+                    EnvironmentVariables.Resolve(value, env), now, index, req.Queue);
                 var msg = new ServiceBusMessage(R(req.Body) ?? string.Empty);
                 msg.MessageId = baseId is null
                     ? Guid.NewGuid().ToString("N")
                     : idHasVariables
-                        ? DynamicVariables.Resolve(baseId, now)!
+                        ? DynamicVariables.Resolve(baseId, now, index, req.Queue)!
                         : (count == 1 ? baseId : $"{baseId}-{index}");
                 if (!string.IsNullOrWhiteSpace(req.CorrelationId)) msg.CorrelationId = R(req.CorrelationId);
                 if (!string.IsNullOrWhiteSpace(req.Subject)) msg.Subject = R(req.Subject);

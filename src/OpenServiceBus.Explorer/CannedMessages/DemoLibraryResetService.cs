@@ -34,6 +34,7 @@ public sealed class DemoLibraryResetService(
                 lastBoundary = boundary;
                 library.ResetToDefaults();
                 environments.ResetToDefaults();
+                DynamicVariables.ResetSequences();
                 logger.LogInformation("Demo reset: canned message and environment libraries restored to defaults");
             }
         }

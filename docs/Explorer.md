@@ -122,26 +122,43 @@ Save a fully configured Send form under a name and replay it later with one clic
 - **Import** - on the management page: a JSON array of canned messages (the export shape
   of the API's `GET /api/canned`). Imports merge by name: existing names are skipped by
   default, and the result toast offers a one-click "Replace existing".
-- **Variable highlighting + legend** - while composing (Send tab and the editor), body
-  text like `{{$guid}}` is colored green when the variable is valid and amber with a
-  wavy underline when unknown or malformed. A chips row under the body lists every
-  variable found across all fields - hovering a chip explains what it resolves to (the
-  same surface a future environments feature will use to show the active value) - and a
-  "Variables" button opens a legend of everything available with examples.
+- **Variable highlighting** - while composing (Send tab and the editor), body text like
+  `{{$guid}}` is colored green when the built-in is valid, blue when an environment
+  token resolves in the active environment, and amber with a wavy underline when
+  unknown or malformed. Hovering a token shows its explanation or active value directly
+  in the text; clicking one places the caret, double-clicking selects it. The
+  "Variables" button opens the grouped guide with click-to-copy syntax.
 - **Dynamic variables** - resolved at send time, independently for every copy of a
   multi-count send, in the body, MessageId, CorrelationId, Subject, ReplyTo, To,
-  SessionId, PartitionKey and application property values:
+  SessionId, PartitionKey and application property values. Names are case-insensitive
+  and follow Postman where an equivalent exists:
 
   | Variable | Result |
   | -------- | ------ |
   | `{{$guid}}` | random guid, lowercase (also `{{$guid upper}}` / `{{$guid lower}}`) |
-  | `{{$datetime iso8601}}` | current UTC time, ISO 8601 round-trip format |
-  | `{{$datetime rfc1123}}` | current UTC time, RFC 1123 format |
-  | `{{$datetime iso8601 -5d}}` | with an offset: `[+-]N` plus `y M w d h m s` (months are capital `M`) |
+  | `{{$ulid}}` | time-sortable unique id - send order stays visible when peeking |
+  | `{{$sequence}}` | incrementing counter, `{{$sequence 100}}` picks the start; scoped per entity + template, survives across sends until the Explorer restarts (the demo's 30-minute reset also restarts it) |
+  | `{{$index}}` | zero-based copy index within a multi-count send (`count: 5` gives 0..4) |
+  | `{{$datetime iso8601}}` | current UTC time; formats: `iso8601`, `rfc1123`, `unix`, `unixms` |
+  | `{{$datetime 'yyyy-MM-dd'}}` | custom .NET format string, single-quoted (spaces allowed) |
+  | `{{$datetime iso8601 -5d}}` | optional offset: `[+-]N` plus `y M w d h m s` (months are capital `M`) |
+  | `{{$timestamp}}` | unix seconds shorthand |
+  | `{{$randomInt}}` | random integer 0..1000, or `{{$randomInt min max}}` inclusive |
+  | `{{$randomDouble min max}}` | random decimal in range; optional third argument = decimals (default 2) |
+  | `{{$randomBoolean}}` | `true` or `false` |
+  | `{{$randomAlphaNumeric n}}` | random letters+digits of length n; `{{$randomHex n}}` for hex |
+  | `{{$randomChoice a\|b\|c}}` | one of the listed values - enums like regions or statuses |
+  | `{{$randomBase64 bytes}}` | random blob of exactly N bytes, base64-encoded - payloads of a precise size |
+  | `{{$repeat 'text' n}}` | deterministic padding: the quoted text repeated n times (capped at 1 MB) |
 
   A MessageId containing a variable is used as resolved - the usual `-0…-N` suffixing
   for multi-count sends is skipped because each copy is already unique. Unknown or
-  malformed variables are left in the text verbatim.
+  malformed variables are left in the text verbatim, and pressing Send with any
+  unresolvable variable (built-in or environment) opens a confirmation first: continue
+  and send the token text verbatim, or cancel and fix it. In the composer, hovering a
+  highlighted token explains it in place - built-ins show what they generate,
+  environment tokens show the active environment's value - and the "Variables" guide
+  lists the whole catalogue grouped by purpose, with click-to-copy syntax.
 - **Library file (optional)** - point `OSB_EXPLORER_CANNED_FILE` at a JSON file and the
   library becomes team-shareable config you commit to git: the Explorer loads it at
   startup, every UI edit writes back to it (pretty-printed, stable order - clean git
