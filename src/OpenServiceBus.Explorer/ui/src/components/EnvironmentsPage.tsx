@@ -109,7 +109,7 @@ export function EnvironmentsPage() {
               reference values as {"{{key}}"}.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex w-full flex-wrap gap-2 md:w-auto">
             <Button size="sm" onClick={() => { setCreating(true); setSelectedName(null); }}>
               <PlusIcon /> New
             </Button>
