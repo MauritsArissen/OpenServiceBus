@@ -1,5 +1,6 @@
 using Azure.Messaging.ServiceBus;
 using OpenServiceBus.Explorer.CannedMessages;
+using OpenServiceBus.Explorer.Environments;
 using OpenServiceBus.Explorer.Metrics;
 using OpenServiceBus.Explorer.Sessions;
 
@@ -40,7 +41,7 @@ public static class ExplorerEndpoints
         // pins the connection to the co-located broker and tells the UI to lock the
         // connection inputs and show a reset countdown. Empty/false everywhere else, so a
         // normal Explorer is completely unaffected.
-        api.MapGet("/config", (CannedMessages.CannedMessageFileStore cannedFiles) =>
+        api.MapGet("/config", (CannedMessageFileStore cannedFiles, EnvironmentLibrary environments) =>
         {
             static string? Env(string name) =>
                 Environment.GetEnvironmentVariable(name) is { Length: > 0 } v ? v : null;
@@ -60,6 +61,12 @@ public static class ExplorerEndpoints
                     writable = cannedFiles.IsWritable,
                     path = demo ? null : cannedFiles.FilePath,
                 },
+                environmentsFile = new
+                {
+                    configured = environments.IsConfigured,
+                    writable = environments.IsWritable,
+                    path = demo ? null : environments.FilePath,
+                },
             });
         });
 
@@ -67,9 +74,20 @@ public static class ExplorerEndpoints
         // ServiceBusAdministrationClient (the ATOM management API on the AMQP port).
 
         // --- Data plane (real Azure SDK against the broker) ---
-        api.MapPost("/send", async (SendRequest req, SessionManager sessions, CancellationToken ct) =>
+        api.MapPost("/send", async (SendRequest req, SessionManager sessions, EnvironmentLibrary environments, CancellationToken ct) =>
         {
             var session = sessions.GetOrCreate(ResolveConnectionString(req.ConnectionString));
+
+            // Postman-style environment pass: the request names the browser's ACTIVE
+            // environment; its enabled values replace plain {{name}} tokens BEFORE the
+            // dynamic-variable pass, so an environment value may itself carry {{$guid}}
+            // and still resolve per copy. Unknown environment names resolve nothing.
+            Dictionary<string, string>? env = null;
+            if (!string.IsNullOrWhiteSpace(req.Environment)
+                && environments.Get(req.Environment) is { } active)
+            {
+                env = EnvironmentVariables.EnabledValues(active);
+            }
             await using var sender = session.Sender(req.Queue);
 
             var count = Math.Clamp(req.Count ?? 1, 1, MaxSendCount);
@@ -81,17 +99,18 @@ public static class ExplorerEndpoints
             // otherwise we generate a fresh Guid per copy. Without distinct ids dedup-enabled entities
             // would collapse the bulk into a single delivery. A MessageId carrying a dynamic
             // variable is already unique per copy, so it is used as resolved, without the suffix.
-            var baseId = string.IsNullOrWhiteSpace(req.MessageId) ? null : req.MessageId;
+            var rawId = string.IsNullOrWhiteSpace(req.MessageId) ? null : req.MessageId;
+            var baseId = rawId is null ? null : EnvironmentVariables.Resolve(rawId, env);
             var idHasVariables = DynamicVariables.ContainsVariables(baseId);
             var now = DateTimeOffset.UtcNow;
             ServiceBusMessage BuildOne(int index)
             {
-                string? R(string? value) => DynamicVariables.Resolve(value, now);
+                string? R(string? value) => DynamicVariables.Resolve(EnvironmentVariables.Resolve(value, env), now);
                 var msg = new ServiceBusMessage(R(req.Body) ?? string.Empty);
                 msg.MessageId = baseId is null
                     ? Guid.NewGuid().ToString("N")
                     : idHasVariables
-                        ? R(baseId)!
+                        ? DynamicVariables.Resolve(baseId, now)!
                         : (count == 1 ? baseId : $"{baseId}-{index}");
                 if (!string.IsNullOrWhiteSpace(req.CorrelationId)) msg.CorrelationId = R(req.CorrelationId);
                 if (!string.IsNullOrWhiteSpace(req.Subject)) msg.Subject = R(req.Subject);
@@ -690,7 +709,8 @@ public sealed record SendRequest(
     DateTimeOffset? ScheduledEnqueueTime,
     Dictionary<string, string>? Properties,
     int? Count,
-    string? Strategy);
+    string? Strategy,
+    string? Environment = null);
 public sealed record ReceiveRequest(string ConnectionString, string Queue, int? TimeoutSeconds, string? SessionId);
 public sealed record PeekRequest(string ConnectionString, string Queue, int? MaxMessages, long? FromSequenceNumber);
 public sealed record DispositionRequest(string ConnectionString, string Queue, string LockToken);

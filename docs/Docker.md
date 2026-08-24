@@ -66,10 +66,12 @@ services:
       OPENSERVICEBUS__STORAGE__DATASOURCE: /data/broker.db
       OPENSERVICEBUS_CONFIG: /etc/openservicebus/config.json
       OSB_EXPLORER_CANNED_FILE: /etc/openservicebus/canned-messages.json
+      OSB_EXPLORER_ENVIRONMENTS_FILE: /etc/openservicebus/environments.json
     volumes:
       - osb-data:/data
       - ./config.json:/etc/openservicebus/config.json:ro
       - ./canned-messages.json:/etc/openservicebus/canned-messages.json
+      - ./environments.json:/etc/openservicebus/environments.json
     restart: unless-stopped
 
 volumes:
@@ -85,7 +87,10 @@ payloads, committed to git next to the compose file. Mounted read-write (no `:ro
 edits made in the Explorer write straight back into the repo checkout - "tweak in the
 UI, `git diff`, commit" is the whole workflow. Mount it `:ro` instead to lock the
 library: the Explorer still loads it, but UI edits stay in memory until a restart.
-Leave the variable unset and the library is simply in-memory, as before.
+Leave the variable unset and the library is simply in-memory, as before. The
+`environments.json` mount works identically for the Explorer's
+[Postman-style environments](Explorer#environments) - both mounts are independent and
+optional.
 
 ## Reference `config.json`
 

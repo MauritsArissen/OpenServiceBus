@@ -54,6 +54,10 @@ deploy)
     if [ -f "$CANNED_FILE" ]; then
         CANNED_ARGS="-v $CANNED_FILE:/etc/openservicebus/canned-messages.json:ro -e OSB_EXPLORER_CANNED_FILE=/etc/openservicebus/canned-messages.json"
     fi
+    ENVS_FILE=/srv/osb-previews/share/environments.json
+    if [ -f "$ENVS_FILE" ]; then
+        CANNED_ARGS="$CANNED_ARGS -v $ENVS_FILE:/etc/openservicebus/environments.json:ro -e OSB_EXPLORER_ENVIRONMENTS_FILE=/etc/openservicebus/environments.json"
+    fi
 
     # shellcheck disable=SC2086 # CANNED_ARGS is intentionally word-split docker args
     docker run -d --name "$NAME" \

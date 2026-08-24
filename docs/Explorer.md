@@ -162,6 +162,35 @@ Save a fully configured Send form under a name and replay it later with one clic
   backend in-memory, shared by every browser connected to it - broker state is never
   involved, so it works identically with both storage modes and against real Azure.
 
+## Environments
+
+Postman's environments, applied to the broker: a named set of key/value pairs, one
+active per browser, referenced in payloads as `{{key}}`.
+
+- **Define** sets like `Card of Alice` (`cardnumber = 123400000`, `cardholder = alice`)
+  and `Card of Bob`; a canned message writes
+  `{ "cardnr": {{cardnumber}}, "cardholder": "{{cardholder}}" }` and switching the
+  active environment in the topbar changes what the same send produces.
+- **Namespace split** - plain `{{key}}` resolves from the active environment; `{{$...}}`
+  stays reserved for the built-in dynamic variables, exactly like Postman. Environment
+  resolution runs FIRST, so an environment value may itself contain `{{$guid}}` and
+  still resolve per message copy. Disabled values never resolve; unresolved names are
+  sent verbatim with a warning toast, and the composer highlights them: blue when the
+  active environment resolves them (hover a chip to see the value), amber when not.
+- **Applies everywhere variables apply**: body, MessageId, CorrelationId, Subject,
+  ReplyTo, To, SessionId, PartitionKey, application property values - in the Send tab
+  and canned messages alike. The active environment is a per-browser choice
+  (localStorage); the library of environments is shared Explorer state.
+- **Manage** via the sidebar's Environments entry: cards with value previews, per-value
+  enable toggles in the editor, set-active, duplicate, delete, import and export.
+  Import accepts Postman environment exports directly (extra Postman fields are
+  ignored); export downloads the same shape.
+- **File backing** - `OSB_EXPLORER_ENVIRONMENTS_FILE` works exactly like the canned
+  message library file: loaded at startup, written back on edit, `Reload from file`
+  (or `POST /api/environments/reset`) re-reads the disk, read-only mounts keep edits
+  session-local, and the hosted demo resets both libraries on its 30-minute cadence.
+  Out of scope by design: Postman's initial/current value split, secret masking, sync.
+
 ## Connection panel
 
 Bottom of the sidebar is a collapsible **Connection** drawer with the SDK connection

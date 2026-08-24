@@ -7,6 +7,7 @@ import { dlqAddress, entityAddress, isMainQueue, type Selected } from "@/lib/for
 const LS_CONN = "osb_conn";
 const LS_MGMT = "osb_mgmt";
 export const LS_THEME = "osb_theme";
+export const LS_ACTIVE_ENV = "osb-active-environment";
 
 const DEFAULT_CONN =
   "Endpoint=sb://127.0.0.1:5672;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true";
@@ -29,7 +30,6 @@ export type DialogState =
   | { type: "resend"; target: string; sequenceNumbers: number[] }
   | { type: "confirm"; title: string; description: string; destructive?: boolean; action: () => Promise<void> | void }
   | { type: "saveCanned"; draft: import("@/lib/api").CannedMessage }
-  | { type: "editCanned"; edit?: import("@/lib/api").CannedMessage }
   | null;
 
 type Store = {
@@ -51,6 +51,8 @@ type Store = {
   version: string | null;
   /** Canned message library file backing (from /api/config). */
   cannedFile: { configured: boolean; writable: boolean; path: string | null } | null;
+  /** Environments library file backing (from /api/config). */
+  environmentsFile: { configured: boolean; writable: boolean; path: string | null } | null;
 
   queues: QueueInfo[];
   topics: QueueInfo[];
@@ -83,9 +85,17 @@ type Store = {
   canned: import("@/lib/api").CannedMessage[];
   refreshCanned: () => Promise<void>;
 
-  /** Main content area: an entity's tabs, or the canned message management page. */
-  view: "entity" | "canned";
-  setView: (v: "entity" | "canned") => void;
+  environments: import("@/lib/api").ExplorerEnvironment[];
+  refreshEnvironments: () => Promise<void>;
+  /** Name of this browser's active environment (persisted locally); null = none. */
+  activeEnvironment: string | null;
+  setActiveEnvironment: (name: string | null) => void;
+  /** Enabled key/values of the active environment; null when none is active. */
+  activeEnvValues: Record<string, string> | null;
+
+  /** Main content area: an entity's tabs, or one of the library management pages. */
+  view: "entity" | "canned" | "environments";
+  setView: (v: "entity" | "canned" | "environments") => void;
 };
 
 const StoreContext = createContext<Store>(null!);
@@ -106,11 +116,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [peekCursor, setPeekCursorState] = useState<Record<string, number>>({});
   const [dialog, setDialog] = useState<DialogState>(null);
   const [canned, setCanned] = useState<import("@/lib/api").CannedMessage[]>([]);
-  const [view, setView] = useState<"entity" | "canned">("entity");
+  const [environments, setEnvironments] = useState<import("@/lib/api").ExplorerEnvironment[]>([]);
+  const [activeEnvironment, setActiveEnvironmentState] = useState<string | null>(
+    () => localStorage.getItem(LS_ACTIVE_ENV),
+  );
+  const [view, setView] = useState<"entity" | "canned" | "environments">("entity");
   const [demoMode, setDemoMode] = useState(false);
   const [resetIntervalSeconds, setResetIntervalSeconds] = useState(1800);
   const [version, setVersion] = useState<string | null>(null);
   const [cannedFile, setCannedFile] = useState<Store["cannedFile"]>(null);
+  const [environmentsFile, setEnvironmentsFile] = useState<Store["environmentsFile"]>(null);
 
   const setConn = useCallback((v: string) => {
     setConnState(v);
@@ -173,6 +188,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const cfg = await fetch("/api/config").then((r) => r.json());
         if (cfg?.version) setVersion(String(cfg.version));
         if (cfg?.cannedFile) setCannedFile(cfg.cannedFile);
+        if (cfg?.environmentsFile) setEnvironmentsFile(cfg.environmentsFile);
         if (cfg?.demoMode) {
           setDemoMode(true);
           setResetIntervalSeconds(cfg.resetIntervalSeconds ?? 1800);
@@ -305,9 +321,34 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setCanned([]);
     }
   }, []);
+  const refreshEnvironments = useCallback(async () => {
+    try {
+      setEnvironments(await explorerApi.listEnvironments());
+    } catch {
+      setEnvironments([]);
+    }
+  }, []);
   useEffect(() => {
     void refreshCanned();
-  }, [refreshCanned]);
+    void refreshEnvironments();
+  }, [refreshCanned, refreshEnvironments]);
+
+  const setActiveEnvironment = useCallback((name: string | null) => {
+    setActiveEnvironmentState(name);
+    if (name === null) localStorage.removeItem(LS_ACTIVE_ENV);
+    else localStorage.setItem(LS_ACTIVE_ENV, name);
+  }, []);
+
+  const activeEnvValues = useMemo(() => {
+    if (!activeEnvironment) return null;
+    const active = environments.find((e) => e.name === activeEnvironment);
+    if (!active) return null;
+    const map: Record<string, string> = {};
+    for (const v of active.values) {
+      if (v.enabled && v.key !== "") map[v.key] = v.value;
+    }
+    return map;
+  }, [activeEnvironment, environments]);
 
   const value = useMemo<Store>(
     () => ({
@@ -321,11 +362,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       updateLockedUntil, clearEntityLocal,
       dialog, setDialog,
       canned, refreshCanned,
+      environments, refreshEnvironments, activeEnvironment, setActiveEnvironment, activeEnvValues,
+      environmentsFile,
       view, setView,
     }),
     [conn, mgmt, setConn, setMgmt, status, pingResult, connect, demoMode, resetIntervalSeconds, version, cannedFile, queues, topics, subsByTopic, loading,
      refresh, selected, select, descriptorFor, dlqCount, locked, peeked, peekCursor, lockedCount, setPeekedFor, setPeekCursor, trackLocked,
-     untrack, untrackMany, updateLockedUntil, clearEntityLocal, dialog, canned, refreshCanned, view],
+     untrack, untrackMany, updateLockedUntil, clearEntityLocal, dialog, canned, refreshCanned, view,
+     environments, refreshEnvironments, activeEnvironment, setActiveEnvironment, activeEnvValues, environmentsFile],
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

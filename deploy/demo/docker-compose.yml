@@ -25,8 +25,10 @@ services:
       # messages in the Explorer (kept in memory), and the 30-minute demo reset reloads
       # these defaults from the file.
       OSB_EXPLORER_CANNED_FILE: /etc/openservicebus/canned-messages.json
+      OSB_EXPLORER_ENVIRONMENTS_FILE: /etc/openservicebus/environments.json
     volumes:
       - ./canned-messages.json:/etc/openservicebus/canned-messages.json:ro
+      - ./environments.json:/etc/openservicebus/environments.json:ro
     ports:
       - "127.0.0.1:5400:5400"   # Explorer UI (nginx proxies demo.openservicebus.net here)
 

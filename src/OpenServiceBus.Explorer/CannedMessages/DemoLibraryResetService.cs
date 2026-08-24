@@ -6,7 +6,10 @@ namespace OpenServiceBus.Explorer.CannedMessages;
 /// to its configured defaults, discarding whatever demo visitors added. Runs only when
 /// OSB_EXPLORER_DEMO=true; a normal Explorer never resets anything.
 /// </summary>
-public sealed class DemoLibraryResetService(CannedMessageLibrary library, ILogger<DemoLibraryResetService> logger)
+public sealed class DemoLibraryResetService(
+    CannedMessageLibrary library,
+    Environments.EnvironmentLibrary environments,
+    ILogger<DemoLibraryResetService> logger)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -30,7 +33,8 @@ public sealed class DemoLibraryResetService(CannedMessageLibrary library, ILogge
                 if (boundary == lastBoundary) continue;
                 lastBoundary = boundary;
                 library.ResetToDefaults();
-                logger.LogInformation("Demo reset: canned message library restored to defaults");
+                environments.ResetToDefaults();
+                logger.LogInformation("Demo reset: canned message and environment libraries restored to defaults");
             }
         }
         catch (OperationCanceledException)

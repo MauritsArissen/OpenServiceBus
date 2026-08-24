@@ -8,18 +8,20 @@ import { cn } from "@/lib/utils";
  *  textarea. The textarea stays fully interactive; hover details live in the chips row
  *  and the legend, which also work on touch screens. */
 export function HighlightedBodyEditor({
-  value, onChange, rows = 7, placeholder,
+  value, onChange, rows = 7, placeholder, env = null,
 }: {
   value: string;
   onChange: (v: string) => void;
   rows?: number;
   placeholder?: string;
+  /** Active environment's enabled values; null = no active environment. */
+  env?: Record<string, string> | null;
 }) {
   const backdrop = useRef<HTMLDivElement>(null);
 
   const parts: React.ReactNode[] = [];
   let cursor = 0;
-  for (const token of tokenizeVariables(value)) {
+  for (const token of tokenizeVariables(value, env)) {
     if (token.start > cursor) parts.push(value.slice(cursor, token.start));
     parts.push(
       <span
@@ -27,7 +29,9 @@ export function HighlightedBodyEditor({
         className={cn(
           "rounded-sm font-semibold",
           token.valid
-            ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+            ? token.kind === "env"
+              ? "bg-sky-500/15 text-sky-600 dark:text-sky-400"
+              : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
             : "bg-amber-500/15 text-amber-600 underline decoration-wavy decoration-amber-500/70 dark:text-amber-400",
         )}
       >

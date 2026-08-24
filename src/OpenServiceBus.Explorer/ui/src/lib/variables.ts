@@ -6,14 +6,17 @@ export type VariableToken = {
   raw: string;
   start: number;
   end: number;
+  /** "dynamic" = built-in {{$...}}; "env" = plain {{name}} from the active environment. */
+  kind: "dynamic" | "env";
   valid: boolean;
-  /** Human explanation ("random guid, uppercase") or the validation error. */
+  /** Dynamic: what it does. Env: the active environment's value, or why it is unresolved. */
   description: string;
 };
 
 export type LegendEntry = { syntax: string; description: string; example: string };
 
 export const VARIABLE_LEGEND: LegendEntry[] = [
+  { syntax: "{{yourKey}}", description: "Environment variable: the active environment's value for 'yourKey' (blue when resolved, amber when the active environment has no such value). Manage environments from the sidebar.", example: "cardnumber -> 123400000 when 'Card of Alice' is active" },
   { syntax: "{{$guid}}", description: "Random guid, lowercase. A fresh one per message copy.", example: "8b88a4d0-4b11-490c-9981-dbb6e96df00d" },
   { syntax: "{{$guid upper}}", description: "Random guid, uppercase.", example: "8B88A4D0-4B11-490C-9981-DBB6E96DF00D" },
   { syntax: "{{$datetime iso8601}}", description: "Current UTC time, ISO 8601 round-trip format.", example: "2026-08-23T12:00:00.0000000Z" },
@@ -22,6 +25,7 @@ export const VARIABLE_LEGEND: LegendEntry[] = [
 ];
 
 const TOKEN = /\{\{\$([a-zA-Z]+)((?:\s+[^\s{}]+)*)\s*\}\}/g;
+const ENV_TOKEN = /\{\{(?!\$)\s*([^{}\s]+)\s*\}\}/g;
 const OFFSET = /^[+-]?\d+[yMwdhms]$/;
 
 const UNIT_WORD: Record<string, string> = {
@@ -58,21 +62,41 @@ function describe(name: string, argText: string): { valid: boolean; description:
   }
 }
 
-export function tokenizeVariables(text: string): VariableToken[] {
+export function tokenizeVariables(text: string, env: Record<string, string> | null = null): VariableToken[] {
   const tokens: VariableToken[] = [];
   for (const match of text.matchAll(TOKEN)) {
     const { valid, description } = describe(match[1], match[2] ?? "");
-    tokens.push({ raw: match[0], start: match.index, end: match.index + match[0].length, valid, description });
+    tokens.push({ raw: match[0], start: match.index, end: match.index + match[0].length, kind: "dynamic", valid, description });
   }
+  for (const match of text.matchAll(ENV_TOKEN)) {
+    const key = match[1];
+    const resolved = env !== null && key in env;
+    tokens.push({
+      raw: match[0],
+      start: match.index,
+      end: match.index + match[0].length,
+      kind: "env",
+      valid: resolved,
+      description: resolved
+        ? env[key]
+        : env === null
+          ? "no active environment - sent verbatim"
+          : "no value in the active environment - sent verbatim",
+    });
+  }
+  tokens.sort((a, b) => a.start - b.start);
   return tokens;
 }
 
 /** Distinct tokens across a set of named fields (body, MessageId, ...), field names attached. */
-export function collectVariables(fields: Record<string, string>): (VariableToken & { fields: string[] })[] {
+export function collectVariables(
+  fields: Record<string, string>,
+  env: Record<string, string> | null = null,
+): (VariableToken & { fields: string[] })[] {
   const byRaw = new Map<string, VariableToken & { fields: string[] }>();
   for (const [field, text] of Object.entries(fields)) {
-    if (!text || !text.includes("{{$")) continue;
-    for (const token of tokenizeVariables(text)) {
+    if (!text || !text.includes("{{")) continue;
+    for (const token of tokenizeVariables(text, env)) {
       const existing = byRaw.get(token.raw);
       if (existing) {
         if (!existing.fields.includes(field)) existing.fields.push(field);
