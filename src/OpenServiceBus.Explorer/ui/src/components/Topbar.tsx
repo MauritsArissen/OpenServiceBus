@@ -1,7 +1,9 @@
-import { GlobeIcon, MenuIcon, MoonIcon, RefreshCwIcon, RotateCcwIcon, SunIcon } from "lucide-react";
+import { CheckIcon, GlobeIcon, MenuIcon, MoonIcon, RefreshCwIcon, RotateCcwIcon, SunIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { displayName } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -51,40 +53,82 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
           <span className="truncate font-mono text-foreground">{displayName(selected)}</span>
         </div>
       )}
-      <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
-        {environments.length > 0 && (
-          <Select
-            value={activeEnvironment ?? "@none"}
-            onValueChange={(v) => setActiveEnvironment(v === "@none" ? null : v)}
-          >
-            <SelectTrigger
-              className="h-8 w-9 gap-1 px-2 text-xs sm:w-44 [&>svg:last-child]:hidden sm:[&>svg:last-child]:block"
-              title="Active environment"
-            >
-              <GlobeIcon className="size-3.5 shrink-0 text-muted-foreground" />
-              <span className="hidden min-w-0 truncate sm:block">
-                <SelectValue placeholder="No environment" />
-              </span>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="@none">No environment</SelectItem>
-              {environments.map((e) => (
-                <SelectItem key={e.name} value={e.name}>{e.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+      <div className="ml-auto flex items-center gap-1 sm:gap-1.5">
         {demoMode && <ResetCountdown intervalSeconds={resetIntervalSeconds} />}
+        {environments.length > 0 && (
+          <EnvironmentSwitcher
+            environments={environments.map((e) => e.name)}
+            active={activeEnvironment}
+            onChange={setActiveEnvironment}
+          />
+        )}
         <RefreshInterval />
-        <span className="flex items-center gap-2 rounded-full border px-2 py-1 text-xs text-muted-foreground sm:px-3">
-          <span className={cn("size-2 rounded-full", meta.dot)} />
-          <span className="hidden sm:inline">{meta.label}</span>
-        </span>
-        <Button variant="ghost" size="icon" onClick={() => setDark((d) => !d)} title="Toggle theme">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="flex h-8 items-center gap-2 rounded-full border px-2.5 sm:px-3">
+              <span className={cn("size-2 rounded-full", meta.dot)} />
+              <span className="hidden text-xs text-muted-foreground lg:inline">{meta.label}</span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>Broker {meta.label}</TooltipContent>
+        </Tooltip>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8 rounded-full"
+          onClick={() => setDark((d) => !d)}
+          title="Toggle theme"
+        >
           {dark ? <SunIcon /> : <MoonIcon />}
         </Button>
       </div>
     </header>
+  );
+}
+
+/** Active-environment switcher: a pill that carries the environment accent color when
+ *  one is active, opening a menu instead of a form-style select. Icon-only on phones. */
+function EnvironmentSwitcher({
+  environments, active, onChange,
+}: {
+  environments: string[];
+  active: string | null;
+  onChange: (name: string | null) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className={cn(
+            "flex h-8 max-w-44 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors sm:px-3",
+            active
+              ? "border-sky-500/40 bg-sky-500/10 text-sky-600 hover:bg-sky-500/15 dark:text-sky-400"
+              : "text-muted-foreground hover:bg-accent",
+          )}
+          title="Active environment"
+          aria-label="Active environment"
+        >
+          <GlobeIcon className="size-3.5 shrink-0" />
+          <span className="hidden min-w-0 truncate font-medium sm:block">
+            {active ?? "No environment"}
+          </span>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-48">
+        <DropdownMenuLabel>Active environment</DropdownMenuLabel>
+        <DropdownMenuItem onClick={() => onChange(null)}>
+          <CheckIcon className={cn("size-3.5", active !== null && "invisible")} />
+          No environment
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {environments.map((name) => (
+          <DropdownMenuItem key={name} onClick={() => onChange(name)}>
+            <CheckIcon className={cn("size-3.5", active !== name && "invisible")} />
+            <span className="truncate">{name}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -136,23 +180,30 @@ function RefreshInterval() {
   }, [seconds]);
 
   return (
-    <Select value={String(seconds)} onValueChange={(v) => setSeconds(Number(v))}>
-      <SelectTrigger
-        className="h-8 w-auto gap-1.5 px-2.5 text-xs"
-        aria-label="Auto-refresh interval"
-        title="Auto-refresh the open entity & sidebar counts"
-      >
-        <RefreshCwIcon className={cn("size-3.5", seconds > 0 ? "text-primary" : "text-muted-foreground")} />
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className={cn(
+            "flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors hover:bg-accent sm:px-3",
+            seconds > 0 ? "text-primary" : "text-muted-foreground",
+          )}
+          aria-label="Auto-refresh interval"
+          title="Auto-refresh the open entity & sidebar counts"
+        >
+          <RefreshCwIcon className="size-3.5 shrink-0" />
+          {seconds > 0 && <span className="hidden font-medium tabular-nums sm:inline">{seconds}s</span>}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-32">
+        <DropdownMenuLabel>Auto-refresh</DropdownMenuLabel>
         {REFRESH_OPTIONS.map((o) => (
-          <SelectItem key={o.value} value={String(o.value)}>
+          <DropdownMenuItem key={o.value} onClick={() => setSeconds(o.value)}>
+            <CheckIcon className={cn("size-3.5", seconds !== o.value && "invisible")} />
             {o.label}
-          </SelectItem>
+          </DropdownMenuItem>
         ))}
-      </SelectContent>
-    </Select>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -177,8 +228,8 @@ function ResetCountdown({ intervalSeconds }: { intervalSeconds: number }) {
       <TooltipTrigger asChild>
         <span
           className={cn(
-            "flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs tabular-nums",
-            soon ? "border-amber-500/40 text-amber-600 dark:text-amber-400" : "text-muted-foreground",
+            "flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs tabular-nums sm:px-3",
+            soon ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400" : "text-muted-foreground",
           )}
         >
           <RotateCcwIcon className={cn("size-3.5", soon && "animate-spin-slow")} />
