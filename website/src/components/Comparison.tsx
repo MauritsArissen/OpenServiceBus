@@ -36,6 +36,11 @@ const ROWS: Row[] = [
     ms: false,
   },
   { feature: "Message purge (REST API + Explorer)", osb: true, ms: false },
+  {
+    feature: "Canned messages, environments & dynamic variables (Explorer)",
+    osb: true,
+    ms: false,
+  },
   { feature: "OpenTelemetry tracing & metrics", osb: true, ms: false },
 ];
 

@@ -90,6 +90,150 @@ public class DynamicVariablesTests
     }
 
     [Fact]
+    public void Ulid_Is26CrockfordChars_AndTimeOrdered()
+    {
+        var earlier = DynamicVariables.Resolve("{{$ulid}}", Now)!;
+        var later = DynamicVariables.Resolve("{{$ulid}}", Now.AddMinutes(5))!;
+
+        earlier.Length.ShouldBe(26);
+        earlier.ShouldAllBe(c => "0123456789ABCDEFGHJKMNPQRSTVWXYZ".Contains(c));
+        string.CompareOrdinal(earlier, later).ShouldBeLessThan(0, "a later timestamp must sort after an earlier one");
+    }
+
+    [Fact]
+    public void Sequence_IncrementsPerResolution_ScopedByTemplateAndStart()
+    {
+        DynamicVariables.ResetSequences();
+
+        DynamicVariables.Resolve("a-{{$sequence}}", Now, sequenceScope: "q1").ShouldBe("a-1");
+        DynamicVariables.Resolve("a-{{$sequence}}", Now, sequenceScope: "q1").ShouldBe("a-2");
+        DynamicVariables.Resolve("b-{{$sequence}}", Now, sequenceScope: "q1").ShouldBe("b-1");
+        DynamicVariables.Resolve("a-{{$sequence}}", Now, sequenceScope: "q2").ShouldBe("a-1");
+        DynamicVariables.Resolve("{{$sequence 100}}", Now, sequenceScope: "q1").ShouldBe("100");
+        DynamicVariables.Resolve("{{$sequence 100}}", Now, sequenceScope: "q1").ShouldBe("101");
+
+        DynamicVariables.ResetSequences();
+        DynamicVariables.Resolve("a-{{$sequence}}", Now, sequenceScope: "q1").ShouldBe("a-1");
+    }
+
+    [Fact]
+    public void Index_IsTheCopyIndex()
+    {
+        DynamicVariables.Resolve("copy {{$index}}", Now, copyIndex: 0).ShouldBe("copy 0");
+        DynamicVariables.Resolve("copy {{$index}}", Now, copyIndex: 4).ShouldBe("copy 4");
+    }
+
+    [Fact]
+    public void Datetime_UnixFormats_AndTimestampShorthand()
+    {
+        DynamicVariables.Resolve("{{$datetime unix}}", Now).ShouldBe(Now.ToUnixTimeSeconds().ToString());
+        DynamicVariables.Resolve("{{$datetime unixms}}", Now).ShouldBe(Now.ToUnixTimeMilliseconds().ToString());
+        DynamicVariables.Resolve("{{$timestamp}}", Now).ShouldBe(Now.ToUnixTimeSeconds().ToString());
+    }
+
+    [Fact]
+    public void Datetime_CustomDotNetFormat_IncludingQuotedWithSpaces()
+    {
+        DynamicVariables.Resolve("{{$datetime 'yyyy-MM-dd'}}", Now).ShouldBe("2026-08-23");
+        DynamicVariables.Resolve("{{$datetime 'yyyy-MM-dd HH:mm'}}", Now).ShouldBe("2026-08-23 12:00");
+        DynamicVariables.Resolve("{{$datetime 'yyyy-MM-dd' -5d}}", Now).ShouldBe("2026-08-18");
+    }
+
+    [Fact]
+    public void RandomInt_DefaultAndBoundedRanges()
+    {
+        for (var i = 0; i < 50; i++)
+        {
+            var defaulted = long.Parse(DynamicVariables.Resolve("{{$randomInt}}", Now)!);
+            defaulted.ShouldBeInRange(0, 1000);
+            var bounded = long.Parse(DynamicVariables.Resolve("{{$randomInt 5 7}}", Now)!);
+            bounded.ShouldBeInRange(5, 7);
+        }
+        DynamicVariables.Resolve("{{$randomInt 9 3}}", Now).ShouldBe("{{$randomInt 9 3}}", "min above max is malformed");
+        DynamicVariables.Resolve("{{$randomInt 1}}", Now).ShouldBe("{{$randomInt 1}}", "one argument is malformed");
+    }
+
+    [Fact]
+    public void RandomDouble_RespectsRangeAndDecimals()
+    {
+        for (var i = 0; i < 25; i++)
+        {
+            var value = DynamicVariables.Resolve("{{$randomDouble 1.5 2.5 3}}", Now)!;
+            double.Parse(value, System.Globalization.CultureInfo.InvariantCulture).ShouldBeInRange(1.5, 2.5);
+            value.Split('.')[1].Length.ShouldBe(3);
+        }
+        DynamicVariables.Resolve("{{$randomDouble 5 1}}", Now).ShouldBe("{{$randomDouble 5 1}}");
+    }
+
+    [Fact]
+    public void RandomBoolean_ProducesBothLiterals()
+    {
+        var seen = new HashSet<string>();
+        for (var i = 0; i < 100 && seen.Count < 2; i++)
+        {
+            seen.Add(DynamicVariables.Resolve("{{$randomBoolean}}", Now)!);
+        }
+        seen.ShouldBe(["false", "true"], ignoreOrder: true);
+    }
+
+    [Fact]
+    public void RandomStrings_HonorLengthAndAlphabet()
+    {
+        var alnum = DynamicVariables.Resolve("{{$randomAlphaNumeric 32}}", Now)!;
+        alnum.Length.ShouldBe(32);
+        alnum.ShouldAllBe(c => char.IsAsciiLetterOrDigit(c));
+
+        var hex = DynamicVariables.Resolve("{{$randomHex 16}}", Now)!;
+        hex.Length.ShouldBe(16);
+        hex.ShouldAllBe(c => "0123456789abcdef".Contains(c));
+
+        DynamicVariables.Resolve("{{$randomHex 0}}", Now).ShouldBe("{{$randomHex 0}}");
+    }
+
+    [Fact]
+    public void RandomChoice_PicksOnlyListedValues()
+    {
+        var seen = new HashSet<string>();
+        for (var i = 0; i < 100; i++)
+        {
+            seen.Add(DynamicVariables.Resolve("{{$randomChoice eu|us|apac}}", Now)!);
+        }
+        seen.ShouldBeSubsetOf(["eu", "us", "apac"]);
+        seen.Count.ShouldBeGreaterThan(1);
+
+        DynamicVariables.Resolve("{{$randomChoice solo}}", Now).ShouldBe("{{$randomChoice solo}}", "a single option is malformed");
+    }
+
+    [Fact]
+    public void RandomBase64_DecodesToExactlyTheRequestedBytes()
+    {
+        var encoded = DynamicVariables.Resolve("{{$randomBase64 1024}}", Now)!;
+        Convert.FromBase64String(encoded).Length.ShouldBe(1024);
+        DynamicVariables.Resolve("{{$randomBase64 0}}", Now).ShouldBe("{{$randomBase64 0}}");
+    }
+
+    [Fact]
+    public void Repeat_PadsDeterministically_AndCapsOutput()
+    {
+        DynamicVariables.Resolve("{{$repeat 'ab' 3}}", Now).ShouldBe("ababab");
+        DynamicVariables.Resolve("{{$repeat 'x y' 2}}", Now).ShouldBe("x yx y", "quoted text keeps its spaces");
+        DynamicVariables.Resolve("{{$repeat 'x' 2000000}}", Now)
+            .ShouldBe("{{$repeat 'x' 2000000}}", "outputs beyond the cap stay verbatim");
+    }
+
+    [Fact]
+    public void VariableNames_AreCaseInsensitive()
+    {
+        long.Parse(DynamicVariables.Resolve("{{$RANDOMINT}}", Now)!).ShouldBeInRange(0, 1000);
+    }
+
+    [Fact]
+    public void UnbalancedQuotes_StayVerbatim()
+    {
+        DynamicVariables.Resolve("{{$repeat 'x 3}}", Now).ShouldBe("{{$repeat 'x 3}}");
+    }
+
+    [Fact]
     public void ContainsVariables_DetectsOnlyRealTokens()
     {
         DynamicVariables.ContainsVariables("{{$guid}}").ShouldBeTrue();

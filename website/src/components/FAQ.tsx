@@ -102,7 +102,11 @@ const FAQS: QA[] = [
         multi-select for bulk complete / abandon / defer / dead-letter, resend
         or requeue dead-lettered messages, purge entities, export messages as
         JSON, edit subscription rules with the full SQL syntax reference, and
-        watch live throughput metrics. It's a real Azure SDK client under the
+        watch live throughput metrics. It also saves reusable canned messages
+        with dynamic variables (<code>{"{{$guid}}"}</code> and friends) and
+        Postman-style environments, both committable to git via mounted JSON
+        files - an Explorer-only layer, resolved before the send, that works
+        against real Azure too. It's a real Azure SDK client under the
         hood, so every action you take in the UI exercises the same code path
         your application would. Try it at{" "}
         <a

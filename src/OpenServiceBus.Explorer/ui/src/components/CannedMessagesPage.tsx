@@ -10,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { HighlightedBodyEditor } from "@/components/variables/HighlightedBodyEditor";
-import { VariableChips } from "@/components/variables/VariableChips";
 import { VariableLegend } from "@/components/variables/VariableLegend";
 import { explorerApi, type CannedMessage } from "@/lib/api";
 import { useMediaQuery } from "@/lib/useMediaQuery";
@@ -385,15 +384,6 @@ function CannedEditor({
         <div className="space-y-1">
           <Label>Body</Label>
           <HighlightedBodyEditor value={body} onChange={setBody} placeholder='{"orderId": "{{$guid}}"}' env={store.activeEnvValues} />
-          <VariableChips
-            fields={{
-              Body: body, MessageId: messageId, CorrelationId: correlationId, Subject: subject,
-              ReplyTo: replyTo, To: to, SessionId: sessionId, PartitionKey: partitionKey,
-              ...Object.fromEntries(props.filter((r) => r.key.trim()).map((r) => [`prop ${r.key}`, r.value])),
-            }}
-            env={store.activeEnvValues}
-            className="pt-1"
-          />
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">

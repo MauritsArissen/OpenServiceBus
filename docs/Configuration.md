@@ -28,6 +28,8 @@ OpenServiceBus.Host reads configuration from three layers, in order of precedenc
 | `OpenServiceBus__WebSockets__UpstreamHost` | `127.0.0.1`               | Loopback host to tunnel to                        |
 | `OpenServiceBus__WebSockets__UpstreamPort` | (AMQP port)               | Loopback port to tunnel to                        |
 | `OPENSERVICEBUS_CONFIG`                    | -                         | Path to a Microsoft-emulator `config.json`        |
+| `OSB_EXPLORER_CANNED_FILE`                 | -                         | Explorer: committable canned message library file ([details](Canned-Messages)) |
+| `OSB_EXPLORER_ENVIRONMENTS_FILE`           | -                         | Explorer: committable environments file ([details](Canned-Messages)) |
 | `ASPNETCORE_URLS`                          | `http://+:5300`           | Kestrel binding for the management API            |
 
 ## `config.json` - declarative queue/topic bootstrap

@@ -12,7 +12,6 @@ import { collectVariables } from "@/lib/variables";
 import { formatTime, type Selected } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { HighlightedBodyEditor } from "@/components/variables/HighlightedBodyEditor";
-import { VariableChips } from "@/components/variables/VariableChips";
 import { VariableLegend } from "@/components/variables/VariableLegend";
 import { entityAddress, useStore } from "@/store";
 
@@ -98,6 +97,28 @@ export function SendTab({ sel }: { sel: Selected }) {
   };
 
   const send = async () => {
+    const problems = collectVariables(
+      {
+        Body: body, MessageId: messageId, CorrelationId: correlationId, Subject: subject,
+        ReplyTo: replyTo, To: to, SessionId: sessionId, PartitionKey: partitionKey,
+        ...Object.fromEntries(props.filter((r) => r.key.trim()).map((r) => [`prop ${r.key}`, r.value])),
+      },
+      store.activeEnvValues,
+    ).filter((t) => !t.valid);
+    if (problems.length > 0) {
+      const listed = problems.map((t) => `${t.raw} (${t.kind === "env" ? "no environment value" : "not recognized"})`).join(", ");
+      store.setDialog({
+        type: "confirm",
+        title: problems.length === 1 ? "1 variable will not resolve" : `${problems.length} variables will not resolve`,
+        description: `${listed} - the token text will be sent verbatim instead of a value. Send anyway?`,
+        action: () => void reallySend(),
+      });
+      return;
+    }
+    await reallySend();
+  };
+
+  const reallySend = async () => {
     setSending(true);
     try {
       const collected: Record<string, string> = {};
@@ -106,20 +127,6 @@ export function SendTab({ sel }: { sel: Selected }) {
         if (k) collected[k] = r.value;
       }
       const schedSecs = intOrNull(scheduledSecs);
-      const unresolved = collectVariables(
-        {
-          Body: body, MessageId: messageId, CorrelationId: correlationId, Subject: subject,
-          ReplyTo: replyTo, To: to, SessionId: sessionId, PartitionKey: partitionKey,
-          ...Object.fromEntries(props.filter((r) => r.key.trim()).map((r) => [`prop ${r.key}`, r.value])),
-        },
-        store.activeEnvValues,
-      ).filter((t) => t.kind === "env" && !t.valid);
-      if (unresolved.length > 0) {
-        toast.warning(
-          `Sent with unresolved ${unresolved.map((t) => t.raw).join(", ")} - ` +
-            (store.activeEnvironment ? "no value in the active environment." : "no environment is active."),
-        );
-      }
       const result = await explorerApi.send({
         connectionString: store.conn,
         queue: target,
@@ -216,15 +223,6 @@ export function SendTab({ sel }: { sel: Selected }) {
             <VariableLegend />
           </div>
           <HighlightedBodyEditor value={body} onChange={setBody} placeholder='{"orderId": "{{$guid}}"}' env={store.activeEnvValues} />
-          <VariableChips
-            fields={{
-              Body: body, MessageId: messageId, CorrelationId: correlationId, Subject: subject,
-              ReplyTo: replyTo, To: to, SessionId: sessionId, PartitionKey: partitionKey,
-              ...Object.fromEntries(props.filter((r) => r.key.trim()).map((r) => [`prop ${r.key}`, r.value])),
-            }}
-            env={store.activeEnvValues}
-            className="pt-1"
-          />
         </div>
 
         <Collapsible
