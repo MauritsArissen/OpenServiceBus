@@ -121,15 +121,13 @@ const FAQS: QA[] = [
     q: "Can I save reusable test messages and share them with my team?",
     a: (
       <>
-        Yes - the Explorer has <strong>canned messages</strong>: save a fully
-        configured message under a name and replay it with one click. Payloads
-        take <strong>dynamic variables</strong> like <code>{"{{$guid}}"}</code>{" "}
-        and <code>{"{{$randomInt 1 100}}"}</code> (fresh per copy) plus{" "}
-        <strong>Postman-style environments</strong> with a switchable active
-        set - Postman exports import directly. Mount both libraries as JSON
-        files in docker compose and the whole setup lives in git: UI edits
-        write back, a reload picks up a <code>git pull</code>. Values resolve
-        before the SDK send, so it all works against real Azure too.
+        Yes - the Explorer has canned messages: save a fully configured message
+        and replay it with one click, with dynamic variables like{" "}
+        <code>{"{{$guid}}"}</code> (fresh per copy) and Postman-style
+        environments with a switchable active set. Both libraries mount as JSON
+        files in docker compose and live in git - UI edits write straight back.
+        Explorer-only: applications using the SDKs directly are untouched, and
+        values resolve before the send, so it also works against real Azure.
       </>
     ),
   },

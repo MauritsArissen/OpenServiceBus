@@ -109,6 +109,9 @@ port) and messaging through the real `ServiceBusClient` - the JSON REST API (def
 ## Canned messages
 
 Save a fully configured Send form under a name and replay it later with one click.
+An Explorer-only feature: applications using the SDKs directly are unaffected -
+variables and environments exist purely in the Explorer's compose surface, resolved
+before its own SDK send.
 
 - **Save** - fill the Send tab (body, system properties, application properties, copies,
   strategy) and hit "Save as canned". A canned message is scoped to the entity it was

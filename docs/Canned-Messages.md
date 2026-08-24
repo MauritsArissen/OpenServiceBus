@@ -2,9 +2,15 @@
 
 The Explorer's reuse layer: save fully configured messages under a name, parameterize
 them with dynamic variables and Postman-style environments, and commit the whole setup
-to git so every developer on the team gets it. Everything on this page is Explorer-side -
-values are materialized BEFORE the SDK send, so all of it works identically against
-OpenServiceBus and a real Azure Service Bus namespace.
+to git so every developer on the team gets it.
+
+Everything on this page is an **OpenServiceBus Explorer feature** - it exists only in
+the Explorer's compose-and-send surface. Applications talking to the broker directly
+through the Azure SDKs are completely unaffected: no SDK behavior, wire protocol or
+broker semantics change, and a `{{$guid}}` sent by YOUR code is just literal text.
+Because the Explorer materializes all values BEFORE its SDK send, the features also
+work identically whether the Explorer is connected to OpenServiceBus or to a real
+Azure Service Bus namespace.
 
 ## Canned messages
 
