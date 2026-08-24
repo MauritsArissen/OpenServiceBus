@@ -102,7 +102,11 @@ const FAQS: QA[] = [
         multi-select for bulk complete / abandon / defer / dead-letter, resend
         or requeue dead-lettered messages, purge entities, export messages as
         JSON, edit subscription rules with the full SQL syntax reference, and
-        watch live throughput metrics. It's a real Azure SDK client under the
+        watch live throughput metrics. It also saves reusable canned messages
+        with dynamic variables (<code>{"{{$guid}}"}</code> and friends) and
+        Postman-style environments, both committable to git via mounted JSON
+        files - an Explorer-only layer, resolved before the send, that works
+        against real Azure too. It's a real Azure SDK client under the
         hood, so every action you take in the UI exercises the same code path
         your application would. Try it at{" "}
         <a
@@ -114,20 +118,6 @@ const FAQS: QA[] = [
           demo.openservicebus.net
         </a>
         .
-      </>
-    ),
-  },
-  {
-    q: "Can I save reusable test messages and share them with my team?",
-    a: (
-      <>
-        Yes - the Explorer has canned messages: save a fully configured message
-        and replay it with one click, with dynamic variables like{" "}
-        <code>{"{{$guid}}"}</code> (fresh per copy) and Postman-style
-        environments with a switchable active set. Both libraries mount as JSON
-        files in docker compose and live in git - UI edits write straight back.
-        Explorer-only: applications using the SDKs directly are untouched, and
-        values resolve before the send, so it also works against real Azure.
       </>
     ),
   },
