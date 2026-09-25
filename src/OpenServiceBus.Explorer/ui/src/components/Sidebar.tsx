@@ -2,7 +2,7 @@ import {
   BookmarkIcon, CableIcon, ChevronRightIcon, EraserIcon, GlobeIcon, InboxIcon, PlusIcon,
   RadioIcon, RefreshCwIcon, SearchIcon, WaypointsIcon, XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,34 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [connOpen, setConnOpen] = useState(false);
+
+  const [width, setWidth] = useState(300);
+  const isResizing = useRef(false);
+
+  const startResizing = useCallback((_: React.MouseEvent) => {
+    isResizing.current = true;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!isResizing.current) return;
+      // Enforce minimum (300px) and maximum (35vw) width constraints
+      const maxAllowed = window.innerWidth * 0.35;
+      const newWidth = Math.min(Math.max(moveEvent.clientX, 300), maxAllowed);
+      setWidth(newWidth);
+    };
+
+    const stopResizing = () => {
+      isResizing.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stopResizing);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stopResizing);
+  }, []);
 
   // Selecting an entity also dismisses the mobile drawer so the detail view is visible.
   // On desktop the drawer is always open, so onClose is a harmless no-op there.
@@ -48,6 +76,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
 
   return (
     <aside
+      style={{ width: `${width}px` }}
       className={cn(
         "flex min-h-0 w-[300px] max-w-[85vw] flex-col border-r bg-sidebar text-sidebar-foreground",
         // Mobile: off-canvas drawer that slides in/out. Positioned absolute WITHIN the
@@ -317,6 +346,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           Explorer <span className="font-mono">v{store.version}</span>
         </div>
       )}
+
+      {/* Resize Handle (Desktop Only) */}
+      <div
+        onMouseDown={startResizing}
+        className="hidden md:block absolute top-0 right-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/30 active:bg-primary transition-colors z-10"
+      />
     </aside>
   );
 }
