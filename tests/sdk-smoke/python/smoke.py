@@ -5,7 +5,7 @@ Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
   -> queue dedup -> topic dedup -> batch dedup -> lock lost -> topic schedule
-  -> correlation filter -> system props -> batch receive
+  -> correlation filter -> system props -> batch receive -> hierarchical names
   (-> abandon props runs in the other three smokes; azure-servicebus for Python does not
    expose propertiesToModify on its settlement methods, so there is nothing to exercise)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
@@ -595,6 +595,28 @@ def run() -> None:
         )
         check("batch receive", br_ok, "" if br_ok else f"got {len(br_batch)} then {len(br_empty)}")
         http("DELETE", f"{base}/{br_queue}?api-version=2021-05")
+
+        # 29. hierarchical names - '/' inside queue and topic names, the MassTransit
+        # topology: a namespaced topic whose subscription auto-forwards into a namespaced queue.
+        hn_topic = f"smoke-hier-{stamp}/Contracts.OrderSubmitted"
+        hn_queue = f"smoke-hier-{stamp}/order-service"
+        http("PUT", f"{base}/{hn_queue}?api-version=2021-05", atom_entry(
+            '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        http("PUT", f"{base}/{hn_topic}?api-version=2021-05", atom_entry(
+            '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        http("PUT", f"{base}/{hn_topic}/subscriptions/order-service?api-version=2021-05", atom_entry(
+            '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">'
+            f"<ForwardTo>{hn_queue}</ForwardTo></SubscriptionDescription>"))
+        with client.get_topic_sender(hn_topic) as hn_sender:
+            hn_sender.send_messages(ServiceBusMessage("nested", message_id=f"hn-{stamp}"))
+        with client.get_queue_receiver(hn_queue, max_wait_time=10) as hn_receiver:
+            hn_msgs = hn_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+            for hn_msg in hn_msgs:
+                hn_receiver.complete_message(hn_msg)
+        hn_ok = len(hn_msgs) == 1 and hn_msgs[0].message_id == f"hn-{stamp}" and str(hn_msgs[0]) == "nested"
+        check("hierarchical names", hn_ok, "" if hn_ok else "no message")
+        http("DELETE", f"{base}/{hn_topic}?api-version=2021-05")
+        http("DELETE", f"{base}/{hn_queue}?api-version=2021-05")
 
 
 try:

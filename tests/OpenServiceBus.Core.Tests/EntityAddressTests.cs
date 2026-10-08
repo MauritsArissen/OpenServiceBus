@@ -39,6 +39,47 @@ public class EntityAddressTests
         parsed.Entity.ShouldBe("orders");
     }
 
+    [Theory]
+    [InlineData("MyApp.Contracts/OrderSubmitted", EntitySubResource.Main, "MyApp.Contracts/OrderSubmitted")]
+    [InlineData("/sales/orders/eu", EntitySubResource.Main, "sales/orders/eu")]
+    [InlineData("sales/orders/$DeadLetterQueue", EntitySubResource.DeadLetterQueue, "sales/orders/$DeadLetterQueue")]
+    [InlineData("sales/orders/$Transfer/$DeadLetterQueue", EntitySubResource.TransferDeadLetterQueue, "sales/orders/$Transfer/$DeadLetterQueue")]
+    [InlineData("sales/orders/$management", EntitySubResource.Management, "sales/orders")]
+    public void TryParse_HierarchicalEntityName_ParsesAsSingleEntity(
+        string address, EntitySubResource subResource, string backingQueue)
+    {
+        EntityAddress.TryParse(address, out var parsed).ShouldBeTrue();
+        parsed.Kind.ShouldBe(EntityKind.Queue);
+        parsed.SubResource.ShouldBe(subResource);
+        parsed.BackingQueueName.ShouldBe(backingQueue);
+    }
+
+    [Theory]
+    [InlineData("MyApp.Contracts/OrderSubmitted/Subscriptions/billing", EntitySubResource.Main)]
+    [InlineData("MyApp.Contracts/OrderSubmitted/Subscriptions/billing/$DeadLetterQueue", EntitySubResource.DeadLetterQueue)]
+    public void TryParse_SubscriptionOnHierarchicalTopic_SplitsTopicAndSubscription(
+        string address, EntitySubResource subResource)
+    {
+        EntityAddress.TryParse(address, out var parsed).ShouldBeTrue();
+        parsed.Kind.ShouldBe(EntityKind.Subscription);
+        parsed.Entity.ShouldBe("MyApp.Contracts/OrderSubmitted");
+        parsed.Subscription.ShouldBe("billing");
+        parsed.SubResource.ShouldBe(subResource);
+    }
+
+    [Theory]
+    [InlineData("sales//orders")]
+    [InlineData("sales/orders/")]
+    [InlineData("orders/$Unknown")]
+    [InlineData("$orders/eu")]
+    [InlineData("events/Subscriptions/billing/nested")]
+    [InlineData("events/Subscriptions/$billing")]
+    [InlineData("events/$x/Subscriptions/billing")]
+    public void TryParse_MalformedPath_ReturnsFalse(string address)
+    {
+        EntityAddress.TryParse(address, out _).ShouldBeFalse();
+    }
+
     [Fact]
     public void EntityNames_TransferDlqNames_AreAlsoDeadLetterNames()
     {

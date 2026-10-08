@@ -5,7 +5,7 @@
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
-//   -> topic schedule -> correlation filter -> system props -> batch receive
+//   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -583,6 +583,29 @@ const run = async () => {
     brEmpty.length === 0;
   check("batch receive", brOk, brOk ? "" : `got ${brBatch.length} then ${brEmpty.length}`);
   await fetch(`${httpBase}/${brQueue}?api-version=2021-05`, { method: "DELETE" });
+
+  // 29. hierarchical names - '/' inside queue and topic names, the MassTransit topology:
+  // a namespaced topic whose subscription auto-forwards into a namespaced queue.
+  const hnTopic = `smoke-hier-${stamp}/Contracts.OrderSubmitted`;
+  const hnQueue = `smoke-hier-${stamp}/order-service`;
+  await atomPut(hnQueue,
+    '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  await atomPut(hnTopic,
+    '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  await atomPut(`${hnTopic}/subscriptions/order-service`,
+    '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect">' +
+    `<ForwardTo>${hnQueue}</ForwardTo></SubscriptionDescription>`);
+  const hnSender = client.createSender(hnTopic);
+  await hnSender.sendMessages({ body: "nested", messageId: `hn-${stamp}` });
+  await hnSender.close();
+  const hnReceiver = client.createReceiver(hnQueue);
+  const [hnMsg] = await hnReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  if (hnMsg) await hnReceiver.completeMessage(hnMsg);
+  await hnReceiver.close();
+  const hnOk = hnMsg?.messageId === `hn-${stamp}` && hnMsg.body === "nested";
+  check("hierarchical names", hnOk, hnOk ? "" : "no message");
+  await fetch(`${httpBase}/${hnTopic}?api-version=2021-05`, { method: "DELETE" });
+  await fetch(`${httpBase}/${hnQueue}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>

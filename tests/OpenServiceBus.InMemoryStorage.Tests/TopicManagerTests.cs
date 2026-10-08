@@ -202,4 +202,71 @@ public class TopicManagerTests
         // Assert
         matched.ShouldBe(new[] { EntityNames.SubscriptionAddress("events", "healthy") });
     }
+
+    [Fact]
+    public async Task EvaluateSubscribers_ParentAndNestedTopic_RoutesOnlyToTheAddressedTopic()
+    {
+        // Arrange
+        var (topics, _, _) = NewFixture();
+        await topics.CreateTopicAsync(new TopicDescriptor { Name = "sales" });
+        await topics.CreateTopicAsync(new TopicDescriptor { Name = "sales/orders" });
+        await topics.CreateSubscriptionAsync(new SubscriptionDescriptor { TopicName = "sales", Name = "audit" });
+        await topics.CreateSubscriptionAsync(new SubscriptionDescriptor { TopicName = "sales/orders", Name = "billing" });
+
+        // Act
+        var parent = topics.EvaluateSubscribers("sales", Msg());
+        var nested = topics.EvaluateSubscribers("sales/orders", Msg());
+
+        // Assert
+        parent.ShouldBe(new[] { EntityNames.SubscriptionAddress("sales", "audit") });
+        nested.ShouldBe(new[] { EntityNames.SubscriptionAddress("sales/orders", "billing") });
+    }
+
+    [Fact]
+    public async Task ListSubscriptionsAsync_ParentTopicWithNestedSibling_ListsOnlyItsOwnSubscriptions()
+    {
+        // Arrange
+        var (topics, _, _) = NewFixture();
+        await topics.CreateTopicAsync(new TopicDescriptor { Name = "sales" });
+        await topics.CreateTopicAsync(new TopicDescriptor { Name = "sales/orders" });
+        await topics.CreateSubscriptionAsync(new SubscriptionDescriptor { TopicName = "sales", Name = "audit" });
+        await topics.CreateSubscriptionAsync(new SubscriptionDescriptor { TopicName = "sales/orders", Name = "billing" });
+
+        // Act
+        var subs = await topics.ListSubscriptionsAsync("sales");
+
+        // Assert
+        subs.Select(s => s.Name).ShouldBe(new[] { "audit" });
+    }
+
+    [Fact]
+    public async Task DeleteTopicAsync_ParentTopicWithNestedSibling_KeepsTheNestedTopicsSubscriptions()
+    {
+        // Arrange
+        var (topics, queues, _) = NewFixture();
+        await topics.CreateTopicAsync(new TopicDescriptor { Name = "sales" });
+        await topics.CreateTopicAsync(new TopicDescriptor { Name = "sales/orders" });
+        await topics.CreateSubscriptionAsync(new SubscriptionDescriptor { TopicName = "sales", Name = "audit" });
+        var nested = await topics.CreateSubscriptionAsync(new SubscriptionDescriptor { TopicName = "sales/orders", Name = "billing" });
+
+        // Act
+        await topics.DeleteTopicAsync("sales");
+
+        // Assert
+        (await topics.GetSubscriptionAsync("sales/orders", "billing")).ShouldNotBeNull();
+        (await queues.GetAsync(nested.BackingQueueName)).ShouldNotBeNull();
+        (await topics.GetSubscriptionAsync("sales", "audit")).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task CreateSubscriptionAsync_NameContainsSlash_ThrowsInvalidOperation()
+    {
+        // Arrange
+        var (topics, _, _) = NewFixture();
+        await topics.CreateTopicAsync(new TopicDescriptor { Name = "sales" });
+
+        // Act + Assert
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            topics.CreateSubscriptionAsync(new SubscriptionDescriptor { TopicName = "sales", Name = "orders/billing" }));
+    }
 }
