@@ -23,6 +23,12 @@ public sealed record RuleDescriptor
     /// </summary>
     public SqlRuleAction? Action { get; init; }
 
+    /// <summary>
+    /// When the rule was created. Reported through the management API and preserved across
+    /// get/list round-trips and (on persistent stores) broker restarts.
+    /// </summary>
+    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+
     /// <summary>Backing-queue address of the owning subscription.</summary>
     public string BackingQueueName => EntityNames.SubscriptionAddress(TopicName, SubscriptionName);
 }

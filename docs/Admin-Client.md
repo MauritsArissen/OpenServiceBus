@@ -65,13 +65,46 @@ direct connection.
 | `GetQueuesAsync` / `GetTopicsAsync` / `GetSubscriptionsAsync` / `GetRulesAsync` | paged (`$skip`/`$top`); DLQ sub-entities and subscription backing queues are not listed |
 | `UpdateQueueAsync` / `UpdateTopicAsync` / `UpdateSubscriptionAsync` / `UpdateRuleAsync` | in-place descriptor update; messages untouched; `RequiresSession` / `RequiresDuplicateDetection` are create-time-only (400, like Azure) |
 | `DeleteQueueAsync` / `DeleteTopicAsync` / `DeleteSubscriptionAsync` / `DeleteRuleAsync` | deleting a topic tears down its subscriptions |
-| `GetQueueRuntimePropertiesAsync` / `GetSubscriptionRuntimePropertiesAsync` / `GetTopicRuntimePropertiesAsync` | active / scheduled / dead-letter counts, size in bytes, created/updated timestamps |
+| `GetQueueRuntimePropertiesAsync` / `GetSubscriptionRuntimePropertiesAsync` / `GetTopicRuntimePropertiesAsync` | per-state counts, size in bytes, created/updated/accessed timestamps; topics aggregate their subscriptions - see [Runtime properties](#runtime-properties) |
 | `GetNamespacePropertiesAsync` | reports a `Standard`-SKU messaging namespace |
 
 Properties the broker enforces round-trip faithfully: `Status`, `AutoDeleteOnIdle`, `MaxSizeInMegabytes`, `MaxMessageSizeInKilobytes`, `LockDuration`, `MaxDeliveryCount`,
 `RequiresSession`, `RequiresDuplicateDetection`, `DuplicateDetectionHistoryTimeWindow`,
 `DefaultMessageTimeToLive`, `DeadLetteringOnMessageExpiration`, `ForwardTo`,
 `ForwardDeadLetteredMessagesTo`, and `UserMetadata`.
+
+## Runtime properties
+
+`GetQueueRuntimePropertiesAsync`, `GetSubscriptionRuntimePropertiesAsync`, and
+`GetTopicRuntimePropertiesAsync` (plus their `Get*sRuntimePropertiesAsync` list variants)
+report live broker state:
+
+- **Queues and subscriptions** report per-state message counts (active, scheduled,
+  dead-lettered, transfer-dead-lettered), the total, and `SizeInBytes` - the encoded bytes
+  of everything currently stored on the entity, its dead-letter queue, and its transfer
+  dead-letter queue.
+- **Topics** report the aggregate of all their subscriptions, the way Azure reports
+  topic-level numbers: `SizeInBytes` and the count details sum each subscription's backing
+  queue (including its DLQs) plus the topic's own store, which holds scheduled publishes
+  until they activate and fan out. `ScheduledMessageCount` on a topic is therefore the
+  number of not-yet-activated scheduled publishes, and `SubscriptionCount` is live.
+- **`AccessedAt`** is the entity's last activity - sends (including fan-out copies
+  landing), successful receives, peeks, and link attaches - fed by the same activity
+  tracker that drives [AutoDeleteOnIdle](Auto-Delete-On-Idle.md). An entity that has seen
+  no activity since the broker started reports its `UpdatedAt` (or `CreatedAt`) instead.
+  On a subscription, activity is tracked on its backing queue.
+- **`TransferMessageCount` is always 0, by design.** In Azure this counts messages
+  sitting in the transfer queue on their way to a `ForwardTo` target. This broker forwards
+  synchronously during the send, so no message ever waits in an in-flight transfer state;
+  the only transfer-related backlog that can exist is the transfer dead-letter queue,
+  which is reported for real via `TransferDeadLetterMessageCount`.
+- **Rules carry a real `CreatedAt`**: stamped when the rule is created (including the
+  initial rule piggybacked on `CreateSubscriptionAsync`), preserved by updates and across
+  get/list round-trips, and - on the SQLite store - across broker restarts. Rules persisted
+  by versions that predate the field report the rehydration time.
+
+All counts and sizes come from store-level count/size queries, so listing many deep
+queues does not read message bodies.
 
 Properties the broker does not (yet) enforce are **accepted and returned with Azure's
 defaults** so SDK parsers and IaC-style "ensure entity exists" code keep working:

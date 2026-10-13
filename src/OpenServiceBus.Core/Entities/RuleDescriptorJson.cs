@@ -57,6 +57,7 @@ public static class RuleDescriptorJson
         TopicName = rule.TopicName,
         SubscriptionName = rule.SubscriptionName,
         Name = rule.Name,
+        CreatedAt = rule.CreatedAt,
         Filter = ToSnapshot(rule.Filter),
         Action = rule.Action is null
             ? null
@@ -110,6 +111,9 @@ public static class RuleDescriptorJson
             TopicName = snapshot.TopicName,
             SubscriptionName = snapshot.SubscriptionName,
             Name = snapshot.Name,
+            // Snapshots written before rules carried a creation time have no CreatedAt; the
+            // rehydration instant is the closest truthful stand-in.
+            CreatedAt = snapshot.CreatedAt ?? DateTimeOffset.UtcNow,
             Filter = filter,
             Action = snapshot.Action is { Expression: { Length: > 0 } expression }
                 ? new SqlRuleAction(expression, FromSnapshot(snapshot.Action.Parameters))
@@ -238,6 +242,7 @@ public static class RuleDescriptorJson
         public string? TopicName { get; set; }
         public string? SubscriptionName { get; set; }
         public string? Name { get; set; }
+        public DateTimeOffset? CreatedAt { get; set; }
         public FilterSnapshot? Filter { get; set; }
         public ActionSnapshot? Action { get; set; }
     }

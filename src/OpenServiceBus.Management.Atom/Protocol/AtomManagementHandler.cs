@@ -37,6 +37,7 @@ public sealed class AtomManagementHandler
     private readonly AtomManagementOptions _options;
     private readonly ILogger _logger;
     private readonly DateTimeOffset _startedAt;
+    private readonly EntityActivityTracker? _activity;
 
     public AtomManagementHandler(
         IQueueRegistry queues,
@@ -44,7 +45,8 @@ public sealed class AtomManagementHandler
         IMessageStore store,
         TimeProvider timeProvider,
         AtomManagementOptions? options = null,
-        ILogger<AtomManagementHandler>? logger = null)
+        ILogger<AtomManagementHandler>? logger = null,
+        EntityActivityTracker? activityTracker = null)
     {
         _queues = queues;
         _topics = topics;
@@ -53,6 +55,7 @@ public sealed class AtomManagementHandler
         _options = options ?? new AtomManagementOptions();
         _logger = logger ?? NullLogger<AtomManagementHandler>.Instance;
         _startedAt = timeProvider.GetUtcNow();
+        _activity = activityTracker;
     }
 
     public async Task<AtomHttpResponse> HandleAsync(AtomHttpRequest request, CancellationToken cancellationToken = default)
@@ -146,14 +149,16 @@ public sealed class AtomManagementHandler
                 if (queue is not null && !IsInternalQueue(queue.Name))
                 {
                     return EntityOk(200, request, name, queue.CreatedAt, queue.UpdatedAt,
-                        EntityDescriptionCodec.QueueDescription(queue, await RuntimeAsync(queue.Name, ct).ConfigureAwait(false)));
+                        EntityDescriptionCodec.QueueDescription(queue,
+                            await RuntimeAsync(queue.Name, ct).ConfigureAwait(false), Accessed(queue.Name)));
                 }
                 var topic = await _topics.GetTopicAsync(name, ct).ConfigureAwait(false);
                 if (topic is not null)
                 {
-                    var subCount = (await _topics.ListSubscriptionsAsync(topic.Name, ct).ConfigureAwait(false)).Count;
+                    var subs = await _topics.ListSubscriptionsAsync(topic.Name, ct).ConfigureAwait(false);
                     return EntityOk(200, request, name, topic.CreatedAt, topic.UpdatedAt,
-                        EntityDescriptionCodec.TopicDescription(topic, subCount));
+                        EntityDescriptionCodec.TopicDescription(topic, subs.Count,
+                            await TopicRuntimeAsync(topic.Name, subs, ct).ConfigureAwait(false), Accessed(topic.Name)));
                 }
                 return Error(404, $"Entity '{name}' does not exist. SubCode=40400.");
             }
@@ -208,7 +213,8 @@ public sealed class AtomManagementHandler
                     var updated = await _queues.UpdateAsync(
                         parsed with { CreatedAt = existing.CreatedAt, UpdatedAt = now }, ct).ConfigureAwait(false);
                     return EntityOk(200, request, name, updated.CreatedAt, updated.UpdatedAt,
-                        EntityDescriptionCodec.QueueDescription(updated, await RuntimeAsync(name, ct).ConfigureAwait(false)));
+                        EntityDescriptionCodec.QueueDescription(updated,
+                            await RuntimeAsync(name, ct).ConfigureAwait(false), Accessed(name)));
                 }
 
                 if (existing is not null || await _topics.GetTopicAsync(name, ct).ConfigureAwait(false) is not null)
@@ -223,7 +229,8 @@ public sealed class AtomManagementHandler
                     return Error(409, $"An entity named '{name}' already exists. SubCode=40900.");
                 }
                 return EntityOk(201, request, name, created.CreatedAt, created.UpdatedAt,
-                    EntityDescriptionCodec.QueueDescription(created, await RuntimeAsync(name, ct).ConfigureAwait(false)));
+                    EntityDescriptionCodec.QueueDescription(created,
+                        await RuntimeAsync(name, ct).ConfigureAwait(false), Accessed(name)));
             }
             case "TopicDescription":
             {
@@ -242,9 +249,10 @@ public sealed class AtomManagementHandler
                     }
                     var updated = await _topics.UpdateTopicAsync(
                         parsed with { CreatedAt = existing.CreatedAt, UpdatedAt = now }, ct).ConfigureAwait(false);
-                    var count = (await _topics.ListSubscriptionsAsync(name, ct).ConfigureAwait(false)).Count;
+                    var subs = await _topics.ListSubscriptionsAsync(name, ct).ConfigureAwait(false);
                     return EntityOk(200, request, name, updated.CreatedAt, updated.UpdatedAt,
-                        EntityDescriptionCodec.TopicDescription(updated, count));
+                        EntityDescriptionCodec.TopicDescription(updated, subs.Count,
+                            await TopicRuntimeAsync(name, subs, ct).ConfigureAwait(false), Accessed(name)));
                 }
 
                 if (existing is not null || await _queues.GetAsync(name, ct).ConfigureAwait(false) is not null)
@@ -258,7 +266,7 @@ public sealed class AtomManagementHandler
                     return Error(409, $"An entity named '{name}' already exists. SubCode=40900.");
                 }
                 return EntityOk(201, request, name, created.CreatedAt, created.UpdatedAt,
-                    EntityDescriptionCodec.TopicDescription(created, 0));
+                    EntityDescriptionCodec.TopicDescription(created, 0, default, Accessed(name)));
             }
             default:
                 return Error(400, $"Unsupported entity description '{description.Name.LocalName}'.");
@@ -280,7 +288,8 @@ public sealed class AtomManagementHandler
                     return Error(404, $"Subscription '{topicName}/{subscriptionName}' does not exist. SubCode=40400.");
                 }
                 return EntityOk(200, request, subscriptionName, sub.CreatedAt, sub.UpdatedAt,
-                    EntityDescriptionCodec.SubscriptionDescription(sub, await RuntimeAsync(sub.BackingQueueName, ct).ConfigureAwait(false)));
+                    EntityDescriptionCodec.SubscriptionDescription(sub,
+                        await RuntimeAsync(sub.BackingQueueName, ct).ConfigureAwait(false), Accessed(sub.BackingQueueName)));
             }
             case "PUT":
                 return await PutSubscriptionAsync(request, topicName, subscriptionName, ct).ConfigureAwait(false);
@@ -318,7 +327,8 @@ public sealed class AtomManagementHandler
             var updated = await _topics.UpdateSubscriptionAsync(
                 parsed with { CreatedAt = existing.CreatedAt, UpdatedAt = now }, ct).ConfigureAwait(false);
             return EntityOk(200, request, subscriptionName, updated.CreatedAt, updated.UpdatedAt,
-                EntityDescriptionCodec.SubscriptionDescription(updated, await RuntimeAsync(updated.BackingQueueName, ct).ConfigureAwait(false)));
+                EntityDescriptionCodec.SubscriptionDescription(updated,
+                    await RuntimeAsync(updated.BackingQueueName, ct).ConfigureAwait(false), Accessed(updated.BackingQueueName)));
         }
 
         if (existing is not null)
@@ -349,11 +359,12 @@ public sealed class AtomManagementHandler
             {
                 await _topics.DeleteRuleAsync(topicName, subscriptionName, "$Default", ct).ConfigureAwait(false);
             }
-            await _topics.CreateOrReplaceRuleAsync(defaultRule, ct).ConfigureAwait(false);
+            await _topics.CreateOrReplaceRuleAsync(defaultRule with { CreatedAt = now }, ct).ConfigureAwait(false);
         }
 
         return EntityOk(201, request, subscriptionName, created.CreatedAt, created.UpdatedAt,
-            EntityDescriptionCodec.SubscriptionDescription(created, await RuntimeAsync(created.BackingQueueName, ct).ConfigureAwait(false)));
+            EntityDescriptionCodec.SubscriptionDescription(created,
+                await RuntimeAsync(created.BackingQueueName, ct).ConfigureAwait(false), Accessed(created.BackingQueueName)));
     }
 
     // ── Rules ──
@@ -369,8 +380,8 @@ public sealed class AtomManagementHandler
             case "GET":
                 return existing is null
                     ? Error(404, $"Rule '{ruleName}' does not exist on '{topicName}/{subscriptionName}'. SubCode=40400.")
-                    : EntityOk(200, request, existing.Name, _startedAt, null,
-                        EntityDescriptionCodec.RuleDescription(existing, _startedAt));
+                    : EntityOk(200, request, existing.Name, existing.CreatedAt, null,
+                        EntityDescriptionCodec.RuleDescription(existing));
             case "PUT":
             {
                 var description = AtomXml.UnwrapDescription(request.Body);
@@ -388,7 +399,8 @@ public sealed class AtomManagementHandler
                     return Error(409, $"Rule '{ruleName}' already exists on '{topicName}/{subscriptionName}'. SubCode=40900.");
                 }
 
-                var rule = EntityDescriptionCodec.ParseRuleDescription(topicName, subscriptionName, ruleName, description);
+                var rule = EntityDescriptionCodec.ParseRuleDescription(topicName, subscriptionName, ruleName, description)
+                    with { CreatedAt = existing?.CreatedAt ?? _timeProvider.GetUtcNow() };
                 try
                 {
                     await _topics.CreateOrReplaceRuleAsync(rule, ct).ConfigureAwait(false);
@@ -397,9 +409,8 @@ public sealed class AtomManagementHandler
                 {
                     return Error(404, $"Subscription '{topicName}/{subscriptionName}' does not exist. SubCode=40400.");
                 }
-                var now = _timeProvider.GetUtcNow();
-                return EntityOk(isUpdate ? 200 : 201, request, ruleName, now, null,
-                    EntityDescriptionCodec.RuleDescription(rule, now));
+                return EntityOk(isUpdate ? 200 : 201, request, ruleName, rule.CreatedAt, null,
+                    EntityDescriptionCodec.RuleDescription(rule));
             }
             case "DELETE":
                 return await _topics.DeleteRuleAsync(topicName, subscriptionName, ruleName, ct).ConfigureAwait(false)
@@ -424,7 +435,8 @@ public sealed class AtomManagementHandler
         {
             entries.Add(AtomXml.Entry(BaseUrl(request), queue.Name, queue.Name, queue.CreatedAt,
                 queue.UpdatedAt ?? queue.CreatedAt,
-                EntityDescriptionCodec.QueueDescription(queue, await RuntimeAsync(queue.Name, ct).ConfigureAwait(false))));
+                EntityDescriptionCodec.QueueDescription(queue,
+                    await RuntimeAsync(queue.Name, ct).ConfigureAwait(false), Accessed(queue.Name))));
         }
         return FeedOk(request, "queues", entries);
     }
@@ -438,10 +450,11 @@ public sealed class AtomManagementHandler
         var entries = new List<XElement>();
         foreach (var topic in Page(all, request))
         {
-            var subCount = (await _topics.ListSubscriptionsAsync(topic.Name, ct).ConfigureAwait(false)).Count;
+            var subs = await _topics.ListSubscriptionsAsync(topic.Name, ct).ConfigureAwait(false);
             entries.Add(AtomXml.Entry(BaseUrl(request), topic.Name, topic.Name, topic.CreatedAt,
                 topic.UpdatedAt ?? topic.CreatedAt,
-                EntityDescriptionCodec.TopicDescription(topic, subCount)));
+                EntityDescriptionCodec.TopicDescription(topic, subs.Count,
+                    await TopicRuntimeAsync(topic.Name, subs, ct).ConfigureAwait(false), Accessed(topic.Name))));
         }
         return FeedOk(request, "topics", entries);
     }
@@ -461,7 +474,8 @@ public sealed class AtomManagementHandler
         {
             entries.Add(AtomXml.Entry(BaseUrl(request), $"{topicName}/subscriptions/{sub.Name}", sub.Name,
                 sub.CreatedAt, sub.UpdatedAt ?? sub.CreatedAt,
-                EntityDescriptionCodec.SubscriptionDescription(sub, await RuntimeAsync(sub.BackingQueueName, ct).ConfigureAwait(false))));
+                EntityDescriptionCodec.SubscriptionDescription(sub,
+                    await RuntimeAsync(sub.BackingQueueName, ct).ConfigureAwait(false), Accessed(sub.BackingQueueName))));
         }
         return FeedOk(request, "subscriptions", entries);
     }
@@ -479,8 +493,8 @@ public sealed class AtomManagementHandler
         var entries = Page(all, request)
             .Select(rule => AtomXml.Entry(BaseUrl(request),
                 $"{topicName}/subscriptions/{subscriptionName}/rules/{rule.Name}", rule.Name,
-                _startedAt, _startedAt,
-                EntityDescriptionCodec.RuleDescription(rule, _startedAt)))
+                rule.CreatedAt, rule.CreatedAt,
+                EntityDescriptionCodec.RuleDescription(rule)))
             .ToList();
         return FeedOk(request, "rules", entries);
     }
@@ -503,14 +517,14 @@ public sealed class AtomManagementHandler
     // ── Helpers ──
 
     /// <summary>
-    /// Message counters for a queue-like entity, including its DLQ sibling - the numbers
-    /// behind MessageCount/CountDetails/SizeInBytes.
+    /// Message counters for a queue-like entity, including its DLQ siblings - the numbers
+    /// behind MessageCount/CountDetails/SizeInBytes. Built entirely from store-level count
+    /// and size queries so listing N entities never materializes message bodies.
     /// </summary>
     private async Task<EntityRuntimeInfo> RuntimeAsync(string queueName, CancellationToken ct)
     {
-        var messages = _store.Peek(queueName, 0, int.MaxValue);
-        var scheduled = messages.Count(m => m.ScheduledEnqueueTime is not null);
-        long size = messages.Sum(m => (long)m.EncodedMessage.Length);
+        var scheduled = _store.CountScheduled(queueName);
+        var size = _store.GetSizeInBytes(queueName);
         var total = await _store.CountAsync(queueName, ct).ConfigureAwait(false);
 
         long deadLettered = 0;
@@ -518,14 +532,14 @@ public sealed class AtomManagementHandler
         if (await _queues.GetAsync(dlqName, ct).ConfigureAwait(false) is not null)
         {
             deadLettered = await _store.CountAsync(dlqName, ct).ConfigureAwait(false);
-            size += _store.Peek(dlqName, 0, int.MaxValue).Sum(m => (long)m.EncodedMessage.Length);
+            size += _store.GetSizeInBytes(dlqName);
         }
         long transferDeadLettered = 0;
         var transferDlqName = queueName + EntityNames.TransferDeadLetterSuffix;
         if (await _queues.GetAsync(transferDlqName, ct).ConfigureAwait(false) is not null)
         {
             transferDeadLettered = await _store.CountAsync(transferDlqName, ct).ConfigureAwait(false);
-            size += _store.Peek(transferDlqName, 0, int.MaxValue).Sum(m => (long)m.EncodedMessage.Length);
+            size += _store.GetSizeInBytes(transferDlqName);
         }
         return new EntityRuntimeInfo(
             ActiveMessageCount: Math.Max(0, total - scheduled),
@@ -534,6 +548,29 @@ public sealed class AtomManagementHandler
             SizeInBytes: size,
             TransferDeadLetterMessageCount: transferDeadLettered);
     }
+
+    /// <summary>
+    /// Topic-level runtime info, the way Azure reports it: the topic's own store queue
+    /// (which holds scheduled publishes until activation) plus the aggregate of every
+    /// subscription's counters and sizes.
+    /// </summary>
+    private async Task<EntityRuntimeInfo> TopicRuntimeAsync(
+        string topicName, IReadOnlyList<SubscriptionDescriptor> subscriptions, CancellationToken ct)
+    {
+        var aggregate = await RuntimeAsync(topicName, ct).ConfigureAwait(false);
+        foreach (var subscription in subscriptions)
+        {
+            aggregate = aggregate.Add(await RuntimeAsync(subscription.BackingQueueName, ct).ConfigureAwait(false));
+        }
+        return aggregate;
+    }
+
+    /// <summary>
+    /// Last send/receive/peek/attach on the entity, from the same activity tracker that
+    /// drives AutoDeleteOnIdle. Null (codec falls back to UpdatedAt) when no tracker is
+    /// wired or the entity has not seen activity yet.
+    /// </summary>
+    private DateTimeOffset? Accessed(string entityName) => _activity?.LastActivity(entityName);
 
     /// <summary>DLQ sub-entities and subscription backing queues are not addressable queues.</summary>
     private static bool IsInternalQueue(string name) =>

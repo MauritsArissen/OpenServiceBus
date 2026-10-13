@@ -27,6 +27,7 @@ public sealed class ManagementGatewayHostedService : IHostedService
     private readonly ITopicRegistry _topics;
     private readonly IMessageStore _store;
     private readonly TimeProvider _timeProvider;
+    private readonly EntityActivityTracker _activity;
     private readonly AmqpListenerOptions _amqpOptions;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ManagementGatewayHostedService> _logger;
@@ -39,6 +40,7 @@ public sealed class ManagementGatewayHostedService : IHostedService
         ITopicRegistry topics,
         IMessageStore store,
         TimeProvider timeProvider,
+        EntityActivityTracker activityTracker,
         IOptions<AmqpListenerOptions> amqpOptions,
         ILoggerFactory loggerFactory)
     {
@@ -47,6 +49,7 @@ public sealed class ManagementGatewayHostedService : IHostedService
         _topics = topics;
         _store = store;
         _timeProvider = timeProvider;
+        _activity = activityTracker;
         _amqpOptions = amqpOptions.Value;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<ManagementGatewayHostedService>();
@@ -66,7 +69,8 @@ public sealed class ManagementGatewayHostedService : IHostedService
 
         var handler = new AtomManagementHandler(
             _queues, _topics, _store, _timeProvider, atomOptions,
-            _loggerFactory.CreateLogger<AtomManagementHandler>());
+            _loggerFactory.CreateLogger<AtomManagementHandler>(),
+            _activity);
 
         _atomServer = new AtomHttpServer(handler, FreeLoopbackPort(), atomOptions,
             _loggerFactory.CreateLogger<AtomHttpServer>());

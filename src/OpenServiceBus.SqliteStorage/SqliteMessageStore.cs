@@ -649,6 +649,19 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    public long CountScheduled(string queueName)
+    {
+        _gate.Wait();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM messages WHERE queue_name = $q AND scheduled_enqueue_time IS NOT NULL";
+            cmd.Parameters.AddWithValue("$q", queueName);
+            return (long)(cmd.ExecuteScalar() ?? 0L);
+        }
+        finally { _gate.Release(); }
+    }
+
     public (long Enqueued, long Completed) LifetimeCounters(string queueName) =>
         (_enqueuedTotal.GetValueOrDefault(queueName), _completedTotal.GetValueOrDefault(queueName));
 

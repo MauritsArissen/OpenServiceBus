@@ -286,6 +286,17 @@ public sealed class InMemoryMessageStore : IMessageStore
         return Task.FromResult((long)state.Messages.Count);
     }
 
+    public long CountScheduled(string queueName)
+    {
+        if (!_queues.TryGetValue(queueName, out var state)) return 0;
+        long scheduled = 0;
+        foreach (var message in state.Messages.Values)
+        {
+            if (message.ScheduledEnqueueTime is not null) scheduled++;
+        }
+        return scheduled;
+    }
+
     public long GetSizeInBytes(string queueName)
     {
         if (!_queues.TryGetValue(queueName, out var state)) return 0;

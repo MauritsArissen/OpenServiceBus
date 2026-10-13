@@ -141,6 +141,7 @@ public class SqliteDescriptorPersistenceTests
                 Name = "eu-only",
                 Filter = new SqlFilter("user.region = @region", new Dictionary<string, object?> { ["@region"] = "eu" }),
                 Action = new SqlRuleAction("SET sys.Label = 'checked'"),
+                CreatedAt = new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero),
             };
             await using (var store = Open(path))
             {
@@ -159,6 +160,7 @@ public class SqliteDescriptorPersistenceTests
             filter.Parameters["@region"].ShouldBe("eu");
             restored.Action.ShouldNotBeNull();
             restored.Action.Expression.ShouldBe("SET sys.Label = 'checked'");
+            restored.CreatedAt.ShouldBe(new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero));
         }
         finally
         {

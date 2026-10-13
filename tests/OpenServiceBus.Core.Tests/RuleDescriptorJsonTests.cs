@@ -180,6 +180,32 @@ public class RuleDescriptorJsonTests
     }
 
     [Fact]
+    public void CreatedAt_RoundTrips()
+    {
+        var createdAt = new DateTimeOffset(2026, 2, 3, 4, 5, 6, TimeSpan.Zero);
+
+        var restored = RoundTrip(Rule(TrueFilter.Instance) with { CreatedAt = createdAt });
+
+        restored.CreatedAt.ShouldBe(createdAt);
+    }
+
+    [Fact]
+    public void Deserialize_SnapshotWithoutCreatedAt_FallsBackToARecentInstant()
+    {
+        var legacy = """
+            {"TopicName":"events","SubscriptionName":"billing","Name":"r",
+             "Filter":{"Type":"true"}}
+            """;
+        var before = DateTimeOffset.UtcNow;
+
+        var restored = RuleDescriptorJson.Deserialize(legacy);
+
+        restored.ShouldNotBeNull();
+        restored.CreatedAt.ShouldBeGreaterThanOrEqualTo(before);
+        restored.CreatedAt.ShouldBeLessThanOrEqualTo(DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
     public void Deserialize_UnknownFilterShape_ReturnsNullRatherThanWideningToMatchAll()
     {
         var future = """
