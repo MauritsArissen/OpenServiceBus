@@ -83,9 +83,14 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
 
         _requestNodes.Register("$cbs", new CbsRequestProcessor(_options, _connectionAuth, _loggerFactory.CreateLogger<CbsRequestProcessor>()));
 
+        // Coordinator attaches are handled inside EntityLinkProcessor (not via a registered
+        // message processor): the link processor needs to see the owning session to detect
+        // cross-entity transaction groups. The resolver still maps the address-less
+        // Coordinator target to a placeholder - without it the ContainerHost casts
+        // attach.Target to Target and throws before the link processor runs; since no
+        // processor is registered at the placeholder, the attach falls through to the
+        // link processor.
         host.AddressResolver = (_, attach) => attach.Target is Coordinator ? CoordinatorProcessor.Address : null;
-        host.RegisterMessageProcessor(CoordinatorProcessor.Address,
-            new CoordinatorProcessor(_transactions, _loggerFactory.CreateLogger<CoordinatorProcessor>()));
 
         var linkProcessor = new EntityLinkProcessor(_queueRegistry, _messageStore, _router, _transactions, Options.Create(_options), _timeProvider, _loggerFactory, _requestNodes, _responsePairs, _connectionAuth, _topicRegistry, _activity);
         host.RegisterLinkProcessor(linkProcessor);

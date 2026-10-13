@@ -6,8 +6,10 @@ namespace OpenServiceBus.Core.Transactions;
 /// executing immediately; the coordinator link processor calls <see cref="CommitAsync"/> or
 /// <see cref="Rollback"/> when the client discharges the txn.
 ///
-/// Operations within a single txn replay in order on commit, atomically - partial-commit is
-/// not possible (the in-memory store is not crash-safe anyway). Rollback simply discards.
+/// Operations within a single txn replay in order on commit. Commit is two-phase: every
+/// operation's <see cref="TransactionalOperation.Validate"/> runs before any
+/// <see cref="TransactionalOperation.Apply"/>, so a precondition failure rejects the
+/// discharge with no effects applied. Rollback simply discards.
 /// </summary>
 public interface ITransactionManager
 {
@@ -19,12 +21,13 @@ public interface ITransactionManager
     /// txn id is unknown - typically because <see cref="CommitAsync"/>/<see cref="Rollback"/>
     /// already ran. The caller should reject the wire-level frame in that case.
     /// </summary>
-    bool Enlist(byte[] txnId, Func<CancellationToken, Task> operation);
+    bool Enlist(byte[] txnId, TransactionalOperation operation);
 
     /// <summary>
     /// Replay every enlisted op in order and forget the txn. No-op on unknown txn id.
-    /// Stops at the first op that throws and rethrows it so the coordinator can fail the
-    /// discharge; ops replayed before the failure stay applied (the store has no rollback).
+    /// Validates every op first and throws without applying anything when a validation
+    /// fails; an apply-phase fault (a genuine store error after validation passed) still
+    /// stops the replay and rethrows so the coordinator can fail the discharge.
     /// </summary>
     Task CommitAsync(byte[] txnId, CancellationToken cancellationToken = default);
 

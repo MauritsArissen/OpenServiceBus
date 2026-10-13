@@ -195,7 +195,12 @@ public sealed class SessionReceiverSource : IMessageSource
             if (dispositionContext.DeliveryState is TransactionalState txnState && txnState.TxnId is { Length: > 0 } txnId)
             {
                 var inner = txnState.Outcome;
-                var enlisted = _transactions.Enlist(txnId, _ => InvokeDispositionAsync(lockToken, inner));
+                var enlisted = _transactions.Enlist(txnId, new TransactionalOperation
+                {
+                    Entity = _entityName,
+                    Validate = _ => ValidateLockHeldForCommitAsync(lockToken),
+                    Apply = _ => InvokeDispositionAsync(lockToken, inner),
+                });
                 if (enlisted)
                 {
                     receiveContext.Link.DisposeMessage(receiveContext.Message,
@@ -276,6 +281,27 @@ public sealed class SessionReceiverSource : IMessageSource
         _store.IsSessionLockHeldAsync(_entityName, SessionId, LinkName).GetAwaiter().GetResult()
             ? LockLostOutcome.Message(_entityName)
             : LockLostOutcome.Session(SessionId);
+
+    // See the matching note in QueueReceiverSource: validate in the commit's first phase
+    // so an expired message lock rejects the discharge before anything applies; a deleted
+    // entity is ignored the same way the apply phase ignores it.
+    private async Task ValidateLockHeldForCommitAsync(Guid lockToken)
+    {
+        StoredMessage? locked;
+        try
+        {
+            locked = await _store.TryGetLockedAsync(_entityName, lockToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            return;
+        }
+        if (locked is null)
+        {
+            throw new LockLostException(
+                $"The lock for token {lockToken} on session '{SessionId}' of '{_entityName}' was lost before the transaction committed.");
+        }
+    }
 
     private async Task InvokeDispositionAsync(Guid lockToken, Outcome? outcome)
     {

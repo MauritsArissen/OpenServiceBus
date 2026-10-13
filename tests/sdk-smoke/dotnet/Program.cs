@@ -6,12 +6,13 @@
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
 //   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
-//   -> topic runtime props
+//   -> topic runtime props -> cross-entity txn
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
 // comparison honest: all four stacks run the exact same operations the same way.
 
+using System.Transactions;
 using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 
@@ -561,6 +562,74 @@ try
     Check("topic runtime props", rtOk,
         rtOk ? "" : $"subs={rtProps.SubscriptionCount} sched={rtProps.ScheduledMessageCount} size={rtProps.SizeInBytes}");
     await admin.DeleteTopicAsync(rtTopic);
+
+    // 31. cross-entity txn - EnableCrossEntityTransactions (issue #58): receive from A and
+    // send to B in one TransactionScope. Rollback discards both, commit lands both, and
+    // receiving from a second entity after the via entity (A) is pinned throws
+    // InvalidOperationException the way Azure does.
+    var ceQueueA = $"smoke-ce-a-{stamp}";
+    var ceQueueB = $"smoke-ce-b-{stamp}";
+    await admin.CreateQueueAsync(ceQueueA);
+    await admin.CreateQueueAsync(ceQueueB);
+    var ceSeed = client.CreateSender(ceQueueA);
+    await ceSeed.SendMessageAsync(new ServiceBusMessage("ce-in-1") { MessageId = $"ce-in-1-{stamp}" });
+    await ceSeed.SendMessageAsync(new ServiceBusMessage("ce-in-2") { MessageId = $"ce-in-2-{stamp}" });
+    await ceSeed.CloseAsync();
+    var ceCheckReceiver = client.CreateReceiver(ceQueueB);
+    await using (var ceClient = new ServiceBusClient(conn, new ServiceBusClientOptions
+    {
+        EnableCrossEntityTransactions = true,
+        RetryOptions = new ServiceBusRetryOptions { TryTimeout = TimeSpan.FromSeconds(15), MaxRetries = 1 },
+    }))
+    {
+        var ceReceiver = ceClient.CreateReceiver(ceQueueA);
+        var ceSender = ceClient.CreateSender(ceQueueB);
+
+        // Rollback: dispose the scope without Complete - neither the settle nor the send lands.
+        var ceFirst = await ceReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        using (new TransactionScope(TransactionScopeAsyncFlowOption.Enabled))
+        {
+            await ceReceiver.CompleteMessageAsync(ceFirst);
+            await ceSender.SendMessageAsync(new ServiceBusMessage("ce-out-rb") { MessageId = $"ce-out-rb-{stamp}" });
+        }
+        var ceLeak = await ceCheckReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(2));
+        Check("cross-entity txn rollback", ceLeak is null, ceLeak is null ? "" : "rolled-back send leaked to B");
+
+        // Commit: the second message's complete on A and the send to B land together.
+        var ceSecond = await ceReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        using (var ceScope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled))
+        {
+            await ceReceiver.CompleteMessageAsync(ceSecond);
+            await ceSender.SendMessageAsync(new ServiceBusMessage("ce-out-ok") { MessageId = $"ce-out-ok-{stamp}" });
+            ceScope.Complete();
+        }
+        var ceLanded = await ceCheckReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        if (ceLanded is not null) await ceCheckReceiver.CompleteMessageAsync(ceLanded);
+        Check("cross-entity txn commit", ceLanded?.MessageId == $"ce-out-ok-{stamp}",
+            ceLanded is null ? "committed send never landed on B" : "");
+
+        // Single-via-entity restriction: the group is pinned to A, so receiving from B on
+        // the same cross-entity client is refused (amqp:not-allowed -> InvalidOperationException).
+        var ceViaBlocked = false;
+        var ceViaDetail = "receive from second entity unexpectedly succeeded";
+        try
+        {
+            await ceClient.CreateReceiver(ceQueueB).ReceiveMessageAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (InvalidOperationException)
+        {
+            ceViaBlocked = true;
+            ceViaDetail = "";
+        }
+        catch (Exception ex)
+        {
+            ceViaDetail = ex.GetType().Name + ": " + ex.Message;
+        }
+        Check("cross-entity txn via restriction", ceViaBlocked, ceViaDetail);
+    }
+    await ceCheckReceiver.CloseAsync();
+    await admin.DeleteQueueAsync(ceQueueA);
+    await admin.DeleteQueueAsync(ceQueueB);
 }
 catch (Exception e)
 {

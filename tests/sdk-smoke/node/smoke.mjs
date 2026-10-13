@@ -7,6 +7,8 @@
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
 //   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
 //   -> topic runtime props
+//   (-> cross-entity txn runs in the dotnet and java smokes; @azure/service-bus does not
+//    expose AMQP transactions, so there is nothing to exercise)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
