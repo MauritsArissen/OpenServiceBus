@@ -2,11 +2,13 @@ using OpenServiceBus.Amqp.Hosting;
 using OpenServiceBus.Amqp.Management;
 using OpenServiceBus.Amqp.Queues;
 using OpenServiceBus.Amqp.Topics;
+using OpenServiceBus.Amqp.Transactions;
 
 using System.Collections.Concurrent;
 using Amqp;
 using Amqp.Framing;
 using Amqp.Listener;
+using Amqp.Transactions;
 using Amqp.Types;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -28,6 +30,8 @@ namespace OpenServiceBus.Amqp.Routing;
 ///   sender attach on <c>&lt;topic&gt;</c>                        → TopicSenderProcessor
 ///   receiver attach on <c>&lt;topic&gt;/Subscriptions/&lt;s&gt;</c> → QueueReceiverSource on the sub backing queue
 ///   <c>$management</c> attaches                                  → per-entity IRequestProcessor (registered by AmqpListenerHost)
+///   attach whose Target is the txn <c>Coordinator</c>            → CoordinatorProcessor (also marks the session's transaction group)
+///   sender attach with <c>com.microsoft:transfer-destination-address</c> → sender wired to the named destination (send-via)
 ///   unknown entity                                               → refused with amqp:not-found
 /// </summary>
 public sealed class EntityLinkProcessor : ILinkProcessor
@@ -47,6 +51,8 @@ public sealed class EntityLinkProcessor : ILinkProcessor
     private readonly ResponsePairTable _responsePairs;
     private readonly ConnectionAuthRegistry _connectionAuth;
     private readonly EntityActivityTracker? _activity;
+    private readonly CoordinatorProcessor _coordinator;
+    private readonly TransactionGroups _transactionGroups = new();
 
     public EntityLinkProcessor(
         IQueueRegistry registry,
@@ -75,6 +81,7 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         _responsePairs = responsePairs;
         _connectionAuth = connectionAuth;
         _logger = loggerFactory.CreateLogger<EntityLinkProcessor>();
+        _coordinator = new CoordinatorProcessor(transactions, loggerFactory.CreateLogger<CoordinatorProcessor>());
         _registry.QueueDeleted += (_, descriptor) => _receiverSources.TryRemove(descriptor.Name, out QueueReceiverSource? _);
     }
 
@@ -84,6 +91,16 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         {
             var attach = attachContext.Attach;
             var isReceiverFromClient = !attach.Role; // role=false: client is sender ⇒ broker receives
+
+            // Transaction coordinator attach (Target is the amqp Coordinator type, no
+            // address). Handled here instead of via a registered message processor so the
+            // owning SESSION is visible: a coordinator attached on a shared session is the
+            // SDK's EnableCrossEntityTransactions signal and starts a transaction group.
+            if (attach.Target is Coordinator)
+            {
+                WireCoordinator(attachContext);
+                return;
+            }
 
             var rawAddress = NormalizeAddress(isReceiverFromClient
                 ? (attach.Target as Target)?.Address
@@ -107,6 +124,45 @@ public sealed class EntityLinkProcessor : ILinkProcessor
             {
                 Reject(attachContext, ErrorCode.InvalidField, $"Link attach has no resolvable address ('{rawAddress}').");
                 return;
+            }
+
+            var session = attachContext.Link.Session;
+            if (isReceiverFromClient && ReadTransferDestinationAddress(attach) is { } transferDestination)
+            {
+                // Send-via sender (the Java SDK's cross-entity shape, also the legacy
+                // track-1 send-via): the link TARGET is the via entity and the
+                // com.microsoft:transfer-destination-address property names the real
+                // destination. The emulator skips the physical transfer-queue hop and
+                // wires the sender straight to the destination, after validating the via
+                // entity exists and recording it as the session's group entity.
+                if (!EntityExists(entityAddress))
+                {
+                    Reject(attachContext, ErrorCode.NotFound, $"Via entity '{entityAddress.Entity}' does not exist.");
+                    return;
+                }
+                _transactionGroups.RegisterEntityAttach(session, entityAddress.Entity, isClientReceiver: false);
+                if (!EntityAddress.TryParse(NormalizeAddress(transferDestination), out var destinationAddress))
+                {
+                    Reject(attachContext, ErrorCode.InvalidField,
+                        $"Link attach has no resolvable transfer destination ('{transferDestination}').");
+                    return;
+                }
+                entityAddress = destinationAddress;
+            }
+            else
+            {
+                var decision = _transactionGroups.RegisterEntityAttach(
+                    session, entityAddress.Entity, isClientReceiver: !isReceiverFromClient);
+                if (!decision.Allowed)
+                {
+                    // Same condition real Service Bus answers when a cross-entity
+                    // transaction group tries to receive from a second entity:
+                    // amqp:not-allowed, surfaced by the SDK as InvalidOperationException.
+                    Reject(attachContext, ErrorCode.NotAllowed,
+                        $"Cannot receive from entity '{entityAddress.Entity}': this connection's cross-entity transaction group " +
+                        $"performs all operations via entity '{decision.ViaEntity}', and receives are only allowed on that entity.");
+                    return;
+                }
             }
 
             attach.MaxMessageSize = _options.MaxMessageSize;
@@ -157,6 +213,34 @@ public sealed class EntityLinkProcessor : ILinkProcessor
         if (schemeIndex <= 0) return address;
         var pathStart = address.IndexOf('/', schemeIndex + 3);
         return pathStart < 0 ? string.Empty : address[(pathStart + 1)..];
+    }
+
+    private void WireCoordinator(AttachContext attachContext)
+    {
+        _transactionGroups.MarkCoordinatorSession(attachContext.Link.Session);
+        var endpoint = new TargetLinkEndpoint(_coordinator, attachContext.Link);
+        attachContext.Complete(endpoint, _coordinator.Credit);
+        _logger.LogDebug("Wired transaction coordinator attach");
+    }
+
+    private static readonly Symbol TransferDestinationAddressSymbol = new("com.microsoft:transfer-destination-address");
+
+    private static string? ReadTransferDestinationAddress(Attach attach)
+    {
+        if (attach.Properties is { } properties &&
+            properties.TryGetValue(TransferDestinationAddressSymbol, out var value) &&
+            value is not null)
+        {
+            var destination = value.ToString();
+            return string.IsNullOrEmpty(destination) ? null : destination;
+        }
+        return null;
+    }
+
+    private bool EntityExists(EntityAddress address)
+    {
+        if (_registry.GetAsync(address.BackingQueueName).GetAwaiter().GetResult() is not null) return true;
+        return _topics is not null && _topics.GetTopicAsync(address.Entity).GetAwaiter().GetResult() is not null;
     }
 
     private void WireRequestResponseNode(AttachContext attachContext, string address, bool isReceiverFromClient)

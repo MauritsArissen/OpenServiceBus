@@ -7,8 +7,11 @@ namespace OpenServiceBus.InMemoryStorage.Transactions;
 
 /// <summary>
 /// Default in-memory <see cref="ITransactionManager"/>. Each open txn keeps an in-order
-/// list of deferred operations; commit replays them sequentially under a per-txn lock so
-/// concurrent enlists during discharge can't slip an op in between commit and forget.
+/// list of deferred operations; commit validates all of them, then replays them
+/// sequentially, under a per-txn lock so concurrent enlists during discharge can't slip
+/// an op in between commit and forget. The same manager serves every
+/// <see cref="OpenServiceBus.Core.Storage.IMessageStore"/> implementation - the buffered
+/// operations capture the store they run against, so SQLite-backed brokers share it.
 /// </summary>
 public sealed class TransactionManager : ITransactionManager
 {
@@ -31,7 +34,7 @@ public sealed class TransactionManager : ITransactionManager
         return id;
     }
 
-    public bool Enlist(byte[] txnId, Func<CancellationToken, Task> operation)
+    public bool Enlist(byte[] txnId, TransactionalOperation operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
         if (!_open.TryGetValue(new TxnIdKey(txnId), out var txn)) return false;
@@ -48,26 +51,50 @@ public sealed class TransactionManager : ITransactionManager
     {
         if (!_open.TryRemove(new TxnIdKey(txnId), out var txn)) return;
 
-        Func<CancellationToken, Task>[] toReplay;
+        TransactionalOperation[] toReplay;
         lock (txn.SyncRoot)
         {
             txn.Settled = true;
             toReplay = txn.Operations.ToArray();
         }
 
+        // Phase 1 - validate everything before applying anything. A failing precondition
+        // (lock expired, entity deleted) rejects the whole commit while the store is still
+        // untouched, so the client's commit throws with no partial effects.
+        foreach (var op in toReplay)
+        {
+            if (op.Validate is null) continue;
+            try
+            {
+                await op.Validate(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Validation of a transactional op on '{Entity}' failed during commit of {TxnId}; rejecting the discharge with nothing applied",
+                    op.Entity, FormatTxnId(txnId));
+                throw;
+            }
+        }
+
+        // Phase 2 - apply. Everything the supported operation set can fail on was checked
+        // above, so a failure here is a genuine store fault (or a precondition lost in the
+        // instants since validation). Stop and surface it so the discharge fails; ops
+        // applied before the fault stay applied - the residual window is documented in
+        // docs/Transactions.md.
+        var applied = 0;
         foreach (var op in toReplay)
         {
             try
             {
-                await op(cancellationToken).ConfigureAwait(false);
+                await op.Apply(cancellationToken).ConfigureAwait(false);
+                applied++;
             }
             catch (Exception ex)
             {
-                // Stop on the first failure and surface it so the coordinator fails the
-                // discharge - the client learns the commit did not fully apply rather than
-                // being told it succeeded. Ops already replayed stay applied (the in-memory
-                // store has no rollback), but stopping here keeps that footprint minimal.
-                _logger.LogError(ex, "Transactional op failed during commit of {TxnId}; failing the discharge", FormatTxnId(txnId));
+                _logger.LogError(ex,
+                    "Transactional op on '{Entity}' failed during commit of {TxnId} after {Applied}/{Total} op(s) applied; failing the discharge",
+                    op.Entity, FormatTxnId(txnId), applied, toReplay.Length);
                 throw;
             }
         }
@@ -84,7 +111,7 @@ public sealed class TransactionManager : ITransactionManager
     private sealed class OpenTxn
     {
         public readonly object SyncRoot = new();
-        public readonly List<Func<CancellationToken, Task>> Operations = new();
+        public readonly List<TransactionalOperation> Operations = new();
         public bool Settled;
     }
 

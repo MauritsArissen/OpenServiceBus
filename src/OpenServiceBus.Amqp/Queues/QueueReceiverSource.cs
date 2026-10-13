@@ -248,7 +248,12 @@ public sealed class QueueReceiverSource : IMessageSource
             if (dispositionContext.DeliveryState is TransactionalState txnState && txnState.TxnId is { Length: > 0 } txnId)
             {
                 var inner = txnState.Outcome;
-                var enlisted = _transactions.Enlist(txnId, _ => InvokeDispositionAsync(lockToken, inner));
+                var enlisted = _transactions.Enlist(txnId, new TransactionalOperation
+                {
+                    Entity = _entityName,
+                    Validate = _ => ValidateLockHeldForCommitAsync(lockToken),
+                    Apply = _ => InvokeDispositionAsync(lockToken, inner),
+                });
                 if (enlisted)
                 {
                     receiveContext.Link.DisposeMessage(receiveContext.Message,
@@ -351,6 +356,30 @@ public sealed class QueueReceiverSource : IMessageSource
     // Queue receivers only ever lose message locks; the session variant overrides this
     // decision with a session-lock check.
     private DeliveryState LockLostFailureOutcome() => LockLostOutcome.Message(_entityName);
+
+    /// <summary>
+    /// Commit-time precondition for a buffered transactional disposition: the lock must
+    /// still be held. Runs in the transaction manager's validation phase so an expired
+    /// lock rejects the discharge before any operation in the txn applies. A deleted
+    /// entity is NOT a failure - the apply phase ignores the disposition the same way.
+    /// </summary>
+    private async Task ValidateLockHeldForCommitAsync(Guid lockToken)
+    {
+        StoredMessage? locked;
+        try
+        {
+            locked = await _store.TryGetLockedAsync(_entityName, lockToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            return;
+        }
+        if (locked is null)
+        {
+            throw new LockLostException(
+                $"The lock for token {lockToken} on '{_entityName}' was lost before the transaction committed.");
+        }
+    }
 
     /// <summary>
     /// Apply a single buffered disposition outcome against the store. Runs at txn commit time

@@ -155,7 +155,12 @@ public sealed class QueueSenderProcessor : IMessageProcessor
             // the actual store op now. Commit/rollback happens via the coordinator link.
             if (messageContext.DeliveryState is TransactionalState txnState && txnState.TxnId is { Length: > 0 } txnId)
             {
-                if (_transactions.Enlist(txnId, ct => RouteOrEnqueueAsync(encoded, expiresAt, scheduledFor, sessionId, messageId, dedupWindow, filterContext)))
+                if (_transactions.Enlist(txnId, new TransactionalOperation
+                    {
+                        Entity = _queueName,
+                        Validate = _ => ValidateEntityForCommitAsync(),
+                        Apply = _ => RouteOrEnqueueAsync(encoded, expiresAt, scheduledFor, sessionId, messageId, dedupWindow, filterContext),
+                    }))
                 {
                     messageContext.Link.DisposeMessage(messageContext.Message,
                         new TransactionalState { TxnId = txnId, Outcome = new Accepted() },
@@ -218,7 +223,12 @@ public sealed class QueueSenderProcessor : IMessageProcessor
 
                 if (txnId is { Length: > 0 })
                 {
-                    if (!_transactions.Enlist(txnId, _ => RouteOrEnqueueAsync(innerBytes, expiresAt, scheduledFor, sessionId, messageId, dedupWindow, filterContext)))
+                    if (!_transactions.Enlist(txnId, new TransactionalOperation
+                        {
+                            Entity = _queueName,
+                            Validate = _ => ValidateEntityForCommitAsync(),
+                            Apply = _ => RouteOrEnqueueAsync(innerBytes, expiresAt, scheduledFor, sessionId, messageId, dedupWindow, filterContext),
+                        }))
                     {
                         enlisted = false;
                         break;
@@ -292,6 +302,19 @@ public sealed class QueueSenderProcessor : IMessageProcessor
 
     private bool EntityDeleted() =>
         _registry is not null && _registry.GetAsync(_queueName).GetAwaiter().GetResult() is null;
+
+    /// <summary>
+    /// Commit-time precondition for a buffered transactional send: the entity must still
+    /// exist. Runs in the transaction manager's validation phase, before anything applies.
+    /// </summary>
+    private Task ValidateEntityForCommitAsync()
+    {
+        if (EntityDeleted())
+        {
+            throw new InvalidOperationException($"The messaging entity '{_queueName}' has been deleted.");
+        }
+        return Task.CompletedTask;
+    }
 
     private void CompleteEntityDeleted(MessageContext context)
     {

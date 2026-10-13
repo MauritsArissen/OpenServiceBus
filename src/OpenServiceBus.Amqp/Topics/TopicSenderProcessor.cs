@@ -125,10 +125,15 @@ public sealed class TopicSenderProcessor : IMessageProcessor
             // the dedup check also runs at commit time, matching the queue path.
             if (messageContext.DeliveryState is TransactionalState txnState && txnState.TxnId is { Length: > 0 } txnId)
             {
-                if (_transactions.Enlist(txnId, async _ =>
+                if (_transactions.Enlist(txnId, new TransactionalOperation
                     {
-                        if (await IsDuplicateAsync(messageId, dedupWindow).ConfigureAwait(false)) return;
-                        await _router.RouteAsync(_topic.Name, encoded, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext).ConfigureAwait(false);
+                        Entity = _topic.Name,
+                        Validate = _ => ValidateTopicForCommitAsync(),
+                        Apply = async _ =>
+                        {
+                            if (await IsDuplicateAsync(messageId, dedupWindow).ConfigureAwait(false)) return;
+                            await _router.RouteAsync(_topic.Name, encoded, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext).ConfigureAwait(false);
+                        },
                     }))
                 {
                     messageContext.Link.DisposeMessage(messageContext.Message,
@@ -224,6 +229,19 @@ public sealed class TopicSenderProcessor : IMessageProcessor
     private bool TopicDeleted() =>
         _topics.GetTopicAsync(_topic.Name).GetAwaiter().GetResult() is null;
 
+    /// <summary>
+    /// Commit-time precondition for a buffered transactional publish: the topic must
+    /// still exist. Runs in the transaction manager's validation phase.
+    /// </summary>
+    private Task ValidateTopicForCommitAsync()
+    {
+        if (TopicDeleted())
+        {
+            throw new InvalidOperationException($"The messaging entity '{_topic.Name}' has been deleted.");
+        }
+        return Task.CompletedTask;
+    }
+
     private void CompleteEntityDeleted(MessageContext context)
     {
         context.Complete(new Error(new Symbol(ErrorCode.NotFound))
@@ -255,10 +273,15 @@ public sealed class TopicSenderProcessor : IMessageProcessor
                 if (txnId is { Length: > 0 })
                 {
                     // Buffer the fan-out under the txn; it only runs on commit.
-                    if (!_transactions.Enlist(txnId, async _ =>
+                    if (!_transactions.Enlist(txnId, new TransactionalOperation
                         {
-                            if (await IsDuplicateAsync(messageId, dedupWindow).ConfigureAwait(false)) return;
-                            await _router.RouteAsync(_topic.Name, innerBytes, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext).ConfigureAwait(false);
+                            Entity = _topic.Name,
+                            Validate = _ => ValidateTopicForCommitAsync(),
+                            Apply = async _ =>
+                            {
+                                if (await IsDuplicateAsync(messageId, dedupWindow).ConfigureAwait(false)) return;
+                                await _router.RouteAsync(_topic.Name, innerBytes, expiresAt, scheduledFor, sessionId: null, filterContext: filterContext).ConfigureAwait(false);
+                            },
                         }))
                     {
                         enlisted = false;

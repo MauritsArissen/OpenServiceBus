@@ -9,7 +9,9 @@ import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import com.azure.messaging.servicebus.ServiceBusException;
 import com.azure.messaging.servicebus.ServiceBusFailureReason;
 import com.azure.messaging.servicebus.ServiceBusSessionReceiverClient;
+import com.azure.messaging.servicebus.ServiceBusTransactionContext;
 import com.azure.messaging.servicebus.models.AbandonOptions;
+import com.azure.messaging.servicebus.models.CompleteOptions;
 import com.azure.messaging.servicebus.models.DeadLetterOptions;
 import com.azure.messaging.servicebus.models.ServiceBusMessageState;
 import com.azure.messaging.servicebus.models.SubQueue;
@@ -34,6 +36,7 @@ import java.util.regex.Pattern;
  *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
  *   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
  *   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
+ *   -> cross-entity txn
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -922,6 +925,108 @@ public final class Smoke {
                 HttpResponse.BodyHandlers.ofString());
             http.send(
                 HttpRequest.newBuilder(URI.create(base + "/" + hnQueue + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+            // 30. cross-entity txn - enableCrossEntityTransactions (issue #58): receive from A
+            // and send to B under one ServiceBusTransactionContext. Rollback discards both,
+            // commit lands both, and receiving from a second entity after the via entity (A)
+            // is pinned is refused by the broker (amqp:not-allowed).
+            String ceQueueA = "smoke-ce-a-" + stamp;
+            String ceQueueB = "smoke-ce-b-" + stamp;
+            http.send(atomPut.apply(ceQueueA,
+                "<QueueDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            http.send(atomPut.apply(ceQueueB,
+                "<QueueDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            try (ServiceBusSenderClient ceSeed = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().queueName(ceQueueA).buildClient()) {
+                ServiceBusMessage ceIn1 = new ServiceBusMessage("ce-in-1");
+                ceIn1.setMessageId("ce-in-1-" + stamp);
+                ceSeed.sendMessage(ceIn1);
+                ServiceBusMessage ceIn2 = new ServiceBusMessage("ce-in-2");
+                ceIn2.setMessageId("ce-in-2-" + stamp);
+                ceSeed.sendMessage(ceIn2);
+            }
+            // Clients built from the SAME builder share the connection - the requirement for
+            // cross-entity transactions, mirroring the .NET smoke's single ServiceBusClient.
+            ServiceBusClientBuilder ceBuilder = new ServiceBusClientBuilder()
+                .connectionString(conn).retryOptions(retry).enableCrossEntityTransactions();
+            try (ServiceBusReceiverClient ceReceiver = ceBuilder
+                    .receiver().queueName(ceQueueA).disableAutoComplete().buildClient();
+                 ServiceBusSenderClient ceSender = ceBuilder
+                    .sender().queueName(ceQueueB).buildClient();
+                 ServiceBusReceiverClient ceCheck = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(ceQueueB).disableAutoComplete().buildClient()) {
+
+                // Rollback: neither the settle on A nor the send to B lands.
+                ServiceBusReceivedMessage ceFirst = null;
+                for (ServiceBusReceivedMessage m : ceReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    ceFirst = m;
+                }
+                ServiceBusTransactionContext ceTxnRb = ceReceiver.createTransaction();
+                ceReceiver.complete(ceFirst, new CompleteOptions().setTransactionContext(ceTxnRb));
+                ServiceBusMessage ceOutRb = new ServiceBusMessage("ce-out-rb");
+                ceOutRb.setMessageId("ce-out-rb-" + stamp);
+                ceSender.sendMessage(ceOutRb, ceTxnRb);
+                ceReceiver.rollbackTransaction(ceTxnRb);
+                boolean ceLeaked = false;
+                for (ServiceBusReceivedMessage m : ceCheck.receiveMessages(1, Duration.ofSeconds(2))) {
+                    ceLeaked = true;
+                    ceCheck.complete(m);
+                }
+                results.add(!ceLeaked ? "PASS cross-entity txn rollback"
+                    : "FAIL cross-entity txn rollback: rolled-back send leaked to B");
+
+                // Commit: the second message's complete on A and the send to B land together.
+                ServiceBusReceivedMessage ceSecond = null;
+                for (ServiceBusReceivedMessage m : ceReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    ceSecond = m;
+                }
+                ServiceBusTransactionContext ceTxnOk = ceReceiver.createTransaction();
+                ceReceiver.complete(ceSecond, new CompleteOptions().setTransactionContext(ceTxnOk));
+                ServiceBusMessage ceOutOk = new ServiceBusMessage("ce-out-ok");
+                ceOutOk.setMessageId("ce-out-ok-" + stamp);
+                ceSender.sendMessage(ceOutOk, ceTxnOk);
+                ceReceiver.commitTransaction(ceTxnOk);
+                ServiceBusReceivedMessage ceLanded = null;
+                for (ServiceBusReceivedMessage m : ceCheck.receiveMessages(1, Duration.ofSeconds(10))) {
+                    ceLanded = m;
+                    ceCheck.complete(m);
+                }
+                results.add(ceLanded != null && ("ce-out-ok-" + stamp).equals(ceLanded.getMessageId())
+                    ? "PASS cross-entity txn commit"
+                    : "FAIL cross-entity txn commit: committed send never landed on B");
+
+                // Single-via-entity restriction: the group is pinned to A, so a receiver on B
+                // on the same shared connection is refused. Seed a bait message from a plain
+                // client first so an (incorrectly) allowed receive is distinguishable.
+                try (ServiceBusSenderClient ceBait = new ServiceBusClientBuilder()
+                        .connectionString(conn).retryOptions(retry)
+                        .sender().queueName(ceQueueB).buildClient()) {
+                    ServiceBusMessage bait = new ServiceBusMessage("ce-bait");
+                    bait.setMessageId("ce-bait-" + stamp);
+                    ceBait.sendMessage(bait);
+                }
+                boolean ceViaBlocked = false;
+                String ceViaDetail = "receive from second entity unexpectedly succeeded";
+                try (ServiceBusReceiverClient ceWrong = ceBuilder
+                        .receiver().queueName(ceQueueB).disableAutoComplete().buildClient()) {
+                    for (ServiceBusReceivedMessage m : ceWrong.receiveMessages(1, Duration.ofSeconds(5))) {
+                        ceViaDetail = "received " + m.getMessageId();
+                    }
+                } catch (Exception ex) {
+                    ceViaBlocked = true;
+                    ceViaDetail = "";
+                }
+                results.add(ceViaBlocked ? "PASS cross-entity txn via restriction"
+                    : "FAIL cross-entity txn via restriction: " + ceViaDetail);
+            }
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + ceQueueA + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + ceQueueB + "?api-version=2021-05")).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);

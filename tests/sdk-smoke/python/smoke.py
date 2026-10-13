@@ -8,6 +8,8 @@ Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   -> correlation filter -> system props -> batch receive -> hierarchical names
   (-> abandon props runs in the other three smokes; azure-servicebus for Python does not
    expose propertiesToModify on its settlement methods, so there is nothing to exercise)
+  (-> cross-entity txn runs in the dotnet and java smokes; azure-servicebus for Python
+   does not expose AMQP transactions, so there is nothing to exercise)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 
 Exit code 0 = all pass; 1 = at least one failure.
