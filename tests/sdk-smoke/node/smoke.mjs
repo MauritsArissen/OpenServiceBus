@@ -6,6 +6,7 @@
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
 //   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
+//   -> topic runtime props
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 // Regression guard for GitHub issue #1 (rhea reply links with empty target addresses).
 
@@ -606,6 +607,40 @@ const run = async () => {
   check("hierarchical names", hnOk, hnOk ? "" : "no message");
   await fetch(`${httpBase}/${hnTopic}?api-version=2021-05`, { method: "DELETE" });
   await fetch(`${httpBase}/${hnQueue}?api-version=2021-05`, { method: "DELETE" });
+
+  // 30. topic runtime props - topic-level runtime info aggregates across the topic's
+  // subscriptions instead of reporting zeros (issue #60): one message fanned out to two
+  // subscriptions and dead-lettered on one, plus one scheduled publish held at the topic.
+  // The JS admin client cannot target a plaintext emulator (see steps 9-12), so the ATOM
+  // XML the SDK would parse is asserted directly.
+  const rtTopic = `smoke-runtime-${stamp}`;
+  await atomPut(rtTopic,
+    '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  await atomPut(`${rtTopic}/subscriptions/s1`,
+    '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  await atomPut(`${rtTopic}/subscriptions/s2`,
+    '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>');
+  const rtSender = client.createSender(rtTopic);
+  await rtSender.sendMessages({ body: "counted", messageId: `rt-${stamp}` });
+  await rtSender.scheduleMessages({ body: "held" }, new Date(Date.now() + 3_600_000));
+  await rtSender.close();
+  const rtReceiver = client.createReceiver(rtTopic, "s1");
+  const [rtMsg] = await rtReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  if (rtMsg) await rtReceiver.deadLetterMessage(rtMsg, { deadLetterReason: "smoke-runtime" });
+  await rtReceiver.close();
+  const rtResp = await fetch(`${httpBase}/${rtTopic}?api-version=2021-05`);
+  const rtBody = await rtResp.text();
+  const rtSize = Number(rtBody.match(/<SizeInBytes>(\d+)<\/SizeInBytes>/)?.[1] ?? "0");
+  const rtOk =
+    Boolean(rtMsg) &&
+    rtResp.status === 200 &&
+    rtBody.includes("<SubscriptionCount>2</SubscriptionCount>") &&
+    rtBody.includes(":ActiveMessageCount>1<") &&
+    rtBody.includes(":DeadLetterMessageCount>1<") &&
+    rtBody.includes(":ScheduledMessageCount>1<") &&
+    rtSize > 0;
+  check("topic runtime props", rtOk, rtOk ? "" : `status ${rtResp.status} size ${rtSize}`);
+  await fetch(`${httpBase}/${rtTopic}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>

@@ -34,6 +34,7 @@ import java.util.regex.Pattern;
  *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
  *   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
  *   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
+ *   -> topic runtime props
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -922,6 +923,55 @@ public final class Smoke {
                 HttpResponse.BodyHandlers.ofString());
             http.send(
                 HttpRequest.newBuilder(URI.create(base + "/" + hnQueue + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+            // 30. topic runtime props - topic-level runtime info aggregates across the
+            // topic's subscriptions instead of reporting zeros (issue #60): one message
+            // fanned out to two subscriptions and dead-lettered on one, plus one scheduled
+            // publish held at the topic. The Java admin client cannot target a plaintext
+            // emulator (see steps 9-12), so the ATOM XML the SDK would parse is asserted
+            // directly.
+            String rtTopic = "smoke-runtime-" + stamp;
+            http.send(atomPut.apply(rtTopic,
+                "<TopicDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            http.send(atomPut.apply(rtTopic + "/subscriptions/s1",
+                "<SubscriptionDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            http.send(atomPut.apply(rtTopic + "/subscriptions/s2",
+                "<SubscriptionDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            ServiceBusReceivedMessage rtMsg = null;
+            try (ServiceBusSenderClient rtSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().topicName(rtTopic).buildClient();
+                 ServiceBusReceiverClient rtReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().topicName(rtTopic).subscriptionName("s1")
+                    .disableAutoComplete().buildClient()) {
+                ServiceBusMessage counted = new ServiceBusMessage("counted");
+                counted.setMessageId("rt-" + stamp);
+                rtSender.sendMessage(counted);
+                rtSender.scheduleMessage(new ServiceBusMessage("held"), OffsetDateTime.now().plusHours(1));
+                for (ServiceBusReceivedMessage m : rtReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    rtMsg = m;
+                    rtReceiver.deadLetter(m, new DeadLetterOptions().setDeadLetterReason("smoke-runtime"));
+                }
+            }
+            HttpResponse<String> rtResp = http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + rtTopic + "?api-version=2021-05")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+            String rtBody = rtResp.body();
+            Matcher rtSizeMatcher = Pattern.compile("<SizeInBytes>(\\d+)</SizeInBytes>").matcher(rtBody);
+            long rtSize = rtSizeMatcher.find() ? Long.parseLong(rtSizeMatcher.group(1)) : 0;
+            boolean rtOk = rtMsg != null
+                && rtResp.statusCode() == 200
+                && rtBody.contains("<SubscriptionCount>2</SubscriptionCount>")
+                && rtBody.contains(":ActiveMessageCount>1<")
+                && rtBody.contains(":DeadLetterMessageCount>1<")
+                && rtBody.contains(":ScheduledMessageCount>1<")
+                && rtSize > 0;
+            results.add(rtOk ? "PASS topic runtime props"
+                : "FAIL topic runtime props: status " + rtResp.statusCode() + " size " + rtSize);
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + rtTopic + "?api-version=2021-05")).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);

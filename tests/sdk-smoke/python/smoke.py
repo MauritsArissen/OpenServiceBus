@@ -6,6 +6,7 @@ Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
   -> queue dedup -> topic dedup -> batch dedup -> lock lost -> topic schedule
   -> correlation filter -> system props -> batch receive -> hierarchical names
+  -> topic runtime props
   (-> abandon props runs in the other three smokes; azure-servicebus for Python does not
    expose propertiesToModify on its settlement methods, so there is nothing to exercise)
 against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
@@ -617,6 +618,40 @@ def run() -> None:
         check("hierarchical names", hn_ok, "" if hn_ok else "no message")
         http("DELETE", f"{base}/{hn_topic}?api-version=2021-05")
         http("DELETE", f"{base}/{hn_queue}?api-version=2021-05")
+
+        # 30. topic runtime props - topic-level runtime info aggregates across the topic's
+        # subscriptions instead of reporting zeros (issue #60): one message fanned out to
+        # two subscriptions and dead-lettered on one, plus one scheduled publish held at
+        # the topic. The Python admin client cannot target a plaintext emulator (see steps
+        # 9-12), so the ATOM XML the SDK would parse is asserted directly.
+        rt_topic = f"smoke-runtime-{stamp}"
+        http("PUT", f"{base}/{rt_topic}?api-version=2021-05", atom_entry(
+            '<TopicDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        for sub in ("s1", "s2"):
+            http("PUT", f"{base}/{rt_topic}/subscriptions/{sub}?api-version=2021-05", atom_entry(
+                '<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'))
+        with client.get_topic_sender(rt_topic) as rt_sender:
+            rt_sender.send_messages(ServiceBusMessage("counted", message_id=f"rt-{stamp}"))
+            rt_sender.schedule_messages(
+                ServiceBusMessage("held"), datetime.now(timezone.utc) + timedelta(hours=1))
+        with client.get_subscription_receiver(rt_topic, "s1", max_wait_time=10) as rt_receiver:
+            rt_msgs = rt_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+            if rt_msgs:
+                rt_receiver.dead_letter_message(rt_msgs[0], reason="smoke-runtime")
+        rt_status, rt_body = http("GET", f"{base}/{rt_topic}?api-version=2021-05")
+        rt_size_match = re.search(r"<SizeInBytes>(\d+)</SizeInBytes>", rt_body)
+        rt_size = int(rt_size_match.group(1)) if rt_size_match else 0
+        rt_ok = (
+            len(rt_msgs) == 1
+            and rt_status == 200
+            and "<SubscriptionCount>2</SubscriptionCount>" in rt_body
+            and ":ActiveMessageCount>1<" in rt_body
+            and ":DeadLetterMessageCount>1<" in rt_body
+            and ":ScheduledMessageCount>1<" in rt_body
+            and rt_size > 0
+        )
+        check("topic runtime props", rt_ok, "" if rt_ok else f"status {rt_status} size {rt_size}")
+        http("DELETE", f"{base}/{rt_topic}?api-version=2021-05")
 
 
 try:

@@ -6,6 +6,7 @@
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
 //   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
+//   -> topic runtime props
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -535,6 +536,31 @@ try
     Check("hierarchical names", hnOk, hnOk ? "" : "no message");
     await admin.DeleteTopicAsync(hnTopic);
     await admin.DeleteQueueAsync(hnQueue);
+
+    // 30. topic runtime props - GetTopicRuntimePropertiesAsync aggregates across the
+    // topic's subscriptions instead of reporting zeros (issue #60): one message fanned out
+    // to two subscriptions and dead-lettered on one, plus one scheduled publish held at
+    // the topic.
+    var rtTopic = $"smoke-runtime-{stamp}";
+    await admin.CreateTopicAsync(rtTopic);
+    await admin.CreateSubscriptionAsync(rtTopic, "s1");
+    await admin.CreateSubscriptionAsync(rtTopic, "s2");
+    var rtSender = client.CreateSender(rtTopic);
+    await rtSender.SendMessageAsync(new ServiceBusMessage("counted") { MessageId = $"rt-{stamp}" });
+    await rtSender.ScheduleMessageAsync(new ServiceBusMessage("held"), DateTimeOffset.UtcNow.AddHours(1));
+    await rtSender.CloseAsync();
+    var rtReceiver = client.CreateReceiver(rtTopic, "s1");
+    var rtMsg = await rtReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    if (rtMsg is not null) await rtReceiver.DeadLetterMessageAsync(rtMsg, "smoke-runtime");
+    await rtReceiver.CloseAsync();
+    TopicRuntimeProperties rtProps = await admin.GetTopicRuntimePropertiesAsync(rtTopic);
+    var rtOk = rtMsg is not null
+        && rtProps.SubscriptionCount == 2
+        && rtProps.ScheduledMessageCount == 1
+        && rtProps.SizeInBytes > 0;
+    Check("topic runtime props", rtOk,
+        rtOk ? "" : $"subs={rtProps.SubscriptionCount} sched={rtProps.ScheduledMessageCount} size={rtProps.SizeInBytes}");
+    await admin.DeleteTopicAsync(rtTopic);
 }
 catch (Exception e)
 {
