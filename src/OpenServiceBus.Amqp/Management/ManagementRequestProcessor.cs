@@ -649,6 +649,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
                 Name = ruleName,
                 Filter = filter,
                 Action = action,
+                CreatedAt = _timeProvider.GetUtcNow(),
             }).GetAwaiter().GetResult();
         }
         catch (InvalidOperationException ex)

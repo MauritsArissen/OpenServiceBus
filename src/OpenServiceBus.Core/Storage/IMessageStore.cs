@@ -188,6 +188,16 @@ public interface IMessageStore
     Task<long> CountAsync(string queueName, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The number of messages currently waiting on their scheduled enqueue time. Feeds the
+    /// management API's <c>ScheduledMessageCount</c>; both built-in stores answer with a
+    /// counter query instead of materializing messages. The default implementation derives
+    /// the count from <see cref="Peek"/> so external stores stay source-compatible, at the
+    /// cost of a full scan - override it.
+    /// </summary>
+    long CountScheduled(string queueName) =>
+        Peek(queueName, 0, int.MaxValue).Count(m => m.ScheduledEnqueueTime is not null);
+
+    /// <summary>
     /// Total encoded bytes currently stored on the queue (active + locked + scheduled +
     /// deferred). Feeds quota enforcement and the management API's <c>SizeInBytes</c>.
     /// Returns 0 for unknown queues.

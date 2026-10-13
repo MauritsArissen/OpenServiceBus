@@ -19,6 +19,14 @@ public readonly record struct EntityRuntimeInfo(
 {
     public long TotalMessageCount =>
         ActiveMessageCount + ScheduledMessageCount + DeadLetterMessageCount + TransferDeadLetterMessageCount;
+
+    /// <summary>Element-wise sum, used to aggregate a topic's subscriptions into topic-level counters.</summary>
+    public EntityRuntimeInfo Add(EntityRuntimeInfo other) => new(
+        ActiveMessageCount + other.ActiveMessageCount,
+        ScheduledMessageCount + other.ScheduledMessageCount,
+        DeadLetterMessageCount + other.DeadLetterMessageCount,
+        SizeInBytes + other.SizeInBytes,
+        TransferDeadLetterMessageCount + other.TransferDeadLetterMessageCount);
 }
 
 /// <summary>
@@ -33,7 +41,7 @@ public static class EntityDescriptionCodec
 
     // ── Queues ──
 
-    public static XElement QueueDescription(QueueDescriptor queue, EntityRuntimeInfo runtime)
+    public static XElement QueueDescription(QueueDescriptor queue, EntityRuntimeInfo runtime, DateTimeOffset? accessedAt = null)
     {
         var updated = queue.UpdatedAt ?? queue.CreatedAt;
         return new XElement(Sb + "QueueDescription",
@@ -57,7 +65,7 @@ public static class EntityDescriptionCodec
             UserMetadataElement(queue.UserMetadata),
             new XElement(Sb + "CreatedAt", AtomXml.Timestamp(queue.CreatedAt)),
             new XElement(Sb + "UpdatedAt", AtomXml.Timestamp(updated)),
-            new XElement(Sb + "AccessedAt", AtomXml.Timestamp(updated)),
+            new XElement(Sb + "AccessedAt", AtomXml.Timestamp(accessedAt ?? updated)),
             new XElement(Sb + "SupportOrdering", true),
             CountDetailsElement(runtime),
             new XElement(Sb + "AutoDeleteOnIdle", AtomXml.DurationOrUnlimited(queue.AutoDeleteOnIdle)),
@@ -98,7 +106,8 @@ public static class EntityDescriptionCodec
 
     // ── Topics ──
 
-    public static XElement TopicDescription(TopicDescriptor topic, int subscriptionCount)
+    public static XElement TopicDescription(
+        TopicDescriptor topic, int subscriptionCount, EntityRuntimeInfo runtime = default, DateTimeOffset? accessedAt = null)
     {
         var updated = topic.UpdatedAt ?? topic.CreatedAt;
         return new XElement(Sb + "TopicDescription",
@@ -109,7 +118,7 @@ public static class EntityDescriptionCodec
             new XElement(Sb + "DuplicateDetectionHistoryTimeWindow",
                 AtomXml.Duration(topic.DuplicateDetectionHistoryTimeWindow ?? DuplicateDetection.DefaultWindow)),
             new XElement(Sb + "EnableBatchedOperations", true),
-            new XElement(Sb + "SizeInBytes", 0),
+            new XElement(Sb + "SizeInBytes", runtime.SizeInBytes),
             new XElement(Sb + "FilteringMessagesBeforePublishing", false),
             new XElement(Sb + "IsAnonymousAccessible", false),
             new XElement(Sb + "AuthorizationRules"),
@@ -117,9 +126,9 @@ public static class EntityDescriptionCodec
             UserMetadataElement(topic.UserMetadata),
             new XElement(Sb + "CreatedAt", AtomXml.Timestamp(topic.CreatedAt)),
             new XElement(Sb + "UpdatedAt", AtomXml.Timestamp(updated)),
-            new XElement(Sb + "AccessedAt", AtomXml.Timestamp(updated)),
+            new XElement(Sb + "AccessedAt", AtomXml.Timestamp(accessedAt ?? updated)),
             new XElement(Sb + "SupportOrdering", true),
-            CountDetailsElement(default),
+            CountDetailsElement(runtime),
             new XElement(Sb + "SubscriptionCount", subscriptionCount),
             new XElement(Sb + "AutoDeleteOnIdle", AtomXml.DurationOrUnlimited(topic.AutoDeleteOnIdle)),
             new XElement(Sb + "EnablePartitioning", false),
@@ -152,7 +161,8 @@ public static class EntityDescriptionCodec
 
     // ── Subscriptions ──
 
-    public static XElement SubscriptionDescription(SubscriptionDescriptor subscription, EntityRuntimeInfo runtime)
+    public static XElement SubscriptionDescription(
+        SubscriptionDescriptor subscription, EntityRuntimeInfo runtime, DateTimeOffset? accessedAt = null)
     {
         var updated = subscription.UpdatedAt ?? subscription.CreatedAt;
         return new XElement(Sb + "SubscriptionDescription",
@@ -170,7 +180,7 @@ public static class EntityDescriptionCodec
             UserMetadataElement(subscription.UserMetadata),
             new XElement(Sb + "CreatedAt", AtomXml.Timestamp(subscription.CreatedAt)),
             new XElement(Sb + "UpdatedAt", AtomXml.Timestamp(updated)),
-            new XElement(Sb + "AccessedAt", AtomXml.Timestamp(updated)),
+            new XElement(Sb + "AccessedAt", AtomXml.Timestamp(accessedAt ?? updated)),
             CountDetailsElement(runtime),
             new XElement(Sb + "AutoDeleteOnIdle", AtomXml.DurationOrUnlimited(subscription.AutoDeleteOnIdle)),
             new XElement(Sb + "EntityAvailabilityStatus", "Available"),
@@ -225,7 +235,7 @@ public static class EntityDescriptionCodec
 
     // ── Rules ──
 
-    public static XElement RuleDescription(RuleDescriptor rule, DateTimeOffset createdAt)
+    public static XElement RuleDescription(RuleDescriptor rule)
     {
         var actionElement = rule.Action is null
             ? new XElement(Sb + "Action", new XAttribute(AtomXml.Xsi + "type", "EmptyRuleAction"))
@@ -238,7 +248,7 @@ public static class EntityDescriptionCodec
             new XAttribute(XNamespace.Xmlns + "i", AtomXml.Xsi),
             FilterElement(rule.Filter),
             actionElement,
-            new XElement(Sb + "CreatedAt", AtomXml.Timestamp(createdAt)),
+            new XElement(Sb + "CreatedAt", AtomXml.Timestamp(rule.CreatedAt)),
             new XElement(Sb + "Name", rule.Name));
     }
 
@@ -279,6 +289,8 @@ public static class EntityDescriptionCodec
             new XElement(d + "ActiveMessageCount", runtime.ActiveMessageCount),
             new XElement(d + "DeadLetterMessageCount", runtime.DeadLetterMessageCount),
             new XElement(d + "ScheduledMessageCount", runtime.ScheduledMessageCount),
+            // Always 0 by design: auto-forwarding is synchronous in this broker, so no
+            // message ever waits in an in-flight transfer state. See docs/Admin-Client.md.
             new XElement(d + "TransferMessageCount", 0),
             new XElement(d + "TransferDeadLetterMessageCount", runtime.TransferDeadLetterMessageCount));
     }

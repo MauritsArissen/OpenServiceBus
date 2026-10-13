@@ -242,7 +242,8 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
                 atomOptions.AuthorizeRequest = header =>
                     SasTokenValidator.Validate(header, keys, opts.TimeProvider.GetUtcNow()).IsValid;
             }
-            var handler = new AtomManagementHandler(queues, topics, storeAsIface, opts.TimeProvider, atomOptions);
+            var handler = new AtomManagementHandler(queues, topics, storeAsIface, opts.TimeProvider, atomOptions,
+                activityTracker: activity);
             for (var attempt = 0; ; attempt++)
             {
                 try
