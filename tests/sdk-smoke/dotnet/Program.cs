@@ -5,7 +5,7 @@
 //   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
-//   -> topic schedule -> correlation filter -> system props -> batch receive
+//   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -516,6 +516,25 @@ try
     Check("batch receive", brOk,
         brOk ? "" : $"got {brBatch.Count} then {brEmpty.Count}");
     await admin.DeleteQueueAsync(brQueue);
+
+    // 29. hierarchical names - '/' inside queue and topic names, the MassTransit topology:
+    // a namespaced topic whose subscription auto-forwards into a namespaced queue.
+    var hnTopic = $"smoke-hier-{stamp}/Contracts.OrderSubmitted";
+    var hnQueue = $"smoke-hier-{stamp}/order-service";
+    await admin.CreateQueueAsync(hnQueue);
+    await admin.CreateTopicAsync(hnTopic);
+    await admin.CreateSubscriptionAsync(new CreateSubscriptionOptions(hnTopic, "order-service") { ForwardTo = hnQueue });
+    var hnSender = client.CreateSender(hnTopic);
+    await hnSender.SendMessageAsync(new ServiceBusMessage("nested") { MessageId = $"hn-{stamp}" });
+    await hnSender.CloseAsync();
+    var hnReceiver = client.CreateReceiver(hnQueue);
+    var hnMsg = await hnReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+    if (hnMsg is not null) await hnReceiver.CompleteMessageAsync(hnMsg);
+    await hnReceiver.CloseAsync();
+    var hnOk = hnMsg is not null && hnMsg.MessageId == $"hn-{stamp}" && hnMsg.Body.ToString() == "nested";
+    Check("hierarchical names", hnOk, hnOk ? "" : "no message");
+    await admin.DeleteTopicAsync(hnTopic);
+    await admin.DeleteQueueAsync(hnQueue);
 }
 catch (Exception e)
 {

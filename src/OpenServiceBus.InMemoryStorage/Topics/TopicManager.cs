@@ -117,13 +117,10 @@ public sealed class TopicManager : ITopicRegistry
         TopicDeleted?.Invoke(this, topic);
 
         // Tear down all subscriptions on this topic. Snapshot first so we mutate safely.
-        var subKeys = _subscriptions.Keys.Where(k => k.StartsWith($"{name}/", StringComparison.OrdinalIgnoreCase)).ToArray();
-        foreach (var key in subKeys)
+        var subs = _subscriptions.Values.Where(s => IsOnTopic(s, name)).ToArray();
+        foreach (var sub in subs)
         {
-            if (_subscriptions.TryGetValue(key, out var sub))
-            {
-                await DeleteSubscriptionAsync(sub.TopicName, sub.Name, cancellationToken).ConfigureAwait(false);
-            }
+            await DeleteSubscriptionAsync(sub.TopicName, sub.Name, cancellationToken).ConfigureAwait(false);
         }
         return true;
     }
@@ -133,6 +130,7 @@ public sealed class TopicManager : ITopicRegistry
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.TopicName);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Name);
+        EntityValidation.EnsureSubscriptionName(descriptor.Name);
         EntityValidation.EnsureAutoDeleteOnIdle(descriptor.AutoDeleteOnIdle, $"{descriptor.TopicName}/{descriptor.Name}");
         if (!_topics.ContainsKey(descriptor.TopicName))
         {
@@ -254,10 +252,8 @@ public sealed class TopicManager : ITopicRegistry
 
     public Task<IReadOnlyList<SubscriptionDescriptor>> ListSubscriptionsAsync(string topicName, CancellationToken cancellationToken = default)
     {
-        var prefix = $"{topicName}/";
-        IReadOnlyList<SubscriptionDescriptor> snapshot = _subscriptions
-            .Where(kv => kv.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            .Select(kv => kv.Value)
+        IReadOnlyList<SubscriptionDescriptor> snapshot = _subscriptions.Values
+            .Where(s => IsOnTopic(s, topicName))
             .ToArray();
         return Task.FromResult(snapshot);
     }
@@ -330,11 +326,10 @@ public sealed class TopicManager : ITopicRegistry
     {
         if (!_topics.ContainsKey(topicName)) return Array.Empty<SubscriberMatch>();
 
-        var prefix = $"{topicName}/";
         var matched = new List<SubscriberMatch>();
         foreach (var (key, sub) in _subscriptions)
         {
-            if (!key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!IsOnTopic(sub, topicName)) continue;
             if (!_rules.TryGetValue(key, out var rules) || rules.IsEmpty) continue;
 
             // Rule name order keeps "which rule's action applies" deterministic when
@@ -364,4 +359,7 @@ public sealed class TopicManager : ITopicRegistry
     }
 
     private static string SubKey(string topic, string sub) => $"{topic}/{sub}";
+
+    private static bool IsOnTopic(SubscriptionDescriptor subscription, string topicName) =>
+        string.Equals(subscription.TopicName, topicName, StringComparison.OrdinalIgnoreCase);
 }

@@ -26,6 +26,16 @@ await host.Topics.CreateSubscriptionAsync(new SubscriptionDescriptor
 Every fresh subscription gets a `$Default` rule with a `TrueFilter` - matches everything,
 matching Azure Service Bus's behaviour. Replace it or add more rules to filter.
 
+### Hierarchical names
+
+As on Azure, queue and topic names may contain `/` (for example
+`MyApp.Contracts/OrderSubmitted`, the shape MassTransit uses for its topics). Each segment
+must be non-empty and must not start with `$`, since `$` segments address sub-entities
+such as `$DeadLetterQueue` and `$management`. A topic `sales` and a topic `sales/orders`
+are independent: publishing to one never reaches the other's subscriptions, and deleting
+one leaves the other intact. Subscription names cannot contain `/`; creating one that does
+is rejected.
+
 ## Filter rules
 
 Four flavours, mirroring Service Bus:

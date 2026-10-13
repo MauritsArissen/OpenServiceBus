@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
  *   -> topic session receive -> admin create/get/roundtrip/size limit/status gate/delete detach/delete (ATOM management API)
  *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
  *   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
- *   -> topic schedule -> correlation filter -> system props -> batch receive
+ *   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -886,6 +886,42 @@ public final class Smoke {
                 : "FAIL batch receive: got " + brSeen.size() + " then " + brExtra);
             http.send(
                 HttpRequest.newBuilder(URI.create(base + "/" + brQueue + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+            // 29. hierarchical names - '/' inside queue and topic names, the MassTransit
+            // topology: a namespaced topic whose subscription auto-forwards into a namespaced queue.
+            String hnTopic = "smoke-hier-" + stamp + "/Contracts.OrderSubmitted";
+            String hnQueue = "smoke-hier-" + stamp + "/order-service";
+            http.send(atomPut.apply(hnQueue,
+                "<QueueDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            http.send(atomPut.apply(hnTopic,
+                "<TopicDescription xmlns=\"" + sbNs + "\"/>"), HttpResponse.BodyHandlers.ofString());
+            http.send(atomPut.apply(hnTopic + "/subscriptions/order-service",
+                "<SubscriptionDescription xmlns=\"" + sbNs + "\"><ForwardTo>" + hnQueue
+                    + "</ForwardTo></SubscriptionDescription>"), HttpResponse.BodyHandlers.ofString());
+            ServiceBusReceivedMessage hnMsg = null;
+            try (ServiceBusSenderClient hnSender = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .sender().topicName(hnTopic).buildClient();
+                 ServiceBusReceiverClient hnReceiver = new ServiceBusClientBuilder()
+                    .connectionString(conn).retryOptions(retry)
+                    .receiver().queueName(hnQueue).disableAutoComplete().buildClient()) {
+                ServiceBusMessage nested = new ServiceBusMessage("nested");
+                nested.setMessageId("hn-" + stamp);
+                hnSender.sendMessage(nested);
+                for (ServiceBusReceivedMessage m : hnReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    hnMsg = m;
+                    hnReceiver.complete(m);
+                }
+            }
+            boolean hnOk = hnMsg != null && ("hn-" + stamp).equals(hnMsg.getMessageId())
+                && "nested".equals(hnMsg.getBody().toString());
+            results.add(hnOk ? "PASS hierarchical names" : "FAIL hierarchical names: no message");
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + hnTopic + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + hnQueue + "?api-version=2021-05")).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);

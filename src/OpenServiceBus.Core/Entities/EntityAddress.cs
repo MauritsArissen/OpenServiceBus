@@ -74,19 +74,28 @@ public readonly record struct EntityAddress(
         {
             var topic = normalized[..subsIdx];
             var sub = normalized[(subsIdx + EntityNames.SubscriptionsSegment.Length)..];
-            if (string.IsNullOrEmpty(topic) || string.IsNullOrEmpty(sub)) return false;
-
-            // The subscription segment is the only "/" allowed in the remaining name; reject deeper paths.
-            if (sub.Contains('/', StringComparison.Ordinal)) return false;
+            if (!IsEntityPath(topic) || !IsEntitySegment(sub)) return false;
 
             result = new EntityAddress(EntityKind.Subscription, topic, sub, subResource);
             return true;
         }
 
-        if (normalized.Contains('/', StringComparison.Ordinal)) return false;
+        if (!IsEntityPath(normalized)) return false;
         result = new EntityAddress(EntityKind.Queue, normalized, null, subResource);
         return true;
     }
+
+    private static bool IsEntityPath(string path)
+    {
+        foreach (var segment in path.Split('/'))
+        {
+            if (!IsEntitySegment(segment)) return false;
+        }
+        return true;
+    }
+
+    private static bool IsEntitySegment(string segment) =>
+        segment.Length > 0 && segment[0] != '$' && !segment.Contains('/', StringComparison.Ordinal);
 }
 
 public enum EntityKind

@@ -14,4 +14,14 @@ public static class EntityValidation
                 $"The value for AutoDeleteOnIdle on '{entityLabel}' must be at least 5 minutes (was {idle}).");
         }
     }
+
+    /// <exception cref="InvalidOperationException">The name contains a '/'; unlike queue and topic names, subscription names cannot be hierarchical.</exception>
+    public static void EnsureSubscriptionName(string name)
+    {
+        if (name.Contains('/', StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"The subscription name '{name}' is invalid. Subscription names cannot contain '/'.");
+        }
+    }
 }
