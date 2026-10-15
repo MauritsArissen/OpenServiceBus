@@ -55,6 +55,8 @@ jobs:
     name: Note pending approval
     if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     steps:
       - name: Comment pending approval on the PR
         uses: marocchino/sticky-pull-request-comment@v2
