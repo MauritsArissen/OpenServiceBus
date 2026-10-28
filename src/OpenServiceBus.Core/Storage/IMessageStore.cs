@@ -184,6 +184,50 @@ public interface IMessageStore
     /// </summary>
     IReadOnlyList<StoredMessage> ExpireMessages(string queueName, DateTimeOffset now);
 
+    /// <summary>
+    /// <see cref="ExpireMessages"/> across every queue in one store operation, keyed by queue
+    /// name. The background TTL sweeper calls this once per tick instead of once per queue,
+    /// so the cost of an idle broker stays flat regardless of how many entities exist. The
+    /// default implementation loops the per-queue API for source compatibility - stores
+    /// should override it with a single scan.
+    /// </summary>
+    StoreSweep<IReadOnlyList<StoredMessage>> ExpireMessagesAll(DateTimeOffset now)
+    {
+        Dictionary<string, IReadOnlyList<StoredMessage>>? byQueue = null;
+        foreach (var queueName in ListQueueNames())
+        {
+            var expired = ExpireMessages(queueName, now);
+            if (expired.Count > 0)
+            {
+                (byQueue ??= new(StringComparer.OrdinalIgnoreCase))[queueName] = expired;
+            }
+        }
+        return byQueue is null
+            ? StoreSweep<IReadOnlyList<StoredMessage>>.Empty(hasPending: true)
+            : new(byQueue, HasPending: true);
+    }
+
+    /// <summary>
+    /// <see cref="ActivateScheduled"/> across every queue (including topic holding queues) in
+    /// one store operation, keyed by queue name with the number activated. Same contract and
+    /// rationale as <see cref="ExpireMessagesAll"/>.
+    /// </summary>
+    StoreSweep<int> ActivateScheduledAll(DateTimeOffset now)
+    {
+        Dictionary<string, int>? byQueue = null;
+        foreach (var queueName in ListQueueNames())
+        {
+            var activated = ActivateScheduled(queueName, now);
+            if (activated > 0)
+            {
+                (byQueue ??= new(StringComparer.OrdinalIgnoreCase))[queueName] = activated;
+            }
+        }
+        return byQueue is null
+            ? StoreSweep<int>.Empty(hasPending: true)
+            : new(byQueue, HasPending: true);
+    }
+
     /// <summary>The number of currently enqueued messages on the queue (active + locked, but not yet completed).</summary>
     Task<long> CountAsync(string queueName, CancellationToken cancellationToken = default);
 
@@ -226,6 +270,24 @@ public interface IMessageStore
     Task<long> PurgeAsync(string queueName, CancellationToken cancellationToken = default) => Task.FromResult(0L);
 
     /// <summary>
+    /// <see cref="PurgeAsync"/> for the whole store in one operation: every message, message
+    /// lock, session state blob and duplicate-detection history entry (queue and topic level)
+    /// goes; queues, topics, their settings and held session locks stay. Returns the number
+    /// of messages removed. The default implementation loops the per-queue API and cannot
+    /// reach topic-level dedup history - stores should override it with bulk deletes so a
+    /// broker-wide purge is not O(entities) store calls.
+    /// </summary>
+    async Task<long> PurgeAllAsync(CancellationToken cancellationToken = default)
+    {
+        long purged = 0;
+        foreach (var queueName in ListQueueNames())
+        {
+            purged += await PurgeAsync(queueName, cancellationToken).ConfigureAwait(false);
+        }
+        return purged;
+    }
+
+    /// <summary>
     /// Wait for and lock the next available message under peek-lock for <paramref name="lockDuration"/>.
     /// Returns <c>null</c> only on cancellation.
     /// </summary>
@@ -254,9 +316,30 @@ public interface IMessageStore
 
     /// <summary>
     /// Expire any locks whose deadlines have passed. Returns the number of locks released.
-    /// Called periodically by <c>LockManager</c>; tests can call this directly to drive expiration deterministically.
+    /// Tests can call this directly to drive expiration deterministically.
     /// </summary>
     int ExpireLocks(string queueName, DateTimeOffset now);
+
+    /// <summary>
+    /// <see cref="ExpireLocks"/> across every queue in one store operation, keyed by queue
+    /// name with the number of locks released. Called periodically by <c>LockManager</c>;
+    /// same contract and rationale as <see cref="ExpireMessagesAll"/>.
+    /// </summary>
+    StoreSweep<int> ExpireLocksAll(DateTimeOffset now)
+    {
+        Dictionary<string, int>? byQueue = null;
+        foreach (var queueName in ListQueueNames())
+        {
+            var expired = ExpireLocks(queueName, now);
+            if (expired > 0)
+            {
+                (byQueue ??= new(StringComparer.OrdinalIgnoreCase))[queueName] = expired;
+            }
+        }
+        return byQueue is null
+            ? StoreSweep<int>.Empty(hasPending: true)
+            : new(byQueue, HasPending: true);
+    }
 
     /// <summary>
     /// Extend a peek-lock by another <paramref name="lockDuration"/> from now.

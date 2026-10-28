@@ -63,6 +63,18 @@ internal static class SqliteSchema
             ON messages (queue_name, expires_at)
             WHERE expires_at IS NOT NULL;
 
+        -- The store-wide sweeps (ExpireMessagesAll / ActivateScheduledAll / ExpireLocksAll)
+        -- filter on the deadline column alone, without a queue_name prefix, so they need
+        -- their own partial indexes - with them an idle sweep tick is a no-row index probe
+        -- no matter how many entities or messages exist.
+        CREATE INDEX IF NOT EXISTS idx_messages_expires_global
+            ON messages (expires_at)
+            WHERE expires_at IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_messages_scheduled_global
+            ON messages (scheduled_enqueue_time)
+            WHERE scheduled_enqueue_time IS NOT NULL;
+
         CREATE TABLE IF NOT EXISTS locks (
             lock_token       TEXT PRIMARY KEY,
             queue_name       TEXT NOT NULL COLLATE NOCASE,
@@ -79,6 +91,9 @@ internal static class SqliteSchema
 
         CREATE INDEX IF NOT EXISTS idx_locks_expiry
             ON locks (queue_name, locked_until);
+
+        CREATE INDEX IF NOT EXISTS idx_locks_expiry_global
+            ON locks (locked_until);
 
         CREATE TABLE IF NOT EXISTS session_locks (
             queue_name    TEXT NOT NULL COLLATE NOCASE,

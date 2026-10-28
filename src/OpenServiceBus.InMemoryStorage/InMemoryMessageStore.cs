@@ -51,7 +51,22 @@ public sealed class InMemoryMessageStore : IMessageStore
         {
             return Task.FromResult(0L);
         }
+        return Task.FromResult(PurgeCore(state));
+    }
 
+    public Task<long> PurgeAllAsync(CancellationToken cancellationToken = default)
+    {
+        long purged = 0;
+        foreach (var state in _queues.Values)
+        {
+            purged += PurgeCore(state);
+        }
+        _topicDedup.Clear();
+        return Task.FromResult(purged);
+    }
+
+    private static long PurgeCore(QueueState state)
+    {
         long purged;
         lock (state.Sync)
         {
@@ -71,7 +86,7 @@ public sealed class InMemoryMessageStore : IMessageStore
                 session.State = null;
             }
         }
-        return Task.FromResult(purged);
+        return purged;
     }
 
     // Topic-level dedup mirrors the queue path's semantics (atomic check, lazy sweep,
@@ -202,12 +217,38 @@ public sealed class InMemoryMessageStore : IMessageStore
     public int ActivateScheduled(string queueName, DateTimeOffset now)
     {
         if (!_queues.TryGetValue(queueName, out var state)) return 0;
+        return ActivateScheduledCore(state, now, out _);
+    }
 
+    public StoreSweep<int> ActivateScheduledAll(DateTimeOffset now)
+    {
+        Dictionary<string, int>? byQueue = null;
+        var hasPending = false;
+        foreach (var (name, state) in _queues)
+        {
+            if (state.Messages.IsEmpty) continue;
+            var activated = ActivateScheduledCore(state, now, out var queuePending);
+            if (activated > 0)
+            {
+                (byQueue ??= new(StringComparer.OrdinalIgnoreCase))[name] = activated;
+            }
+            hasPending |= queuePending;
+        }
+        return new(byQueue ?? StoreSweep<int>.EmptyByQueue, hasPending);
+    }
+
+    private static int ActivateScheduledCore(QueueState state, DateTimeOffset now, out bool hasPending)
+    {
         var activated = 0;
+        hasPending = false;
         foreach (var (seq, msg) in state.Messages)
         {
             if (msg.ScheduledEnqueueTime is null) continue;       // not scheduled
-            if (msg.ScheduledEnqueueTime > now) continue;          // not yet
+            if (msg.ScheduledEnqueueTime > now)                    // not yet
+            {
+                hasPending = true;
+                continue;
+            }
             // Clear the scheduled marker atomically; only the winner of TryUpdate pushes to Available.
             var activated_ = msg with { ScheduledEnqueueTime = null };
             if (state.Messages.TryUpdate(seq, activated_, msg))
@@ -255,10 +296,32 @@ public sealed class InMemoryMessageStore : IMessageStore
     public IReadOnlyList<StoredMessage> ExpireMessages(string queueName, DateTimeOffset now)
     {
         if (!_queues.TryGetValue(queueName, out var state)) return Array.Empty<StoredMessage>();
+        return ExpireMessagesCore(state, now, out _);
+    }
 
+    public StoreSweep<IReadOnlyList<StoredMessage>> ExpireMessagesAll(DateTimeOffset now)
+    {
+        Dictionary<string, IReadOnlyList<StoredMessage>>? byQueue = null;
+        var hasPending = false;
+        foreach (var (name, state) in _queues)
+        {
+            if (state.Messages.IsEmpty) continue;
+            var expired = ExpireMessagesCore(state, now, out var queuePending);
+            if (expired.Count > 0)
+            {
+                (byQueue ??= new(StringComparer.OrdinalIgnoreCase))[name] = expired;
+            }
+            hasPending |= queuePending;
+        }
+        return new(byQueue ?? StoreSweep<IReadOnlyList<StoredMessage>>.EmptyByQueue, hasPending);
+    }
+
+    private static IReadOnlyList<StoredMessage> ExpireMessagesCore(QueueState state, DateTimeOffset now, out bool hasPending)
+    {
         // Build a set of currently-locked sequence numbers - locked messages stay alive
         // even if they cross their TTL deadline; the lock holder gets the chance to settle them.
         var expired = new List<StoredMessage>();
+        hasPending = false;
         // Hold the queue lock so a message being claimed by a concurrent dequeue (which inserts
         // its lock entry under the same lock) is never removed here between the claim and the
         // lock insert - otherwise a message could be both delivered and expired.
@@ -269,8 +332,12 @@ public sealed class InMemoryMessageStore : IMessageStore
 
             foreach (var (seq, msg) in state.Messages)
             {
-                if (!msg.IsExpired(now)) continue;
-                if (locked.Contains(seq)) continue;
+                if (msg.ExpiresAt is null) continue;
+                if (!msg.IsExpired(now) || locked.Contains(seq))
+                {
+                    hasPending = true;
+                    continue;
+                }
                 if (state.Messages.TryRemove(seq, out var removed))
                 {
                     expired.Add(removed);
@@ -438,7 +505,28 @@ public sealed class InMemoryMessageStore : IMessageStore
     public int ExpireLocks(string queueName, DateTimeOffset now)
     {
         if (!_queues.TryGetValue(queueName, out var state)) return 0;
+        return ExpireLocksCore(state, now);
+    }
 
+    public StoreSweep<int> ExpireLocksAll(DateTimeOffset now)
+    {
+        Dictionary<string, int>? byQueue = null;
+        var hasPending = false;
+        foreach (var (name, state) in _queues)
+        {
+            if (state.Locks.IsEmpty) continue;
+            var expired = ExpireLocksCore(state, now);
+            if (expired > 0)
+            {
+                (byQueue ??= new(StringComparer.OrdinalIgnoreCase))[name] = expired;
+            }
+            if (!state.Locks.IsEmpty) hasPending = true;
+        }
+        return new(byQueue ?? StoreSweep<int>.EmptyByQueue, hasPending);
+    }
+
+    private static int ExpireLocksCore(QueueState state, DateTimeOffset now)
+    {
         var expired = 0;
         // Lock so a renewal (which mutates LockedUntil in place) can't slip between reading the
         // deadline here and removing the token - otherwise a just-renewed lock could be revoked.

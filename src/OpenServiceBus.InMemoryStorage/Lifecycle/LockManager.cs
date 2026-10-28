@@ -1,34 +1,33 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using OpenServiceBus.Core.Entities;
-using OpenServiceBus.Core.Messaging;
 using OpenServiceBus.Core.Storage;
 
 namespace OpenServiceBus.InMemoryStorage.Lifecycle;
 
 /// <summary>
 /// Periodically sweeps the store for expired peek-locks and abandons them, returning their
-/// messages to the available pool. Tests can drive expiration directly via
-/// <see cref="IMessageStore.ExpireLocks"/> with a FakeTimeProvider - this background loop
-/// exists for runtime, not for tests.
+/// messages to the available pool. Each tick is a single store-wide call
+/// (<see cref="IMessageStore.ExpireLocksAll"/>) so the sweep cost does not grow with the
+/// number of entities, and the timer backs off to <see cref="IdleSweepInterval"/> while the
+/// store holds no locks at all (see docs/Background-Sweepers.md). Tests can drive expiration
+/// directly via <see cref="IMessageStore.ExpireLocks"/> with a FakeTimeProvider - this
+/// background loop exists for runtime, not for tests.
 /// </summary>
 public sealed class LockManager : BackgroundService
 {
     private static readonly TimeSpan SweepInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan IdleSweepInterval = TimeSpan.FromSeconds(1);
 
     private readonly IMessageStore _store;
-    private readonly IQueueRegistry _registry;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<LockManager> _logger;
 
     public LockManager(
         IMessageStore store,
-        IQueueRegistry registry,
         TimeProvider timeProvider,
         ILogger<LockManager> logger)
     {
         _store = store;
-        _registry = registry;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -40,7 +39,11 @@ public sealed class LockManager : BackgroundService
         {
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
-                await SweepOnceAsync(stoppingToken).ConfigureAwait(false);
+                var busy = SweepOnce();
+                var next = busy
+                    ? SweepInterval
+                    : TimeSpan.FromTicks(Math.Min(timer.Period.Ticks * 2, IdleSweepInterval.Ticks));
+                if (next != timer.Period) timer.Period = next;
             }
         }
         catch (OperationCanceledException)
@@ -49,24 +52,22 @@ public sealed class LockManager : BackgroundService
         }
     }
 
-    private async Task SweepOnceAsync(CancellationToken cancellationToken)
+    private bool SweepOnce()
     {
         var now = _timeProvider.GetUtcNow();
-        var queues = await _registry.ListAsync(cancellationToken).ConfigureAwait(false);
-        foreach (var q in queues)
+        try
         {
-            try
+            var sweep = _store.ExpireLocksAll(now);
+            foreach (var (queueName, expired) in sweep.ByQueue)
             {
-                var expired = _store.ExpireLocks(q.Name, now);
-                if (expired > 0)
-                {
-                    _logger.LogDebug("Expired {Count} lock(s) on queue {Queue}", expired, q.Name);
-                }
+                _logger.LogDebug("Expired {Count} lock(s) on queue {Queue}", expired, queueName);
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Lock expiration sweep failed for queue {Queue}", q.Name);
-            }
+            return sweep.ByQueue.Count > 0 || sweep.HasPending;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Lock expiration sweep failed");
+            return true;
         }
     }
 }

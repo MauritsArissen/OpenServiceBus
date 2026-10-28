@@ -92,7 +92,6 @@ internal sealed class TestListenerHarness : IAsyncDisposable
 
         var scheduledActivator = new ScheduledMessageActivator(
             storeAsIface,
-            queues,
             tp,
             NullLogger<ScheduledMessageActivator>.Instance);
 
