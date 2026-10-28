@@ -104,7 +104,9 @@ jobs:
           tags: ${{ env.APP_IMAGE }}
           build-args: VERSION=pr-${{ github.event.pull_request.number }}
           cache-from: type=gha,scope=preview-app
-          cache-to: type=gha,scope=preview-app,mode=max
+          # ignore-error: the GHA cache service sporadically refuses writes ("failed to
+          # reserve cache"); the cache is an optimization and must never fail a deploy.
+          cache-to: type=gha,scope=preview-app,mode=max,ignore-error=true
 
       - name: Build & push demo seeder image
         uses: docker/build-push-action@v6
@@ -115,7 +117,7 @@ jobs:
           push: true
           tags: ${{ env.SEEDER_IMAGE }}
           cache-from: type=gha,scope=preview-seeder
-          cache-to: type=gha,scope=preview-seeder,mode=max
+          cache-to: type=gha,scope=preview-seeder,mode=max,ignore-error=true
 
       # Same-repo PRs sync these from the PR head so changes to the deploy script or
       # demo libraries are testable in their own preview; fork PRs sync the trusted

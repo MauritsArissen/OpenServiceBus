@@ -31,8 +31,21 @@ The `PR preview` workflow (`.github/workflows/pr-preview.yml`) posts and maintai
 comment on the PR with the preview URL and the deployed commit. It is fully separate
 from the CI workflow - a red build does not block the preview and vice versa.
 
-Previews only run for branches in this repository. PRs from forks are skipped: the
-workflow needs deploy credentials that fork-triggered runs never receive.
+Previews for branches in this repository deploy automatically. PRs from forks deploy
+through the `PR preview (fork)` environment, which requires a maintainer to approve
+every run - each new push needs a fresh approval, and the images are built from the
+pinned head SHA shown in the approval UI while the deploy scripts always come from the
+trusted base branch.
+
+## Required Actions policy
+
+The workflow runs on `pull_request_target` (that is what lets an approved fork run reach
+the deploy secrets). From December 2, 2026 GitHub blocks `pull_request_target` on public
+repositories by default, so the repository carries an Actions event policy ("Allow
+pull_request_target for PR previews", Settings - Actions - policies) scoped to
+`.github/workflows/pr-preview.yml` that allows exactly its two triggers,
+`pull_request_target` and `workflow_dispatch`. If that policy is ever deleted, preview
+runs stop with a policy-blocked error; recreate it with the same scope and events.
 
 ## Images
 
