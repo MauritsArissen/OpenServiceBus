@@ -21,6 +21,12 @@ management API (and the Explorer and Testing host), not on the ATOM plane that
 - Duplicate-detection history, so a MessageId from before the purge lands again as a
   fresh message
 
+The broker-wide `POST /purge` additionally removes not-yet-activated scheduled topic
+publishes and topic-level duplicate-detection history - the two things the topic-scoped
+purge covers but entity-by-entity iteration cannot reach. It runs as a single store
+operation rather than a loop over entities, so it stays instant at thousands of queues
+and subscriptions (issue #90).
+
 ## What a purge keeps
 
 - The entity and all of its settings, subscriptions, and rules

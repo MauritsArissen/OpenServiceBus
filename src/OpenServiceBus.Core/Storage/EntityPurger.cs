@@ -64,19 +64,25 @@ public sealed class EntityPurger
         return purged;
     }
 
+    /// <summary>
+    /// Broker-wide purge in a single store operation (<see cref="IMessageStore.PurgeAllAsync"/>)
+    /// rather than 3 store calls per entity - at thousands of entities the per-entity loop
+    /// monopolized the store and timed out clients (issue #90). Also covers topic
+    /// scheduled-publish holding queues and topic-level dedup history, which the old
+    /// per-entity loop never reached. <c>Entities</c> counts the non-dead-letter queues the
+    /// registry knows, matching the previous response shape.
+    /// </summary>
     public async Task<(long Purged, int Entities)> PurgeAllAsync(CancellationToken cancellationToken = default)
     {
-        long purged = 0;
         var entities = 0;
         foreach (var queue in await _queues.ListAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (EntityNames.IsDeadLetterQueue(queue.Name))
+            if (!EntityNames.IsDeadLetterQueue(queue.Name))
             {
-                continue;
+                entities++;
             }
-            purged += await PurgeBackingQueueAsync(queue.Name, deadLetterOnly: false, cancellationToken).ConfigureAwait(false);
-            entities++;
         }
+        var purged = await _store.PurgeAllAsync(cancellationToken).ConfigureAwait(false);
         return (purged, entities);
     }
 

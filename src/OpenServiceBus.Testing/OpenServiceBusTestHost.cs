@@ -175,7 +175,6 @@ public sealed class OpenServiceBusTestHost : IAsyncDisposable
 
         var scheduledActivator = new ScheduledMessageActivator(
             storeAsIface,
-            queues,
             opts.TimeProvider,
             NullLogger<ScheduledMessageActivator>.Instance,
             topics,

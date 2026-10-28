@@ -43,6 +43,7 @@ in the repo - every page here is committed in source.
 ### Operations
 
 - **[OpenTelemetry](OpenTelemetry)** - tracing + metrics emitted natively.
+- **[Background Sweepers](Background-Sweepers)** - lock/TTL/scheduled sweeps, store-wide ticks, idle backoff.
 - **[Testing](Testing)** - `OpenServiceBusTestHost`, fake time, parity tests.
 
 ### Contributing

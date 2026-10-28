@@ -12,17 +12,21 @@ namespace OpenServiceBus.Amqp.Lifecycle;
 /// scheduled messages until this service moves them - so idle queues with future-dated
 /// messages stay quiescent until their time.
 ///
-/// Topics get the same sweep over their scheduled-publish holding queue, with one extra
-/// step: an activated topic message has no receiver, so the sweep FANS IT OUT through the
-/// router - filters are evaluated at activation time (a subscription created between
-/// schedule and activation receives its copy), matching Azure.
+/// Each tick is a single store-wide call (<see cref="IMessageStore.ActivateScheduledAll"/>)
+/// covering queues and topic holding queues alike, so the sweep cost does not grow with the
+/// number of entities, and the timer backs off to <see cref="IdleSweepInterval"/> while
+/// nothing in the store is scheduled (see docs/Background-Sweepers.md).
+///
+/// Topics get one extra step: an activated topic message has no receiver, so the sweep FANS
+/// IT OUT through the router - filters are evaluated at activation time (a subscription
+/// created between schedule and activation receives its copy), matching Azure.
 /// </summary>
 public sealed class ScheduledMessageActivator : BackgroundService
 {
     private static readonly TimeSpan SweepInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan IdleSweepInterval = TimeSpan.FromSeconds(1);
 
     private readonly IMessageStore _store;
-    private readonly IQueueRegistry _registry;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ScheduledMessageActivator> _logger;
     private readonly ITopicRegistry? _topics;
@@ -30,14 +34,12 @@ public sealed class ScheduledMessageActivator : BackgroundService
 
     public ScheduledMessageActivator(
         IMessageStore store,
-        IQueueRegistry registry,
         TimeProvider timeProvider,
         ILogger<ScheduledMessageActivator> logger,
         ITopicRegistry? topics = null,
         IMessageRouter? router = null)
     {
         _store = store;
-        _registry = registry;
         _timeProvider = timeProvider;
         _logger = logger;
         _topics = topics;
@@ -51,48 +53,53 @@ public sealed class ScheduledMessageActivator : BackgroundService
         {
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
-                await SweepOnceAsync(stoppingToken).ConfigureAwait(false);
+                var busy = await SweepOnceAsync(stoppingToken).ConfigureAwait(false);
+                var next = busy
+                    ? SweepInterval
+                    : TimeSpan.FromTicks(Math.Min(timer.Period.Ticks * 2, IdleSweepInterval.Ticks));
+                if (next != timer.Period) timer.Period = next;
             }
         }
         catch (OperationCanceledException) { /* normal shutdown */ }
     }
 
-    private async Task SweepOnceAsync(CancellationToken cancellationToken)
+    private async Task<bool> SweepOnceAsync(CancellationToken cancellationToken)
     {
         var now = _timeProvider.GetUtcNow();
-        var queues = await _registry.ListAsync(cancellationToken).ConfigureAwait(false);
-        foreach (var queue in queues)
+        StoreSweep<int> sweep;
+        try
         {
-            try
-            {
-                var activated = _store.ActivateScheduled(queue.Name, now);
-                if (activated > 0)
-                {
-                    _logger.LogDebug("Activated {Count} scheduled message(s) on {Queue}", activated, queue.Name);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Scheduled-message sweep failed for queue {Queue}", queue.Name);
-            }
+            sweep = _store.ActivateScheduledAll(now);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Scheduled-message sweep failed");
+            return true;
         }
 
-        if (_topics is null || _router is not { } router) return;
-        foreach (var topic in await _topics.ListTopicsAsync(cancellationToken).ConfigureAwait(false))
+        foreach (var (entityName, activated) in sweep.ByQueue)
         {
             try
             {
-                var due = _store.ActivateScheduled(topic.Name, now);
-                for (var i = 0; i < due; i++)
+                if (_topics is not null && _router is { } router
+                    && await _topics.GetTopicAsync(entityName, cancellationToken).ConfigureAwait(false) is not null)
                 {
-                    await PublishOneDueTopicMessageAsync(router, topic.Name, cancellationToken).ConfigureAwait(false);
+                    for (var i = 0; i < activated; i++)
+                    {
+                        await PublishOneDueTopicMessageAsync(router, entityName, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("Activated {Count} scheduled message(s) on {Queue}", activated, entityName);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Scheduled-publish sweep failed for topic {Topic}", topic.Name);
+                _logger.LogWarning(ex, "Scheduled-message sweep failed for {Entity}", entityName);
             }
         }
+        return sweep.ByQueue.Count > 0 || sweep.HasPending;
     }
 
     private async Task PublishOneDueTopicMessageAsync(IMessageRouter router, string topicName, CancellationToken cancellationToken)

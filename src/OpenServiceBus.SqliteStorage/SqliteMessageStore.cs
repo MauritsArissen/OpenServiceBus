@@ -128,6 +128,33 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    public async Task<long> PurgeAllAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var count = _connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM messages";
+            var purged = Convert.ToInt64(count.ExecuteScalar());
+
+            // Same shape as the per-queue purge, in one pass over each table: session LOCKS
+            // survive so live session receivers keep their exclusivity, everything
+            // message-shaped goes - including topic holding queues and topic dedup history,
+            // which the per-entity loop this replaces never reached.
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                DELETE FROM messages;
+                DELETE FROM locks;
+                DELETE FROM session_state;
+                DELETE FROM dedup_history;
+                DELETE FROM topic_dedup_history;
+                """;
+            cmd.ExecuteNonQuery();
+            return purged;
+        }
+        finally { _gate.Release(); }
+    }
+
     public IReadOnlyCollection<string> ListQueueNames()
     {
         _gate.Wait();
@@ -715,6 +742,52 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    public StoreSweep<int> ActivateScheduledAll(DateTimeOffset now)
+    {
+        _gate.Wait();
+        try
+        {
+            Dictionary<string, int>? byQueue = null;
+            using (var due = _connection.CreateCommand())
+            {
+                due.CommandText = """
+                    SELECT queue_name, COUNT(*)
+                    FROM messages
+                    WHERE scheduled_enqueue_time IS NOT NULL AND scheduled_enqueue_time <= $now
+                    GROUP BY queue_name
+                    """;
+                due.Parameters.AddWithValue("$now", ToUnixMs(now));
+                using var rdr = due.ExecuteReader();
+                while (rdr.Read())
+                {
+                    (byQueue ??= new(StringComparer.OrdinalIgnoreCase))[rdr.GetString(0)] = rdr.GetInt32(1);
+                }
+            }
+
+            if (byQueue is not null)
+            {
+                using var activate = _connection.CreateCommand();
+                activate.CommandText = """
+                    UPDATE messages
+                    SET scheduled_enqueue_time = NULL
+                    WHERE scheduled_enqueue_time IS NOT NULL AND scheduled_enqueue_time <= $now
+                    """;
+                activate.Parameters.AddWithValue("$now", ToUnixMs(now));
+                activate.ExecuteNonQuery();
+                foreach (var queueName in byQueue.Keys)
+                {
+                    NotifyAvailable(queueName);
+                }
+            }
+
+            using var probe = _connection.CreateCommand();
+            probe.CommandText = "SELECT EXISTS(SELECT 1 FROM messages WHERE scheduled_enqueue_time IS NOT NULL)";
+            var hasPending = Convert.ToInt64(probe.ExecuteScalar()) != 0;
+            return new(byQueue ?? StoreSweep<int>.EmptyByQueue, hasPending);
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task<bool> TryCancelScheduledAsync(string queueName, long sequenceNumber, CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -766,23 +839,79 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
 
             if (expired.Count == 0) return expired;
 
-            // Bulk-delete by IN list. SQLite has a parameter limit (default 32766) so chunk.
-            const int chunk = 500;
-            for (var offset = 0; offset < expired.Count; offset += chunk)
-            {
-                var slice = expired.Skip(offset).Take(chunk).ToList();
-                using var del = _connection.CreateCommand();
-                var placeholders = string.Join(",", slice.Select((_, i) => $"$s{i}"));
-                del.CommandText = $"DELETE FROM messages WHERE queue_name = $q AND sequence_number IN ({placeholders})";
-                del.Parameters.AddWithValue("$q", queueName);
-                for (var i = 0; i < slice.Count; i++)
-                    del.Parameters.AddWithValue($"$s{i}", slice[i].SequenceNumber);
-                del.ExecuteNonQuery();
-            }
-
+            DeleteMessagesBySequence(queueName, expired);
             return expired;
         }
         finally { _gate.Release(); }
+    }
+
+    public StoreSweep<IReadOnlyList<StoredMessage>> ExpireMessagesAll(DateTimeOffset now)
+    {
+        _gate.Wait();
+        try
+        {
+            Dictionary<string, IReadOnlyList<StoredMessage>>? byQueue = null;
+            using (var select = _connection.CreateCommand())
+            {
+                select.CommandText = """
+                    SELECT m.sequence_number, m.enqueued_at, m.encoded_message, m.delivery_count,
+                           m.expires_at, m.scheduled_enqueue_time, m.is_deferred, m.session_id, m.enqueued_sequence_number,
+                           m.queue_name
+                    FROM messages m
+                    WHERE m.expires_at IS NOT NULL
+                      AND m.expires_at <= $now
+                      AND (m.scheduled_enqueue_time IS NULL OR m.scheduled_enqueue_time <= $now)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM locks l
+                          WHERE l.queue_name = m.queue_name AND l.sequence_number = m.sequence_number
+                      )
+                    """;
+                select.Parameters.AddWithValue("$now", ToUnixMs(now));
+                using var rdr = select.ExecuteReader();
+                while (rdr.Read())
+                {
+                    byQueue ??= new(StringComparer.OrdinalIgnoreCase);
+                    var queueName = rdr.GetString(9);
+                    if (!byQueue.TryGetValue(queueName, out var list))
+                    {
+                        byQueue[queueName] = list = new List<StoredMessage>();
+                    }
+                    ((List<StoredMessage>)list).Add(ReadStoredMessage(rdr, 0));
+                }
+            }
+
+            if (byQueue is not null)
+            {
+                foreach (var (queueName, expired) in byQueue)
+                {
+                    DeleteMessagesBySequence(queueName, expired);
+                }
+            }
+
+            using var probe = _connection.CreateCommand();
+            probe.CommandText = "SELECT EXISTS(SELECT 1 FROM messages WHERE expires_at IS NOT NULL)";
+            var hasPending = Convert.ToInt64(probe.ExecuteScalar()) != 0;
+            return new(byQueue ?? StoreSweep<IReadOnlyList<StoredMessage>>.EmptyByQueue, hasPending);
+        }
+        finally { _gate.Release(); }
+    }
+
+    // Bulk-delete by IN list. SQLite has a parameter limit (default 32766) so chunk.
+    // Must run under _gate.
+    private void DeleteMessagesBySequence(string queueName, IReadOnlyList<StoredMessage> messages)
+    {
+        const int chunk = 500;
+        for (var offset = 0; offset < messages.Count; offset += chunk)
+        {
+            var slice = messages.Skip(offset).Take(chunk).ToList();
+            using var del = _connection.CreateCommand();
+            var placeholders = string.Join(",", slice.Select((_, i) => $"$s{i}"));
+            del.CommandText = $"DELETE FROM messages WHERE queue_name = $q AND sequence_number IN ({placeholders})";
+            del.Parameters.AddWithValue("$q", queueName);
+            for (var i = 0; i < slice.Count; i++)
+                del.Parameters.AddWithValue($"$s{i}", slice[i].SequenceNumber);
+            del.ExecuteNonQuery();
+        }
     }
 
     // ── Dequeue / dispositions ───────────────────────────────────────
@@ -1030,33 +1159,96 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             }
 
             if (expired.Count == 0) return 0;
-            var notify = false;
-            WithTransaction(tx =>
+            foreach (var queue in ReleaseExpiredLockRows(expired))
             {
-                foreach (var row in expired)
-                {
-                    using var del = _connection.CreateCommand();
-                    del.Transaction = tx;
-                    del.CommandText = "DELETE FROM locks WHERE lock_token = $tok";
-                    del.Parameters.AddWithValue("$tok", row.LockToken);
-                    del.ExecuteNonQuery();
-
-                    if (row.WasDeferred)
-                    {
-                        SetDeferred(tx, row.QueueName, row.SequenceNumber, deferred: true);
-                    }
-                    else
-                    {
-                        IncrementDeliveryCount(tx, row.QueueName, row.SequenceNumber);
-                        notify = true;
-                    }
-                }
-                return true;
-            });
-            if (notify) NotifyAvailable(queueName);
+                NotifyAvailable(queue);
+            }
             return expired.Count;
         }
         finally { _gate.Release(); }
+    }
+
+    public StoreSweep<int> ExpireLocksAll(DateTimeOffset now)
+    {
+        _gate.Wait();
+        try
+        {
+            var expired = new List<LockRow>();
+            using (var sel = _connection.CreateCommand())
+            {
+                sel.CommandText = """
+                    SELECT lock_token, queue_name, sequence_number, was_deferred, session_id
+                    FROM locks
+                    WHERE locked_until <= $now
+                    """;
+                sel.Parameters.AddWithValue("$now", ToUnixMs(now));
+                using var rdr = sel.ExecuteReader();
+                while (rdr.Read())
+                {
+                    expired.Add(new LockRow(
+                        rdr.GetString(0),
+                        rdr.GetString(1),
+                        rdr.GetInt64(2),
+                        rdr.GetInt64(3) != 0,
+                        rdr.IsDBNull(4) ? null : rdr.GetString(4)));
+                }
+            }
+
+            var byQueue = StoreSweep<int>.EmptyByQueue;
+            if (expired.Count > 0)
+            {
+                var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var row in expired)
+                {
+                    counts[row.QueueName] = counts.TryGetValue(row.QueueName, out var n) ? n + 1 : 1;
+                }
+                byQueue = counts;
+                foreach (var queue in ReleaseExpiredLockRows(expired))
+                {
+                    NotifyAvailable(queue);
+                }
+            }
+
+            using var probe = _connection.CreateCommand();
+            probe.CommandText = "SELECT EXISTS(SELECT 1 FROM locks)";
+            var hasPending = Convert.ToInt64(probe.ExecuteScalar()) != 0;
+            return new(byQueue, hasPending);
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Settles a batch of expired lock rows: the lock row goes, deferred-origin locks restore
+    /// the message's Deferred state, and everything else re-enters the available pool with a
+    /// bumped delivery count. Must run under <see cref="_gate"/>. Returns the queues whose
+    /// available pool changed, so the caller can notify waiting dequeues after the transaction.
+    /// </summary>
+    private IReadOnlyCollection<string> ReleaseExpiredLockRows(List<LockRow> expired)
+    {
+        var notifyQueues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        WithTransaction(tx =>
+        {
+            foreach (var row in expired)
+            {
+                using var del = _connection.CreateCommand();
+                del.Transaction = tx;
+                del.CommandText = "DELETE FROM locks WHERE lock_token = $tok";
+                del.Parameters.AddWithValue("$tok", row.LockToken);
+                del.ExecuteNonQuery();
+
+                if (row.WasDeferred)
+                {
+                    SetDeferred(tx, row.QueueName, row.SequenceNumber, deferred: true);
+                }
+                else
+                {
+                    IncrementDeliveryCount(tx, row.QueueName, row.SequenceNumber);
+                    notifyQueues.Add(row.QueueName);
+                }
+            }
+            return true;
+        });
+        return notifyQueues;
     }
 
     public async Task<DateTimeOffset?> TryRenewLockAsync(
