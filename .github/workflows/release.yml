@@ -223,8 +223,9 @@ jobs:
           outputs: type=image,name=ghcr.io/mauritsarissen/openservicebus,push-by-digest=true,name-canonical=true,push=true
           provenance: false # keep the manifest a clean 2-entry list for imagetools merge
           # Per-platform cache scope so the two matrix legs don't overwrite each other.
+          # ignore-error: a flaky GHA cache write must never fail a release build.
           cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }},ignore-error=true
 
       - name: Export digest
         run: |
