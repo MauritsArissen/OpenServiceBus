@@ -18,6 +18,22 @@ public sealed class AmqpListenerOptions
     public uint MaxFrameSize { get; set; } = 256 * 1024;
 
     /// <summary>
+    /// Sessions allowed per AMQP connection (the Open frame's channel-max, plus one). The
+    /// Azure SDK opens a session per sender/receiver link, so AMQPNetLite's default of 256
+    /// capped one ServiceBusClient at ~255 concurrent links, failing attach 256+ with
+    /// QuotaExceeded - a ceiling real Service Bus does not have (issue #93). Default 5000
+    /// matches the service's concurrent-receiver headroom.
+    /// </summary>
+    public int MaxSessionsPerConnection { get; set; } = 5000;
+
+    /// <summary>
+    /// Links allowed per AMQP session (the Begin frame's handle-max, plus one). See
+    /// <see cref="MaxSessionsPerConnection"/>; raised in the same spirit for clients that
+    /// multiplex many links over one session.
+    /// </summary>
+    public int MaxLinksPerSession { get; set; } = 5000;
+
+    /// <summary>
     /// Maximum message size advertised on link attach, in bytes. The Azure SDK reads this on
     /// link attach and rejects sends if it remains 0/unset (interprets as -1, refusing every message).
     /// Default 256 KB matches Azure Service Bus Standard tier.

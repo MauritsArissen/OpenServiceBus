@@ -20,9 +20,12 @@ namespace OpenServiceBus.SqliteStorage;
 /// later - the gating bottleneck for now is the lone connection.
 ///
 /// Long-poll dequeue uses an in-process per-queue <see cref="Channel{T}"/> as a notification
-/// channel: every enqueue / abandon / scheduled-activation writes to it, and
-/// <see cref="TryDequeueAsync"/> waits on it (with a polling timeout fallback) before
-/// re-running the claim query.
+/// channel: every enqueue / abandon / lock-expiry / scheduled-activation writes to it, and
+/// <see cref="TryDequeueAsync"/> waits on it before re-running the claim query. While a
+/// queue is known empty, parked receivers skip the claim entirely (no gate, no transaction)
+/// until something signals availability - plus a once-per-second-per-queue safety probe for
+/// writers on another process that in-process notifications cannot see. See
+/// docs/Persistence.md.
 /// </summary>
 public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
 {
@@ -35,11 +38,22 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
     // at the DB level anyway; doing it here lets us avoid SqliteException busy retries.
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    // Per-queue notification channels - used by TryDequeueAsync to wake on enqueue.
-    // Bounded capacity of 1 with DropWrite means multiple signals collapse into "go check"
-    // without piling up; the dequeue path can drain at its own pace.
-    private readonly ConcurrentDictionary<string, Channel<bool>> _notify =
+    // Per-queue notification state - used by TryDequeueAsync to wake on enqueue and, via
+    // KnownEmpty, to keep parked receivers from hammering the gate with claim transactions
+    // while a queue has nothing to deliver (issue #90, receive path). Bounded capacity of 1
+    // with DropWrite means multiple signals collapse into "go check" without piling up.
+    private readonly ConcurrentDictionary<string, QueueSignal> _notify =
         new(StringComparer.OrdinalIgnoreCase);
+
+    // How often one parked receiver per queue re-checks the store although nothing signaled
+    // availability - the safety net for rows written by another process on a shared db file,
+    // which the in-process notification can never see.
+    private static readonly long IdleSafetyProbeMs = 1000;
+
+    private long _claimAttempts;
+
+    /// <summary>Gated claim transactions run since construction; lets tests prove parked receivers stay off the store.</summary>
+    internal long ClaimAttempts => Interlocked.Read(ref _claimAttempts);
 
     // Cumulative per-queue metrics counters (process-lifetime, in-memory - metrics are
     // ephemeral by design). Enqueued = new arrivals; Completed = successful settlements.
@@ -922,34 +936,32 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         string? associatedLinkName = null,
         CancellationToken cancellationToken = default)
     {
-        // Long-poll: try-claim, wait on the notify channel (with poll-interval timeout), retry.
+        // Long-poll: claim when the queue might hold something, otherwise park on the notify
+        // channel without touching the store - idle receivers must be free (issue #90).
+        var signal = GetSignal(queueName);
         while (!cancellationToken.IsCancellationRequested)
         {
-            var locked = TryClaimNextNow(queueName, lockDuration, associatedLinkName, sessionId: null);
-            if (locked is not null) return locked;
-
-            // Wait for either a wake-up signal or the poll interval, whichever comes first.
-            var notify = GetNotifyChannel(queueName);
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(_options.DequeuePollInterval);
-            try
+            if (ShouldProbeQueue(signal))
             {
-                await notify.Reader.WaitToReadAsync(cts.Token).ConfigureAwait(false);
-                // Drain so the next iteration doesn't immediately re-trigger on stale signal.
-                notify.Reader.TryRead(out _);
+                var locked = await TryClaimNextAsync(queueName, lockDuration, associatedLinkName, sessionId: null).ConfigureAwait(false);
+                if (locked is not null) return locked;
             }
-            catch (OperationCanceledException)
-            {
-                if (cancellationToken.IsCancellationRequested) return null;
-                // Otherwise it was just the poll-interval timeout; loop and retry the claim.
-            }
+            await WaitForSignalAsync(signal, cancellationToken).ConfigureAwait(false);
         }
         return null;
     }
 
-    private LockedMessage? TryClaimNextNow(string queueName, TimeSpan lockDuration, string? associatedLinkName, string? sessionId)
+    /// <summary>
+    /// The claim path takes the gate asynchronously like every other client-facing operation:
+    /// SemaphoreSlim lets a stream of synchronous Wait() callers barge past queued WaitAsync
+    /// waiters, which under constant receive traffic on a small CPU budget stalled single
+    /// sends and admin calls for minutes (issue #90). Cancellation is deliberately not
+    /// observed while waiting for the gate - it is held only for one short statement batch.
+    /// </summary>
+    private async Task<LockedMessage?> TryClaimNextAsync(string queueName, TimeSpan lockDuration, string? associatedLinkName, string? sessionId)
     {
-        _gate.Wait();
+        Interlocked.Increment(ref _claimAttempts);
+        await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
             var now = _timeProvider.GetUtcNow();
@@ -1008,7 +1020,26 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
             {
                 if (rdr.Read()) msg = ReadStoredMessage(rdr, 0);
             }
-            if (msg is null) { tx.Commit(); return null; }
+            if (msg is null)
+            {
+                // An unfiltered miss proves the queue holds nothing claimable. A session-filtered
+                // miss only covers one session, so it re-asks for the whole queue - otherwise a
+                // sessionful queue (where no unfiltered claim ever runs) could never park its
+                // receivers. Marking under the gate keeps the flag ordered against
+                // NotifyAvailable (also under the gate).
+                var queueEmpty = sessionId is null || !AnyClaimable(tx, queueName, now);
+                tx.Commit();
+                if (queueEmpty)
+                {
+                    var signal = GetSignal(queueName);
+                    Volatile.Write(ref signal.LastEmptyProbeTicks, Environment.TickCount64);
+                    signal.KnownEmpty = true;
+                }
+                return null;
+            }
+            // A row surfaced although the queue was marked empty (a writer on another process,
+            // which no in-process notify announces) - unmark so parked receivers claim again.
+            GetSignal(queueName).KnownEmpty = false;
 
             var lockToken = Guid.NewGuid();
             var lockedUntil = now + lockDuration;
@@ -1523,28 +1554,34 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         string? linkName = null,
         CancellationToken cancellationToken = default)
     {
-        // Same long-poll shape as TryDequeueAsync but with the session filter applied.
+        // Same long-poll shape as TryDequeueAsync but with the session filter applied. The
+        // KnownEmpty skip only fires when the whole queue is empty (a session-filtered miss
+        // re-checks the full queue before marking), so an idle sessionful queue parks its
+        // receivers while one busy session keeps every waiter on that queue probing.
+        var signal = GetSignal(queueName);
+        var lastLockCheck = long.MinValue;
         while (!cancellationToken.IsCancellationRequested)
         {
             // If this receiver no longer holds the session lock, return null WITHOUT the poll
             // cancellation so the AMQP session receiver stops its pump (lock-lost) instead of
-            // spinning against a session another receiver now owns.
-            if (!IsSessionLockHeld(queueName, sessionId, linkName)) return null;
+            // spinning against a session another receiver now owns. A parked waiter re-checks
+            // at most once per IdleSafetyProbeMs - otherwise every idle session receiver would
+            // still cost a gated transaction per poll. Claims re-verify the lock themselves
+            // inside their transaction, so the throttle never lets a lost lock deliver.
+            var probe = ShouldProbeQueue(signal);
+            var nowTicks = Environment.TickCount64;
+            if (probe || nowTicks - lastLockCheck >= IdleSafetyProbeMs)
+            {
+                lastLockCheck = nowTicks;
+                if (!await IsSessionLockHeldAsync(queueName, sessionId, linkName, CancellationToken.None).ConfigureAwait(false)) return null;
+            }
 
-            var locked = TryClaimNextNow(queueName, messageLockDuration, linkName, sessionId);
-            if (locked is not null) return locked;
-            var notify = GetNotifyChannel(queueName);
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(_options.DequeuePollInterval);
-            try
+            if (probe)
             {
-                await notify.Reader.WaitToReadAsync(cts.Token).ConfigureAwait(false);
-                notify.Reader.TryRead(out _);
+                var locked = await TryClaimNextAsync(queueName, messageLockDuration, linkName, sessionId).ConfigureAwait(false);
+                if (locked is not null) return locked;
             }
-            catch (OperationCanceledException)
-            {
-                if (cancellationToken.IsCancellationRequested) return null;
-            }
+            await WaitForSignalAsync(signal, cancellationToken).ConfigureAwait(false);
         }
         return null;
     }
@@ -1565,19 +1602,6 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
         if (FromUnixMs(rdr.GetInt64(0)) <= now) return false;
         var holder = rdr.IsDBNull(1) ? null : rdr.GetString(1);
         return holder is null || linkName is null || string.Equals(holder, linkName, StringComparison.Ordinal);
-    }
-
-    private bool IsSessionLockHeld(string queueName, string sessionId, string? linkName)
-    {
-        _gate.Wait();
-        try
-        {
-            using var tx = _connection.BeginTransaction();
-            var held = SessionLockHeldBy(tx, queueName, sessionId, linkName, _timeProvider.GetUtcNow());
-            tx.Commit();
-            return held;
-        }
-        finally { _gate.Release(); }
     }
 
     public async Task<DateTimeOffset?> TryRenewSessionLockAsync(
@@ -1763,12 +1787,90 @@ public sealed class SqliteMessageStore : IMessageStore, IAsyncDisposable
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    private Channel<bool> GetNotifyChannel(string queueName) =>
-        _notify.GetOrAdd(queueName, _ => Channel.CreateBounded<bool>(
-            new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite }));
+    private bool AnyClaimable(SqliteTransaction tx, string queueName, DateTimeOffset now)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            SELECT EXISTS(
+                SELECT 1 FROM messages m
+                WHERE m.queue_name = $q
+                  AND m.is_deferred = 0
+                  AND (m.scheduled_enqueue_time IS NULL OR m.scheduled_enqueue_time <= $now)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM locks l
+                      WHERE l.queue_name = m.queue_name AND l.sequence_number = m.sequence_number
+                  )
+            )
+            """;
+        cmd.Parameters.AddWithValue("$q", queueName);
+        cmd.Parameters.AddWithValue("$now", ToUnixMs(now));
+        return Convert.ToInt64(cmd.ExecuteScalar()) != 0;
+    }
 
-    private void NotifyAvailable(string queueName) =>
-        GetNotifyChannel(queueName).Writer.TryWrite(true);
+    private QueueSignal GetSignal(string queueName) =>
+        _notify.GetOrAdd(queueName, _ => new QueueSignal());
+
+    /// <summary>
+    /// Every transition that can make a message claimable funnels through here (enqueue,
+    /// abandon, lock expiry, scheduled activation), always while holding <see cref="_gate"/> -
+    /// that ordering is what makes <see cref="QueueSignal.KnownEmpty"/> race-free against the
+    /// empty-claim marking in <see cref="TryClaimNextAsync"/>.
+    /// </summary>
+    private void NotifyAvailable(string queueName)
+    {
+        var signal = GetSignal(queueName);
+        signal.KnownEmpty = false;
+        signal.Channel.Writer.TryWrite(true);
+    }
+
+    /// <summary>
+    /// Whether a parked receiver should run a claim transaction. True whenever something
+    /// signaled availability since the last empty claim; while the queue is known empty, the
+    /// CAS elects at most one prober per queue per <see cref="IdleSafetyProbeMs"/>, so any
+    /// number of parked links costs the store one transaction per second per queue, not
+    /// five per second per link.
+    /// </summary>
+    private static bool ShouldProbeQueue(QueueSignal signal)
+    {
+        if (!signal.KnownEmpty) return true;
+        var last = Volatile.Read(ref signal.LastEmptyProbeTicks);
+        var now = Environment.TickCount64;
+        if (now - last < IdleSafetyProbeMs) return false;
+        return Interlocked.CompareExchange(ref signal.LastEmptyProbeTicks, now, last) == last;
+    }
+
+    private async Task WaitForSignalAsync(QueueSignal signal, CancellationToken cancellationToken)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(_options.DequeuePollInterval);
+        try
+        {
+            await signal.Channel.Reader.WaitToReadAsync(cts.Token).ConfigureAwait(false);
+            // Drain so the next iteration doesn't immediately re-trigger on a stale signal.
+            signal.Channel.Reader.TryRead(out _);
+        }
+        catch (OperationCanceledException)
+        {
+            // Poll-interval timeout or caller cancellation - the caller's loop decides.
+        }
+    }
+
+    private sealed class QueueSignal
+    {
+        public readonly Channel<bool> Channel = System.Threading.Channels.Channel.CreateBounded<bool>(
+            new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
+
+        /// <summary>
+        /// True while the last gated claim saw zero available rows and nothing has signaled
+        /// availability since. Only ever set under <see cref="_gate"/>, cleared by
+        /// <see cref="NotifyAvailable"/> (also under the gate), so it is never stale-true.
+        /// </summary>
+        public volatile bool KnownEmpty;
+
+        /// <summary>Environment.TickCount64 of the last empty-result claim, for the safety probe.</summary>
+        public long LastEmptyProbeTicks;
+    }
 
     private static long? ToUnixMs(DateTimeOffset? dto) =>
         dto?.ToUnixTimeMilliseconds();

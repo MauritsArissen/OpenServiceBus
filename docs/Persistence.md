@@ -173,6 +173,29 @@ that, every rehydrated subscription would silently widen back to match-all.
 > expiration, dead-letter forwarding, status) and gives them a `$Default` TrueFilter. Once
 > the subscription is next created or updated, it gets a real snapshot.
 
+## Concurrency and idle receivers
+
+The SQLite store serializes all access through one connection and one lock, so anything
+that touches the store repeatedly while doing no useful work delays every client
+operation queued behind it. Two rules keep an idle broker idle regardless of topology
+size (issue #90):
+
+- **Background sweeps are one store operation per tick**, not one per entity - see
+  [Background Sweepers](Background-Sweepers.md).
+- **Parked receivers do not poll the store.** A receiver waiting on an empty queue or
+  subscription parks on an in-process notification instead of re-running its claim
+  query. Every transition that makes a message claimable - send, abandon, lock expiry,
+  scheduled activation, transaction commit - wakes the queue's waiters. While a queue
+  stays empty, one waiter per queue re-checks the store at most once per second, as a
+  safety net for rows written by a different process on the same file (which the
+  in-process notification cannot see). Parked session receivers re-verify their session
+  lock at the same once-per-second cadence. The cost of an idle receiver is therefore
+  flat: a few hundred processors on empty subscriptions do not slow down sends, admin
+  calls, or each other.
+
+Client-facing operations, including the receive claim, wait for the store lock
+asynchronously, so a burst of receive traffic cannot starve a single send or admin call.
+
 ## File location tips
 
 - **Don't** put the `.db` on tmpfs unless you want ephemeral mode (you already have `:memory:` for that).

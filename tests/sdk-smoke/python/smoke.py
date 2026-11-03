@@ -6,7 +6,7 @@ Canonical smoke sequence - identical across the dotnet/node/java/python smokes:
   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
   -> queue dedup -> topic dedup -> batch dedup -> lock lost -> topic schedule
   -> correlation filter -> system props -> batch receive -> hierarchical names
-  -> topic runtime props
+  -> topic runtime props -> many links
   (-> abandon props runs in the other three smokes; azure-servicebus for Python does not
    expose propertiesToModify on its settlement methods, so there is nothing to exercise)
   (-> cross-entity txn runs in the dotnet and java smokes; azure-servicebus for Python
@@ -23,6 +23,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from azure.servicebus import (
@@ -654,6 +655,41 @@ def run() -> None:
         )
         check("topic runtime props", rt_ok, "" if rt_ok else f"status {rt_status} size {rt_size}")
         http("DELETE", f"{base}/{rt_topic}?api-version=2021-05")
+
+        # 32. many links - one client holds more than 255 links at once (issue #93): the
+        # broker used to cap a connection at 255 and fail every further attach with
+        # QuotaExceeded. 260 idle receivers attach on one queue, then a send and a receive
+        # on a separate probe queue (links 261 and 262) prove the connection still works.
+        # The probe gets its own queue because some SDKs leave credit outstanding on a
+        # timed-out receive, so a message on the crowded queue could land on any of the 260.
+        ml_queue = f"smoke-links-{stamp}"
+        ml_probe = f"smoke-links-{stamp}-probe"
+        queue_xml = '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>'
+        http("PUT", f"{base}/{ml_queue}?api-version=2021-05", atom_entry(queue_xml))
+        http("PUT", f"{base}/{ml_probe}?api-version=2021-05", atom_entry(queue_xml))
+        ml_receivers = [client.get_queue_receiver(ml_queue, max_wait_time=1) for _ in range(260)]
+        ml_errors = []
+
+        def ml_attach(receiver):
+            try:
+                receiver.receive_messages(max_message_count=1, max_wait_time=1)
+            except Exception as ex:  # noqa: BLE001 - recorded, reported by the check
+                ml_errors.append(type(ex).__name__)
+
+        with ThreadPoolExecutor(max_workers=32) as pool:
+            list(pool.map(ml_attach, ml_receivers))
+        with client.get_queue_sender(ml_probe) as ml_sender:
+            ml_sender.send_messages(ServiceBusMessage("fits", message_id=f"ml-{stamp}"))
+        with client.get_queue_receiver(ml_probe, max_wait_time=10) as ml_receiver:
+            ml_msgs = ml_receiver.receive_messages(max_message_count=1, max_wait_time=10)
+            for ml_msg in ml_msgs:
+                ml_receiver.complete_message(ml_msg)
+        for receiver in ml_receivers:
+            receiver.close()
+        ml_ok = not ml_errors and len(ml_msgs) == 1 and ml_msgs[0].message_id == f"ml-{stamp}"
+        check("many links", ml_ok, "" if ml_ok else (ml_errors[0] if ml_errors else "no message"))
+        http("DELETE", f"{base}/{ml_queue}?api-version=2021-05")
+        http("DELETE", f"{base}/{ml_probe}?api-version=2021-05")
 
 
 try:

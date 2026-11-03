@@ -16,6 +16,8 @@ OpenServiceBus.Host reads configuration from three layers, in order of precedenc
 | `OpenServiceBus__Amqp__ContainerId`        | `OpenServiceBus`          | Container-id reported in AMQP Open frame          |
 | `OpenServiceBus__Amqp__IdleTimeoutMs`      | `30000`                   | AMQP idle-timeout advertised to clients           |
 | `OpenServiceBus__Amqp__MaxMessageSize`     | `262144`                  | Max message size on link attach (256 KB)          |
+| `OpenServiceBus__Amqp__MaxSessionsPerConnection` | `5000`              | AMQP sessions per connection; the SDK opens one per sender/receiver, so this bounds the links one `ServiceBusClient` can hold |
+| `OpenServiceBus__Amqp__MaxLinksPerSession` | `5000`                    | AMQP links per session                            |
 | `OpenServiceBus__Amqp__RequireSasAuth`     | `false`                   | Enforce `$cbs put-token` validation               |
 | `OpenServiceBus__Amqp__SasKeys`            | -                         | `name=key` map for SAS-auth (when enabled)        |
 | `OpenServiceBus__Amqp__EnableFrameTracing` | `false`                   | Log every AMQP frame at Debug                     |

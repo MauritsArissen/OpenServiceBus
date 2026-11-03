@@ -6,7 +6,7 @@
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
 //   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
-//   -> topic runtime props
+//   -> topic runtime props -> many links
 //   (-> cross-entity txn runs in the dotnet and java smokes; @azure/service-bus does not
 //    expose AMQP transactions, so there is nothing to exercise)
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
@@ -643,6 +643,34 @@ const run = async () => {
     rtSize > 0;
   check("topic runtime props", rtOk, rtOk ? "" : `status ${rtResp.status} size ${rtSize}`);
   await fetch(`${httpBase}/${rtTopic}?api-version=2021-05`, { method: "DELETE" });
+
+  // 32. many links - one client holds more than 255 links at once (issue #93): the
+  // broker used to cap a connection at 255 and fail every further attach with
+  // QuotaExceeded. 260 idle receivers attach on one queue, then a send and a receive on
+  // a separate probe queue (links 261 and 262) prove the connection still works. The
+  // probe gets its own queue because some SDKs leave credit outstanding on a timed-out
+  // receive, so a message on the crowded queue could land on any of the 260.
+  const mlQueue = `smoke-links-${stamp}`;
+  const mlProbe = `smoke-links-${stamp}-probe`;
+  const mlQueueXml = '<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"/>';
+  await atomPut(mlQueue, mlQueueXml);
+  await atomPut(mlProbe, mlQueueXml);
+  const mlReceivers = Array.from({ length: 260 }, () => client.createReceiver(mlQueue));
+  let mlAttachError = "";
+  await Promise.all(mlReceivers.map((r) =>
+    r.receiveMessages(1, { maxWaitTimeInMs: 1_000 }).catch((e) => { mlAttachError ||= e?.code ?? String(e); })));
+  const mlSender = client.createSender(mlProbe);
+  await mlSender.sendMessages({ body: "fits", messageId: `ml-${stamp}` });
+  await mlSender.close();
+  const mlReceiver = client.createReceiver(mlProbe);
+  const [mlMsg] = await mlReceiver.receiveMessages(1, { maxWaitTimeInMs: 10_000 });
+  if (mlMsg) await mlReceiver.completeMessage(mlMsg);
+  await mlReceiver.close();
+  await Promise.all(mlReceivers.map((r) => r.close()));
+  const mlOk = !mlAttachError && mlMsg?.messageId === `ml-${stamp}`;
+  check("many links", mlOk, mlOk ? "" : mlAttachError || "no message");
+  await fetch(`${httpBase}/${mlQueue}?api-version=2021-05`, { method: "DELETE" });
+  await fetch(`${httpBase}/${mlProbe}?api-version=2021-05`, { method: "DELETE" });
 };
 
 const timeout = new Promise((_, rej) =>
