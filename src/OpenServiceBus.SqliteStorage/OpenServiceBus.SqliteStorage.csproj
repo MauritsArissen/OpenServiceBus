@@ -16,4 +16,8 @@
     <ProjectReference Include="..\OpenServiceBus.Core\OpenServiceBus.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpenServiceBus.SqliteStorage.Tests" />
+  </ItemGroup>
+
 </Project>

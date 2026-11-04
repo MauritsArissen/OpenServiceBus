@@ -36,7 +36,7 @@ import java.util.regex.Pattern;
  *   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
  *   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
  *   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
- *   -> topic runtime props -> cross-entity txn
+ *   -> topic runtime props -> cross-entity txn -> many links
  * against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
  * Regression guard for GitHub issue #1 (proton-j sends ulong message-ids).
  *
@@ -1076,6 +1076,62 @@ public final class Smoke {
                 HttpResponse.BodyHandlers.ofString());
             http.send(
                 HttpRequest.newBuilder(URI.create(base + "/" + ceQueueB + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+            // 32. many links - one client holds more than 255 links at once (issue #93): the
+            // broker used to cap a connection at 255 and fail every further attach with
+            // QuotaExceeded. 260 idle receivers attach on one queue, then a send and a receive
+            // on a separate probe queue (links 261 and 262) prove the connection still works.
+            // The probe gets its own queue because some SDKs leave credit outstanding on a
+            // timed-out receive, so a message on the crowded queue could land on any of the
+            // 260. Every client is built from one builder so they share one AMQP connection.
+            String mlQueue = "smoke-links-" + stamp;
+            String mlProbe = "smoke-links-" + stamp + "-probe";
+            http.send(atomPut.apply(mlQueue, "<QueueDescription xmlns=\"" + sbNs + "\"/>"),
+                HttpResponse.BodyHandlers.ofString());
+            http.send(atomPut.apply(mlProbe, "<QueueDescription xmlns=\"" + sbNs + "\"/>"),
+                HttpResponse.BodyHandlers.ofString());
+            ServiceBusClientBuilder mlBuilder = new ServiceBusClientBuilder().connectionString(conn).retryOptions(retry);
+            List<ServiceBusReceiverClient> mlReceivers = new ArrayList<>();
+            for (int i = 0; i < 260; i++) {
+                mlReceivers.add(mlBuilder.receiver().queueName(mlQueue).disableAutoComplete().buildClient());
+            }
+            List<String> mlErrors = java.util.Collections.synchronizedList(new ArrayList<>());
+            java.util.concurrent.ExecutorService mlPool = java.util.concurrent.Executors.newFixedThreadPool(32);
+            List<java.util.concurrent.Future<?>> mlAttaches = new ArrayList<>();
+            for (ServiceBusReceiverClient r : mlReceivers) {
+                mlAttaches.add(mlPool.submit(() -> {
+                    try {
+                        r.receiveMessages(1, Duration.ofSeconds(1)).forEach(m -> { });
+                    } catch (Exception ex) {
+                        mlErrors.add(ex.getClass().getSimpleName());
+                    }
+                }));
+            }
+            for (java.util.concurrent.Future<?> f : mlAttaches) {
+                f.get();
+            }
+            mlPool.shutdown();
+            ServiceBusReceivedMessage mlMsg = null;
+            try (ServiceBusSenderClient mlSender = mlBuilder.sender().queueName(mlProbe).buildClient();
+                 ServiceBusReceiverClient mlReceiver = mlBuilder.receiver().queueName(mlProbe).disableAutoComplete().buildClient()) {
+                ServiceBusMessage fits = new ServiceBusMessage("fits");
+                fits.setMessageId("ml-" + stamp);
+                mlSender.sendMessage(fits);
+                for (ServiceBusReceivedMessage m : mlReceiver.receiveMessages(1, Duration.ofSeconds(10))) {
+                    mlMsg = m;
+                    mlReceiver.complete(m);
+                }
+            }
+            mlReceivers.forEach(ServiceBusReceiverClient::close);
+            boolean mlOk = mlErrors.isEmpty() && mlMsg != null && ("ml-" + stamp).equals(mlMsg.getMessageId());
+            results.add(mlOk ? "PASS many links"
+                : "FAIL many links: " + (mlErrors.isEmpty() ? "no message" : mlErrors.get(0)));
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + mlQueue + "?api-version=2021-05")).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+            http.send(
+                HttpRequest.newBuilder(URI.create(base + "/" + mlProbe + "?api-version=2021-05")).DELETE().build(),
                 HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             results.add("FAIL admin: " + e);

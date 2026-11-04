@@ -6,7 +6,7 @@
 //   -> purge (JSON management API) -> transfer dlq -> sql filter -> dlq resend
 //   -> queue dedup -> topic dedup -> batch dedup -> abandon props -> lock lost
 //   -> topic schedule -> correlation filter -> system props -> batch receive -> hierarchical names
-//   -> topic runtime props -> cross-entity txn
+//   -> topic runtime props -> cross-entity txn -> many links
 // against the entities in ../config.json. Override the broker via SMOKE_CONNECTION.
 //
 // The main dotnet test suite covers far more, but this smoke keeps the cross-SDK
@@ -630,6 +630,44 @@ try
     await ceCheckReceiver.CloseAsync();
     await admin.DeleteQueueAsync(ceQueueA);
     await admin.DeleteQueueAsync(ceQueueB);
+
+    // 32. many links - one client holds more than 255 links at once (issue #93): the
+    // broker used to cap a connection at 255 and fail every further attach with
+    // QuotaExceeded. 260 idle receivers attach on one queue, then a send and a receive on
+    // a separate probe queue (links 261 and 262) prove the connection still works. The
+    // probe gets its own queue because some SDKs leave credit outstanding on a timed-out
+    // receive, so a message on the crowded queue could land on any of the 260.
+    var mlQueue = $"smoke-links-{stamp}";
+    var mlProbe = $"smoke-links-{stamp}-probe";
+    await admin.CreateQueueAsync(mlQueue);
+    await admin.CreateQueueAsync(mlProbe);
+    var mlReceivers = Enumerable.Range(0, 260).Select(_ => client.CreateReceiver(mlQueue)).ToList();
+    var mlAttachError = "";
+    await Task.WhenAll(mlReceivers.Select(async r =>
+    {
+        try { await r.ReceiveMessageAsync(TimeSpan.FromSeconds(1)); }
+        catch (ServiceBusException ex) { mlAttachError = ex.Reason.ToString(); }
+    }));
+    ServiceBusReceivedMessage? mlMsg = null;
+    try
+    {
+        var mlSender = client.CreateSender(mlProbe);
+        await mlSender.SendMessageAsync(new ServiceBusMessage("fits") { MessageId = $"ml-{stamp}" });
+        await mlSender.CloseAsync();
+        var mlReceiver = client.CreateReceiver(mlProbe);
+        mlMsg = await mlReceiver.ReceiveMessageAsync(TimeSpan.FromSeconds(10));
+        if (mlMsg is not null) await mlReceiver.CompleteMessageAsync(mlMsg);
+        await mlReceiver.CloseAsync();
+    }
+    catch (ServiceBusException ex)
+    {
+        mlAttachError = ex.Reason.ToString();
+    }
+    await Task.WhenAll(mlReceivers.Select(r => r.CloseAsync()));
+    var mlOk = mlAttachError == "" && mlMsg?.MessageId == $"ml-{stamp}";
+    Check("many links", mlOk, mlOk ? "" : mlAttachError != "" ? mlAttachError : "no message");
+    await admin.DeleteQueueAsync(mlQueue);
+    await admin.DeleteQueueAsync(mlProbe);
 }
 catch (Exception e)
 {

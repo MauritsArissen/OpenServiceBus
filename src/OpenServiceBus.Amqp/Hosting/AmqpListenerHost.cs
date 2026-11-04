@@ -77,6 +77,14 @@ public sealed class AmqpListenerHost : IHostedService, IAsyncDisposable
         {
             ServiceBusSasl.ConfigureListenerMechanisms(listener);
 
+            // Unlike container-id/idle-timeout/max-frame-size (stamped by the handler below
+            // as the AMQPNetLite #238 workaround), the session and link ceilings must be set
+            // here: the library reads them for internal enforcement before the Open/Begin
+            // frames reach the handler, so frame mutation alone would advertise limits the
+            // connection does not actually honor.
+            listener.AMQP.MaxSessionsPerConnection = (ushort)Math.Clamp(_options.MaxSessionsPerConnection, 1, ushort.MaxValue);
+            listener.AMQP.MaxLinksPerSession = _options.MaxLinksPerSession;
+
             var handler = new ListenerEventHandler(_options.ContainerId, _options.IdleTimeoutMs, _options.MaxFrameSize);
             listener.HandlerFactory = _ => handler;
         }

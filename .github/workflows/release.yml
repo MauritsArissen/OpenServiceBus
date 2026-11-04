@@ -7,7 +7,8 @@ name: Release
 #   3. Builds the multi-arch (linux/amd64 + linux/arm64) Docker image and pushes to
 #      both GHCR (ghcr.io/mauritsarissen/openservicebus) and Docker Hub
 #      (mauritsarissen/openservicebus).
-#   4. Creates a GitHub Release with auto-generated notes.
+#   4. Creates a GitHub Release with auto-generated notes - on a tag push, or on a manual
+#      run against the matching tag (the Release trigger workflow's path).
 #   5. As the final step, redeploys the live demo (demo.openservicebus.net) so it runs the
 #      just-published :latest image. This lives here, not in its own workflow, so it can
 #      only ever run for a real version/tag release.
@@ -298,7 +299,10 @@ jobs:
     name: GitHub Release
     runs-on: ubuntu-latest
     needs: [nuget, docker-merge, resolve-version]
-    if: github.event_name == 'push' # only auto-create a Release on tag push; manual runs skip it
+    # Publish for a tag push, and for a manual run on the matching tag ref - which is how
+    # the Release trigger workflow starts this pipeline (its GITHUB_TOKEN tag push cannot
+    # fire `push`). A manual run from a branch still only publishes packages and images.
+    if: github.event_name == 'push' || github.ref == format('refs/tags/v{0}', needs.resolve-version.outputs.version)
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
     steps:
@@ -344,7 +348,7 @@ jobs:
     name: Redeploy live demo
     runs-on: ubuntu-latest
     needs: [release]
-    if: github.event_name == 'push'
+    if: needs.release.result == 'success'
     environment:
       name: Demo
       url: https://demo.openservicebus.net
