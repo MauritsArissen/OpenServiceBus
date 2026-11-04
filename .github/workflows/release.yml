@@ -17,7 +17,8 @@ name: Release
 #   DOCKERHUB_USERNAME - Docker Hub login
 #   DOCKERHUB_TOKEN    - Docker Hub access token (NOT your password)
 #   VPS_HOST / VPS_USER / VPS_SSH_KEY - demo redeploy target
-# GHCR + NuGet on GitHub Packages use the built-in GITHUB_TOKEN.
+# GHCR + NuGet on GitHub Packages use the built-in GITHUB_TOKEN. nuget.org uses Trusted
+# Publishing (OIDC, no secret): a policy on nuget.org trusts this workflow file.
 
 on:
   push:
@@ -91,6 +92,10 @@ jobs:
     name: Pack & publish NuGets
     runs-on: ubuntu-latest
     needs: resolve-version
+    permissions:
+      contents: read
+      packages: write # pushing NuGet to GitHub Packages
+      id-token: write # OIDC token for nuget.org Trusted Publishing
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
     steps:
@@ -122,18 +127,20 @@ jobs:
       - name: List packed artifacts
         run: ls -la ./nupkgs
 
+      - name: NuGet login (Trusted Publishing)
+        # Exchanges the job's GitHub OIDC token for a nuget.org API key valid for one hour.
+        # Requires a Trusted Publishing policy on nuget.org for owner MauritsArissen,
+        # repository OpenServiceBus, workflow file release.yml (no environment). Kept right
+        # before the push so the short-lived key cannot expire mid-job.
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: MauritsArissen
+
       - name: Push to nuget.org
-        # Primary public registry. Requires repo secret NUGET_API_KEY (generated at
-        # https://www.nuget.org/account/apikeys with scope "Push new packages and package
-        # versions" and glob "OpenServiceBus.*"). The step skips itself when the secret
-        # isn't configured, so the workflow still succeeds on repos that only want GHCR.
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: |
-          if [ -z "$NUGET_API_KEY" ]; then
-            echo "::notice::NUGET_API_KEY not set - skipping nuget.org push."
-            exit 0
-          fi
           dotnet nuget push './nupkgs/*.nupkg' \
             --source https://api.nuget.org/v3/index.json \
             --api-key "$NUGET_API_KEY" \
