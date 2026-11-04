@@ -102,14 +102,20 @@ with a version input) and the pipeline:
 
 Required secrets (set in repo settings → Secrets and variables → Actions):
 
-| Secret               | Where to get it                                                                                                   |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `NUGET_API_KEY`      | <https://www.nuget.org/account/apikeys> - scope `Push new packages and package versions`, glob `OpenServiceBus.*` |
-| `DOCKERHUB_USERNAME` | Your Docker Hub login                                                                                             |
-| `DOCKERHUB_TOKEN`    | <https://hub.docker.com/settings/security> - PAT with `Read & Write`, **not** your password                       |
+| Secret               | Where to get it                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------- |
+| `DOCKERHUB_USERNAME` | Your Docker Hub login                                                                       |
+| `DOCKERHUB_TOKEN`    | <https://hub.docker.com/settings/security> - PAT with `Read & Write`, **not** your password |
 
-GHCR uses the built-in `GITHUB_TOKEN` - no setup needed. If `NUGET_API_KEY` isn't set the
-nuget.org push step skips itself gracefully; everything else still runs.
+GHCR and GitHub Packages use the built-in `GITHUB_TOKEN` - no setup needed.
+
+nuget.org uses [Trusted Publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing)
+instead of a stored API key: the `NuGet/login` step trades the job's GitHub OIDC token for
+an API key that is valid for one hour. It needs one policy on nuget.org (username →
+Trusted Publishing) owned by `MauritsArissen`, with repository owner `MauritsArissen`,
+repository `OpenServiceBus`, workflow file `release.yml` and no environment. A fork that
+wants to publish its own packages adds a policy for its own account and changes the
+`user:` input of the login step.
 
 ## Wiki sync
 
