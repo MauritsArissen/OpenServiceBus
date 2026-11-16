@@ -271,7 +271,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
                     $"Gone: lock token {lockTokens[i]} is unknown, expired, or held by a different link",
                     Routing.ServiceBusErrors.MessageLockLost);
             }
-            expirations[i] = newUntil.Value.UtcDateTime;
+            expirations[i] = LockDeadlines.ToWire(newUntil.Value);
         }
 
         var responseBody = new Map { [ExpirationsBodyKey] = expirations };
@@ -480,7 +480,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
             amqp.MessageAnnotations.Map[SequenceNumberSymbol] = locked.Message.SequenceNumber;
             amqp.MessageAnnotations.Map[EnqueuedSequenceNumberSymbol] = locked.Message.EnqueuedSequenceNumber;
             amqp.MessageAnnotations.Map[EnqueuedTimeUtcSymbol] = locked.Message.EnqueuedAt.UtcDateTime;
-            amqp.MessageAnnotations.Map[new Symbol("x-opt-locked-until")] = locked.LockedUntil.UtcDateTime;
+            amqp.MessageAnnotations.Map[new Symbol("x-opt-locked-until")] = LockDeadlines.ToWire(locked.LockedUntil);
             amqp.MessageAnnotations.Map[MessageStateSymbol] = MessageStateDeferred;
             // Real Service Bus also embeds the lock token in the returned message's delivery
             // annotations; the Python SDK reads it from there (it ignores the map entry) and
@@ -753,7 +753,7 @@ public sealed class ManagementRequestProcessor : IRequestNodeHandler
                 $"Gone: session lock for '{sessionId}' is unknown, expired, or held by a different link",
                 Routing.ServiceBusErrors.SessionLockLost);
         }
-        var responseBody = new Map { [ExpirationBodyKey] = newUntil.Value.UtcDateTime };
+        var responseBody = new Map { [ExpirationBodyKey] = LockDeadlines.ToWire(newUntil.Value) };
         var response = BuildResponse(request, 200, "OK");
         response.BodySection = new AmqpValue { Value = responseBody };
         return response;
