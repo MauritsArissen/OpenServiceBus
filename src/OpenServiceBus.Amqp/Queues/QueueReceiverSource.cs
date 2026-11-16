@@ -525,7 +525,7 @@ public sealed class QueueReceiverSource : IMessageSource
         amqp.MessageAnnotations.Map[SequenceNumberSymbol] = locked.Message.SequenceNumber;
         amqp.MessageAnnotations.Map[EnqueuedSequenceNumberSymbol] = locked.Message.EnqueuedSequenceNumber;
         amqp.MessageAnnotations.Map[EnqueuedTimeUtcSymbol] = locked.Message.EnqueuedAt.UtcDateTime;
-        amqp.MessageAnnotations.Map[LockedUntilSymbol] = locked.LockedUntil.UtcDateTime;
+        amqp.MessageAnnotations.Map[LockedUntilSymbol] = LockDeadlines.ToWire(locked.LockedUntil);
         amqp.MessageAnnotations.Map[MessageStateSymbol] = MessageStateActive;
     }
 

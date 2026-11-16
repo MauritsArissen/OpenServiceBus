@@ -9,4 +9,10 @@ public static class LockDeadlines
             ? candidate
             : DateTimeOffset.FromUnixTimeMilliseconds(previousMs + 1);
     }
+
+    public static DateTime ToWire(DateTimeOffset value)
+    {
+        var utc = value.UtcDateTime;
+        return new DateTime(utc.Ticks - utc.Ticks % TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
+    }
 }

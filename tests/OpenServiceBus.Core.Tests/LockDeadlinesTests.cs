@@ -29,4 +29,25 @@ public class LockDeadlinesTests
 
         LockDeadlines.Advance(Base, candidate).ShouldBe(Base.AddMilliseconds(1));
     }
+
+    [Fact]
+    public void ToWire_TruncatesToMillisecondAndKeepsOrderingAfterAdvance()
+    {
+        var previous = Base.AddTicks(9000);
+        var advanced = LockDeadlines.Advance(previous, Base.AddTicks(4000));
+
+        LockDeadlines.ToWire(previous).Ticks.ShouldBe(Base.UtcDateTime.Ticks);
+        LockDeadlines.ToWire(advanced).ShouldBeGreaterThan(LockDeadlines.ToWire(previous));
+        LockDeadlines.ToWire(advanced).Kind.ShouldBe(DateTimeKind.Utc);
+    }
+
+    [Fact]
+    public void ToWire_SubMillisecondGapWithinSameMillisecondThenAdvance_IsStrictlyIncreasing()
+    {
+        var previous = Base.AddTicks(9999);
+        var candidate = Base.AddTicks(9999 + 10);
+        var advanced = LockDeadlines.Advance(previous, candidate);
+
+        LockDeadlines.ToWire(advanced).ShouldBeGreaterThan(LockDeadlines.ToWire(previous));
+    }
 }
